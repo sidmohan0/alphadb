@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["IndexError","SimilarityType"],"mod":["builder"],"struct":["IndexParams","VectorIndex"]};
