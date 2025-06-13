@@ -1,0 +1,13 @@
+# AlphaDB Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Cryptocurrency exchange library
+ccxt>=4.0.0
+
+# PostgreSQL adapter
+psycopg2-binary>=2.9.0
+
+# Optional: For advanced data analysis
+# pandas>=1.5.0
+# numpy>=1.21.0
+# sqlalchemy>=1.4.0
