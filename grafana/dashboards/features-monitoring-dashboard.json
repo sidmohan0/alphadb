@@ -24,93 +24,6 @@
   "panels": [
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "rate(ws_msgs_total[1m])",
-          "refId": "A"
-        }
-      ],
-      "title": "WebSocket Message Rate (per second)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "P8D775C5F6C5470C6"
       },
@@ -157,20 +70,164 @@
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 500
               }
             ]
           },
-          "unit": "ms"
+          "unit": "percent"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "BTC Volatility"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ETH Volatility"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "P8D775C5F6C5470C6"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  hl_range_pct * 100 AS \"BTC Volatility\"\nFROM features_1m \nWHERE symbol = 'BTC/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "P8D775C5F6C5470C6"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  hl_range_pct * 100 AS \"ETH Volatility\"\nFROM features_1m \nWHERE symbol = 'ETH/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
+          "refId": "B"
+        }
+      ],
+      "title": "Intrabar Volatility (High-Low %)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P8D775C5F6C5470C6"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Zero Line"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -200,11 +257,33 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  time_bucket('10 seconds', ts_exchange) AS \"time\",\n  AVG(EXTRACT(EPOCH FROM (ts_ingest - ts_exchange)) * 1000) AS \"Avg Latency (ms)\",\n  MAX(EXTRACT(EPOCH FROM (ts_ingest - ts_exchange)) * 1000) AS \"Max Latency (ms)\",\n  MIN(EXTRACT(EPOCH FROM (ts_ingest - ts_exchange)) * 1000) AS \"Min Latency (ms)\"\nFROM trades\nWHERE $__timeFilter(ts_exchange)\nGROUP BY time_bucket('10 seconds', ts_exchange)\nORDER BY \"time\"",
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  vwap_gap AS \"BTC VWAP Gap\"\nFROM features_1m \nWHERE symbol = 'BTC/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "P8D775C5F6C5470C6"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  vwap_gap AS \"ETH VWAP Gap\"\nFROM features_1m \nWHERE symbol = 'ETH/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "P8D775C5F6C5470C6"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  0 AS \"Zero Line\"\nFROM features_1m \nWHERE symbol = 'BTC/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
+          "refId": "C"
         }
       ],
-      "title": "WebSocket Latency Distribution",
+      "title": "VWAP Deviation (Price - Volume Weighted Average)",
       "type": "timeseries"
     },
     {
@@ -227,15 +306,15 @@
               },
               {
                 "color": "yellow",
-                "value": 1000
+                "value": 5
               },
               {
                 "color": "red",
-                "value": 5000
+                "value": 15
               }
             ]
           },
-          "unit": "ms"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -252,7 +331,7 @@
         "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": ["mean"],
+          "calcs": ["lastNotNull"],
           "fields": "",
           "values": false
         },
@@ -268,11 +347,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  now() AS \"time\",\n  AVG(EXTRACT(EPOCH FROM (ts_ingest - ts_exchange)) * 1000) AS \"Current Avg Latency\"\nFROM trades\nWHERE ts_exchange >= NOW() - INTERVAL '1 minute'",
+          "rawSql": "SELECT \n  now() AS \"time\",\n  COUNT(*) AS \"Feature Records (1h)\"\nFROM features_1m \nWHERE bucket >= NOW() - INTERVAL '1 hour'",
           "refId": "A"
         }
       ],
-      "title": "Current Avg Latency",
+      "title": "Feature Pipeline Health (1H)",
       "type": "stat"
     },
     {
@@ -285,12 +364,23 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "Stale"
+                }
+              },
+              "type": "value"
+            }
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
@@ -298,12 +388,12 @@
                 "value": 10
               },
               {
-                "color": "red",
-                "value": 50
+                "color": "green",
+                "value": 30
               }
             ]
           },
-          "unit": "ops"
+          "unit": "dtdurationms"
         },
         "overrides": []
       },
@@ -336,11 +426,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  now() AS \"time\",\n  COUNT(*) / 60.0 AS \"Trades per Second\"\nFROM trades\nWHERE ts_exchange >= NOW() - INTERVAL '1 minute'",
+          "rawSql": "SELECT \n  now() AS \"time\",\n  EXTRACT(EPOCH FROM (now() - MAX(bucket))) * 1000 AS \"Data Freshness\"\nFROM features_1m",
           "refId": "A"
         }
       ],
-      "title": "Throughput (TPS)",
+      "title": "Data Latency",
       "type": "stat"
     },
     {
@@ -363,7 +453,8 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "percent",
+          "decimals": 3
         },
         "overrides": []
       },
@@ -396,11 +487,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  now() AS \"time\",\n  COUNT(*) AS \"Total Messages Processed\"\nFROM trades",
+          "rawSql": "SELECT \n  now() AS \"time\",\n  AVG(hl_range_pct) * 100 AS \"Avg Volatility (24h)\"\nFROM features_1m \nWHERE bucket >= NOW() - INTERVAL '24 hours'",
           "refId": "A"
         }
       ],
-      "title": "Total Messages Processed",
+      "title": "Realized Volatility (24H)",
       "type": "stat"
     },
     {
@@ -413,36 +504,18 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "No Data"
-                }
-              },
-              "type": "value"
-            }
-          ],
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 10
-              },
-              {
                 "color": "green",
-                "value": 30
+                "value": null
               }
             ]
           },
-          "unit": "s"
+          "unit": "percent",
+          "decimals": 1
         },
         "overrides": []
       },
@@ -475,11 +548,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  now() AS \"time\",\n  EXTRACT(EPOCH FROM (now() - MAX(ts_exchange))) AS \"Seconds Since Last Message\"\nFROM trades",
+          "rawSql": "SELECT \n  now() AS \"time\",\n  (SUM(is_green)::float / COUNT(*) * 100) AS \"Bullish Ratio (24h)\"\nFROM features_1m \nWHERE bucket >= NOW() - INTERVAL '24 hours'",
           "refId": "A"
         }
       ],
-      "title": "Data Freshness",
+      "title": "Bullish Momentum (24H)",
       "type": "stat"
     },
     {
@@ -490,7 +563,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "continuous-GrYlRd"
           },
           "custom": {
             "axisCenteredZero": false,
@@ -499,7 +572,7 @@
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
-            "fillOpacity": 10,
+            "fillOpacity": 30,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -508,7 +581,7 @@
             },
             "insertNulls": false,
             "lineInterpolation": "linear",
-            "lineWidth": 1,
+            "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
@@ -533,7 +606,7 @@
               }
             ]
           },
-          "unit": "ops"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -565,7 +638,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  time_bucket('10 seconds', ts_exchange) AS \"time\",\n  COUNT(*) AS \"XBT/USDT\"\nFROM trades\nWHERE symbol = 'XBT/USDT'\n  AND $__timeFilter(ts_exchange)\nGROUP BY time_bucket('10 seconds', ts_exchange)\nORDER BY \"time\"",
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  parkinson_vol * 1000000 AS \"BTC Parkinson Vol (x1M)\"\nFROM features_1m \nWHERE symbol = 'BTC/USDT'\n  AND $__timeFilter(bucket)\n  AND parkinson_vol > 0\nORDER BY bucket",
           "refId": "A"
         },
         {
@@ -576,11 +649,11 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  time_bucket('10 seconds', ts_exchange) AS \"time\",\n  COUNT(*) AS \"ETH/USDT\"\nFROM trades\nWHERE symbol = 'ETH/USDT'\n  AND $__timeFilter(ts_exchange)\nGROUP BY time_bucket('10 seconds', ts_exchange)\nORDER BY \"time\"",
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  parkinson_vol * 1000000 AS \"ETH Parkinson Vol (x1M)\"\nFROM features_1m \nWHERE symbol = 'ETH/USDT'\n  AND $__timeFilter(bucket)\n  AND parkinson_vol > 0\nORDER BY bucket",
           "refId": "B"
         }
       ],
-      "title": "Message Rate by Symbol",
+      "title": "Parkinson Vol Estimator (High-Frequency)",
       "type": "timeseries"
     },
     {
@@ -591,7 +664,7 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "continuous-GrYlRd"
+            "mode": "palette-classic"
           },
           "custom": {
             "axisCenteredZero": false,
@@ -600,7 +673,7 @@
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
-            "fillOpacity": 20,
+            "fillOpacity": 10,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -609,7 +682,7 @@
             },
             "insertNulls": false,
             "lineInterpolation": "linear",
-            "lineWidth": 2,
+            "lineWidth": 1,
             "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
@@ -666,11 +739,22 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH latency_buckets AS (\n  SELECT \n    time_bucket('30 seconds', ts_exchange) AS time_bucket,\n    EXTRACT(EPOCH FROM (ts_ingest - ts_exchange)) * 1000 AS latency_ms\n  FROM trades\n  WHERE $__timeFilter(ts_exchange)\n)\nSELECT\n  time_bucket AS \"time\",\n  COUNT(CASE WHEN latency_ms <= 50 THEN 1 END) * 100.0 / COUNT(*) AS \"<50ms\",\n  COUNT(CASE WHEN latency_ms <= 100 THEN 1 END) * 100.0 / COUNT(*) AS \"<100ms\",\n  COUNT(CASE WHEN latency_ms <= 250 THEN 1 END) * 100.0 / COUNT(*) AS \"<250ms\",\n  COUNT(CASE WHEN latency_ms <= 500 THEN 1 END) * 100.0 / COUNT(*) AS \"<500ms\"\nFROM latency_buckets\nGROUP BY time_bucket\nORDER BY time_bucket",
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  price_position * 100 AS \"BTC Price Position\"\nFROM features_1m \nWHERE symbol = 'BTC/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "P8D775C5F6C5470C6"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  bucket AS \"time\",\n  price_position * 100 AS \"ETH Price Position\"\nFROM features_1m \nWHERE symbol = 'ETH/USDT'\n  AND $__timeFilter(bucket)\nORDER BY bucket",
+          "refId": "B"
         }
       ],
-      "title": "Latency SLA Compliance",
+      "title": "Intrabar Price Action (Close Position in Range)",
       "type": "timeseries"
     },
     {
@@ -680,8 +764,12 @@
       },
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
           },
           "mappings": [],
           "thresholds": {
@@ -692,38 +780,119 @@
                 "value": null
               },
               {
-                "color": "yellow",
+                "color": "red",
                 "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "close_price"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
               },
               {
-                "color": "red",
-                "value": 95
+                "id": "decimals",
+                "value": 2
               }
             ]
           },
-          "unit": "percent"
-        },
-        "overrides": []
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hl_range_pct"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 4
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vwap_gap"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "is_green"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "🔴"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "🟢"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 4,
-        "w": 8,
+        "h": 8,
+        "w": 24,
         "x": 0,
         "y": 20
       },
       "id": 9,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
           "fields": "",
-          "values": false
+          "reducer": ["sum"],
+          "show": false
         },
-        "textMode": "auto",
-        "wideLayout": true
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "bucket"
+          }
+        ]
       },
       "targets": [
         {
@@ -732,158 +901,30 @@
             "uid": "P8D775C5F6C5470C6"
           },
           "editorMode": "code",
-          "format": "time_series",
+          "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  now() AS \"time\",\n  COUNT(CASE WHEN EXTRACT(EPOCH FROM (ts_ingest - ts_exchange)) * 1000 <= 250 THEN 1 END) * 100.0 / COUNT(*) AS \"SLA Compliance (≤250ms)\"\nFROM trades\nWHERE ts_exchange >= NOW() - INTERVAL '5 minutes'",
+          "rawSql": "SELECT \n  bucket,\n  symbol,\n  close_price,\n  hl_range_pct * 100 as hl_range_pct,\n  vwap_gap,\n  is_green,\n  is_doji\nFROM features_1m \nWHERE bucket >= NOW() - INTERVAL '2 hours'\nORDER BY bucket DESC\nLIMIT 50",
           "refId": "A"
         }
       ],
-      "title": "P99 Latency SLA (≤250ms)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "P8D775C5F6C5470C6"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "dateTimeAsIso"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 20
-      },
-      "id": 10,
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "P8D775C5F6C5470C6"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT\n  MAX(ts_ingest) AS \"time\",\n  EXTRACT(EPOCH FROM MAX(ts_ingest)) * 1000 AS \"Last Processed Message\"\nFROM trades",
-          "refId": "A"
-        }
-      ],
-      "title": "Last Message Processed",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "P8D775C5F6C5470C6"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 90
-              },
-              {
-                "color": "red",
-                "value": 99
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 20
-      },
-      "id": 11,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "P8D775C5F6C5470C6"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "WITH uptime_check AS (\n  SELECT \n    time_bucket('1 minute', ts_exchange) AS minute_bucket,\n    COUNT(*) as msgs_in_minute\n  FROM trades \n  WHERE ts_exchange >= NOW() - INTERVAL '1 hour'\n  GROUP BY minute_bucket\n)\nSELECT\n  now() AS \"time\",\n  COUNT(CASE WHEN msgs_in_minute > 0 THEN 1 END) * 100.0 / 60 AS \"Uptime %\"\nFROM uptime_check",
-          "refId": "A"
-        }
-      ],
-      "title": "Service Uptime (1h)",
-      "type": "stat"
+      "title": "Real-time Feature Matrix",
+      "type": "table"
     }
   ],
-  "refresh": "5s",
+  "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["websocket", "performance", "monitoring", "realtime"],
+  "tags": ["features", "ml", "engineering", "volatility"],
   "templating": {
     "list": []
   },
   "time": {
-    "from": "now-1h",
+    "from": "now-3h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Market Data Infrastructure",
-  "uid": "websocket-performance-dashboard",
+  "title": "Quantitative Features Dashboard",
+  "uid": "features-monitoring-dashboard",
   "version": 1,
   "weekStart": ""
 }
