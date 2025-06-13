@@ -7,7 +7,7 @@ Automated daily backfills ensure your AlphaDB never has data gaps, even if the r
 The daily backfill system:
 - ✅ **Runs at 2:00 AM daily** to catch any gaps from the previous day
 - ✅ **Uses CoinGecko Pro API** for reliable data with good rate limits
-- ✅ **Logs everything** for monitoring and debugging
+- ✅ **Logs everything** to `logs/alphadb-backfill.log` for monitoring and debugging
 - ✅ **Only backfills 2 days** to minimize API usage while ensuring coverage
 - ✅ **Automatically handles errors** and provides status reporting
 
@@ -62,7 +62,7 @@ The daily cron job:
    - Uses the same CoinGecko script as manual backfills
 
 3. **Logs Everything**
-   - All output goes to `/var/log/alphadb-backfill.log`
+   - All output goes to `logs/alphadb-backfill.log`
    - Includes timestamps and status indicators
    - Reports data quality statistics
 
@@ -71,13 +71,13 @@ The daily cron job:
 ### View Recent Logs
 ```bash
 # See the last 20 lines
-tail -20 /var/log/alphadb-backfill.log
+tail -20 logs/alphadb-backfill.log
 
 # Follow logs in real-time
-tail -f /var/log/alphadb-backfill.log
+tail -f logs/alphadb-backfill.log
 
 # Search for errors
-grep "ERROR\\|❌" /var/log/alphadb-backfill.log
+grep "ERROR\\|❌" logs/alphadb-backfill.log
 ```
 
 ### Check Cron Status

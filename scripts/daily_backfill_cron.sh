@@ -13,8 +13,8 @@ if [ -f "$PROJECT_DIR/.env" ]; then
     export $(grep -v '^#' "$PROJECT_DIR/.env" | xargs)
 fi
 
-# Log file for cron output
-LOG_FILE="/var/log/alphadb-backfill.log"
+# Log file for cron output (use local logs directory)
+LOG_FILE="$PROJECT_DIR/logs/alphadb-backfill.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 
 # Function to log with timestamp
