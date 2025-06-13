@@ -1,0 +1,14 @@
+[db]
+uri = "postgresql://trader:s3cr3t@db:5432/market"
+
+[exchange]
+venue = "kraken"
+pairs = ["XBT/USDT", "ETH/USDT"]
+ws_url = "wss://ws.kraken.com"
+
+[batch]
+max_rows = 5000
+max_ms = 500
+
+[metrics]
+port = 9187

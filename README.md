@@ -32,24 +32,41 @@ A self-hosted **TimescaleDB + Grafana** stack for real-time cryptocurrency marke
    pip install -r requirements.txt
    ```
 
-5. **Start data collection**
+5. **Backfill historical data** (choose one method):
+
+   **Option A: CoinGecko Pro API (Recommended for 90 days)**
    ```bash
-   python scripts/ingest.py
+   export COINGECKO_API_KEY=your_api_key_here
+   ./scripts/run_coingecko_backfill.sh
+   ```
+   
+   **Option B: Kraken API (Limited to ~19 hours)**
+   ```bash
+   ./scripts/run_backfill.sh
    ```
 
-6. **Access Grafana**
+6. **Start real-time data collection**:
+   ```bash
+   python scripts/ingest.py  # OHLCV bars via REST API
+   # WebSocket tick data runs automatically via Docker
+   ```
+
+7. **Access Grafana**
    - URL: http://localhost:3000
    - Login: `admin` / `[your GF_SECURITY_ADMIN_PASSWORD]`
 
 ## 📊 Features
 
-- **Real-time data ingestion** from Kraken (BTC/USDT)
-- **TimescaleDB hypertables** for efficient time-series storage
-- **Continuous aggregates** for 5-minute OHLCV data
-- **Professional candlestick charts** with volume analysis
-- **Data monitoring** with freshness and collection statistics
-- **Persistent storage** with Docker volumes
-- **Auto-provisioned Grafana** dashboards and datasources
+- **Real-time WebSocket data** - Live tick-by-tick trade feeds from Kraken
+- **REST API ingestion** - OHLCV bars for BTC/USDT and ETH/USDT 
+- **Historical backfill** - 90 days of data via CoinGecko Pro API
+- **TimescaleDB hypertables** - Efficient time-series storage with automatic partitioning
+- **Continuous aggregates** - Real-time 5-minute OHLCV views
+- **Professional dashboards** - Bitcoin, Ethereum, and performance monitoring
+- **Tick-level analysis** - Candlestick charts built from live trade data
+- **Performance monitoring** - WebSocket latency, throughput, and SLA tracking
+- **Persistent storage** - Named Docker volumes for data retention
+- **Auto-provisioned setup** - Grafana dashboards and datasources ready-to-go
 
 ## 🏗️ Architecture
 

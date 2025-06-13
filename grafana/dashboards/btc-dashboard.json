@@ -331,7 +331,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT\n  ts AS \"time\",\n  close AS \"Current Price\"\nFROM ohlcv_1m\nORDER BY ts DESC\nLIMIT 1",
+          "rawSql": "SELECT\n  ts_exchange AS \"time\",\n  price AS \"Current Price\"\nFROM trades\nWHERE symbol = 'XBT/USDT'\nORDER BY ts_exchange DESC\nLIMIT 1",
           "refId": "A",
           "sql": {
             "columns": [
@@ -690,7 +690,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "BTC/USDT Trading Dashboard",
+  "title": "Bitcoin Historical Analysis",
   "uid": "btc-trading-dashboard",
   "version": 11,
   "weekStart": ""

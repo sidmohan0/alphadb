@@ -46,3 +46,24 @@ venv.bak/
 *.tmp
 *.bak
 *.backup
+
+# Feature engineering cache files
+/tmp/features_*.pkl
+features_*.csv
+*.h5
+
+# Jupyter notebooks (optional - comment out if you want to track them)
+# *.ipynb
+# .ipynb_checkpoints/
+
+# Rust
+gateway/target/
+**/*.rs.bk
+*.pdb
+
+# Data analysis outputs
+plots/
+figures/
+*.png
+*.jpg
+*.pdf

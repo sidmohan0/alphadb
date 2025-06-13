@@ -171,7 +171,22 @@ Mount `provisioning/` into `/etc/grafana/provisioning/` in the Grafana service.
 
 ---
 
-## 8  CLI cheat-sheet
+## 8  Historical data backfill options
+
+### CoinGecko Pro API (Recommended - 90 days)
+```bash
+export COINGECKO_API_KEY=your_api_key_here
+./scripts/run_coingecko_backfill.sh
+```
+
+### Kraken API (Limited - ~19 hours)
+```bash
+./scripts/run_backfill.sh
+```
+
+---
+
+## 9  CLI cheat-sheet
 
 ```bash
 # spin up / shut down
@@ -182,12 +197,18 @@ docker compose down
 docker exec -it tsdb psql -U trader -d market
 
 # test continuous aggregate
-SELECT * FROM ohlcv_5m ORDER BY bucket DESC LIMIT 3;
+SELECT * FROM ohlcv_btc_usdt_5m ORDER BY bucket DESC LIMIT 3;
+
+# check WebSocket performance
+SELECT COUNT(*) FROM trades WHERE ts_exchange >= NOW() - INTERVAL '1 hour';
+
+# verify historical data
+SELECT symbol, COUNT(*), MIN(ts), MAX(ts) FROM trades GROUP BY symbol;
 ```
 
 ---
 
-## 9  Next steps for Claude
+## 10  Next steps for Claude
 
 1. **Generate**: `init.sql`, `ingest.py`, `provisioning` files exactly as above.
 2. **Run**: `docker compose up -d` and verify acceptance tests 1-4.
