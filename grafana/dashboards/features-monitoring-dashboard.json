@@ -385,11 +385,11 @@
               },
               {
                 "color": "yellow",
-                "value": 10
+                "value": 30000
               },
               {
                 "color": "green",
-                "value": 30
+                "value": 60000
               }
             ]
           },
@@ -487,7 +487,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT \n  now() AS \"time\",\n  AVG(hl_range_pct) * 100 AS \"Avg Volatility (24h)\"\nFROM features_1m \nWHERE bucket >= NOW() - INTERVAL '24 hours'",
+          "rawSql": "WITH returns AS (\n  SELECT \n    LN(close_price / LAG(close_price) OVER (ORDER BY bucket)) AS log_return\n  FROM features_1m \n  WHERE bucket >= NOW() - INTERVAL '24 hours' AND symbol = 'BTC/USDT'\n  ORDER BY bucket\n)\nSELECT \n  now() AS \"time\",\n  SQRT(AVG(POWER(log_return, 2)) * 365 * 24 * 60) * 100 AS \"Realized Vol (24h)\"\nFROM returns\nWHERE log_return IS NOT NULL",
           "refId": "A"
         }
       ],
