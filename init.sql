@@ -90,3 +90,30 @@ SELECT
   sum(vol)                     AS vol
 FROM ohlcv_eth_usdt
 GROUP BY bucket;
+
+-- Create 1-hour continuous aggregates for each symbol
+CREATE MATERIALIZED VIEW IF NOT EXISTS ohlcv_btc_usdt_1h
+WITH (timescaledb.continuous)
+AS
+SELECT
+  time_bucket('1 hour', ts) AS bucket,
+  first(open, ts)            AS open,
+  max(high)                  AS high,
+  min(low)                   AS low,
+  last(close, ts)            AS close,
+  sum(vol)                   AS vol
+FROM ohlcv_btc_usdt
+GROUP BY bucket;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS ohlcv_eth_usdt_1h
+WITH (timescaledb.continuous)
+AS
+SELECT
+  time_bucket('1 hour', ts) AS bucket,
+  first(open, ts)            AS open,
+  max(high)                  AS high,
+  min(low)                   AS low,
+  last(close, ts)            AS close,
+  sum(vol)                   AS vol
+FROM ohlcv_eth_usdt
+GROUP BY bucket;
