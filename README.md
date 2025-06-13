@@ -45,28 +45,35 @@ A self-hosted **TimescaleDB + Grafana** stack for real-time cryptocurrency marke
    ./scripts/run_backfill.sh
    ```
 
-6. **Start real-time data collection**:
+6. **Verify deployment**:
    ```bash
-   python scripts/ingest.py  # OHLCV bars via REST API
-   # WebSocket tick data runs automatically via Docker
+   # Check all services are running
+   docker compose ps
+   
+   # Verify WebSocket is collecting data
+   curl -s http://localhost:9187/metrics | grep trades_processed_total
+   
+   # Check database has data
+   docker exec tsdb psql -U trader -d market -c "SELECT COUNT(*) FROM trades;"
    ```
 
-7. **Access Grafana**
-   - URL: http://localhost:3000
-   - Login: `admin` / `[your GF_SECURITY_ADMIN_PASSWORD]`
+7. **Access services**:
+   - **Grafana**: http://localhost:3000 (admin/[your password])
+   - **WebSocket Metrics**: http://localhost:9187/metrics
 
 ## 📊 Features
 
-- **Real-time WebSocket data** - Live tick-by-tick trade feeds from Kraken
-- **REST API ingestion** - OHLCV bars for BTC/USDT and ETH/USDT 
+- **Rust WebSocket recorder** - Live tick-by-tick trade feeds from Kraken
+- **REST API ingestion** - OHLCV bars for BTC/USDT and ETH/USDT via Python scripts
 - **Historical backfill** - 90 days of data via CoinGecko Pro API
-- **TimescaleDB hypertables** - Efficient time-series storage with automatic partitioning
+- **TimescaleDB hypertables** - Time-series storage with automatic partitioning
 - **Continuous aggregates** - Real-time 5-minute OHLCV views
-- **Professional dashboards** - Bitcoin, Ethereum, and performance monitoring
+- **Grafana dashboards** - Bitcoin, Ethereum, features monitoring, and WebSocket performance
 - **Tick-level analysis** - Candlestick charts built from live trade data
-- **Performance monitoring** - WebSocket latency, throughput, and SLA tracking
+- **System monitoring** - WebSocket latency, throughput, database health, and SLA tracking
+- **Prometheus metrics** - Built-in metrics endpoint for observability
 - **Persistent storage** - Named Docker volumes for data retention
-- **Auto-provisioned setup** - Grafana dashboards and datasources ready-to-go
+- **Pre-configured setup** - Grafana dashboards and datasources included
 
 ## 🏗️ Architecture
 
@@ -75,9 +82,14 @@ flowchart LR
     subgraph Docker_Network
         tsdb[(TimescaleDB<br/>Postgres 16 + TS 2.15)]
         grafana[[Grafana OSS 12<br/>dashboards]]
+        recorder[[Rust WebSocket<br/>Recorder]]
+        ingestor[[Python REST API<br/>Ingestor]]
     end
-    user((Host<br/>localhost:5432/3000)) --- grafana
-    script[[Python Scripts<br/>data-ingestors]] --> tsdb
+    kraken_ws[Kraken WebSocket<br/>Live Trades] --> recorder
+    kraken_api[Kraken REST API<br/>OHLCV] --> ingestor
+    recorder --> tsdb
+    ingestor --> tsdb
+    user((Host<br/>localhost:3000/9187)) --- grafana
     grafana --> tsdb
 ```
 
@@ -89,19 +101,31 @@ alphadb/
 ├── docker-compose.yml           # Docker services configuration
 ├── init.sql                     # Database schema initialization
 ├── .env.example                 # Environment variables template
-├── .gitignore                   # Git ignore rules
 ├── requirements.txt             # Python dependencies
+├── gateway/                     # Rust WebSocket recorder
+│   ├── Cargo.toml              # Rust dependencies
+│   ├── Dockerfile              # WebSocket recorder container
+│   ├── config/
+│   │   └── config.toml         # WebSocket recorder configuration
+│   └── src/                    # Rust source code
+│       ├── main.rs             # Main application entry
+│       ├── ws_client.rs        # WebSocket client implementation
+│       ├── buffer.rs           # Trade batching system
+│       └── db_sink.rs          # Database writer
 ├── scripts/
-│   └── ingest.py               # Data ingestion script
+│   ├── ingest.py               # REST API data ingestion
+│   ├── backfill.py             # Historical data backfill
+│   └── export_features.py      # Feature engineering exports
 ├── grafana/
 │   ├── dashboards/             # Grafana dashboard definitions
 │   │   ├── btc-dashboard.json
-│   │   └── dashboard.yml
+│   │   ├── eth-dashboard.json
+│   │   ├── websocket-performance-dashboard.json
+│   │   └── features-monitoring-dashboard.json
 │   └── datasources/            # Grafana datasource configuration
 │       └── ds.yml
-├── .github/
-│   ├── ISSUE_TEMPLATE/         # GitHub issue templates
-│   └── pull_request_template.md
+├── sql/                        # SQL feature engineering
+│   └── features_*.sql          # Feature computation queries
 └── docs/
     ├── SETUP.md                # Detailed setup instructions
     ├── API.md                  # Database schema and API docs
@@ -111,17 +135,20 @@ alphadb/
 ## 🛠️ Requirements
 
 - **Docker** & **Docker Compose**
-- **Python 3.8+** (for data ingestion)
+- **Rust 1.70+** (for WebSocket recorder development)
+- **Python 3.8+** (for data ingestion and feature engineering)
 - **8GB RAM** recommended
 - **10GB disk space** minimum
 
 ## 📈 Dashboard Features
 
-- **Candlestick Chart**: Professional OHLCV visualization
-- **Price Monitoring**: Real-time BTC price tracking  
-- **Volume Analysis**: Trading volume with proper BTC units
+- **Candlestick Chart**: OHLCV visualization from live trade data
+- **Price Monitoring**: Real-time BTC/ETH price tracking  
+- **Volume Analysis**: Trading volume with cryptocurrency units
+- **WebSocket Performance**: Latency, throughput, and connection health monitoring
+- **Feature Engineering**: Feature computation and monitoring
 - **Data Health**: Collection statistics and freshness monitoring
-- **Custom Time Ranges**: From minutes to hours of historical data
+- **Time Ranges**: From seconds to days of historical data
 
 ## 🔧 Configuration
 
@@ -141,10 +168,44 @@ GF_SECURITY_ADMIN_PASSWORD=your_grafana_admin_password_here
 
 ### Database Schema
 
+- **`trades`**: Individual trade records from WebSocket feed
 - **`ohlcv_1m`**: 1-minute OHLCV hypertable
 - **`ohlcv_5m`**: 5-minute continuous aggregate
 - **Automatic partitioning** by time (1-day chunks)
-- **Optimized for time-series** queries and analytics
+
+## 🛠️ CLI Commands
+
+```bash
+# Start/stop all services
+docker compose up -d
+docker compose down
+
+# View logs
+docker compose logs -f ws_recorder    # WebSocket recorder logs
+docker compose logs -f ingestor       # Python ingestor logs
+docker compose logs -f grafana        # Grafana logs
+
+# Database access
+docker exec -it tsdb psql -U trader -d market
+
+# Check WebSocket performance
+SELECT COUNT(*) FROM trades WHERE ts_exchange >= NOW() - INTERVAL '1 hour';
+
+# Verify continuous aggregates
+SELECT * FROM ohlcv_btc_usdt_5m ORDER BY bucket DESC LIMIT 3;
+
+# Monitor WebSocket metrics
+curl http://localhost:9187/metrics
+
+# Restart specific service
+docker compose restart ws_recorder
+
+# Build Rust recorder locally
+cd gateway && cargo build --release
+
+# Run feature engineering
+python scripts/export_features.py
+```
 
 ## 📚 Documentation
 
