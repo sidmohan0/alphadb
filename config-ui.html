@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trading Gate Config</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #111; color: #ccc; padding: 24px; max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 16px; color: #6f6; margin-bottom: 16px; }
+  h2 { font-size: 13px; color: #aaa; margin: 20px 0 8px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
+  .row label { font-size: 12px; }
+  .row input[type="number"], .row input[type="text"], .row select {
+    background: #222; border: 1px solid #444; color: #eee; font-family: monospace;
+    font-size: 12px; padding: 3px 6px; width: 140px; text-align: right;
+  }
+  .row input[type="checkbox"] { accent-color: #6f6; }
+  .toggle { display: flex; align-items: center; gap: 6px; }
+  button { background: #282; border: 1px solid #4a4; color: #cfc; font-family: monospace;
+    padding: 8px 20px; cursor: pointer; margin-top: 20px; font-size: 13px; }
+  button:hover { background: #3a3; }
+  .status { font-size: 11px; margin-top: 8px; color: #888; }
+  .status.ok { color: #6f6; }
+  .status.err { color: #f66; }
+</style>
+</head>
+<body>
+
+<h1>trading-gate / safety.yaml</h1>
+
+<div id="editor"></div>
+<button onclick="save()">Save</button>
+<button onclick="saveAndRestart()" style="background:#553;border-color:#884;color:#fea;">Save & Restart Gate</button>
+<div id="status" class="status"></div>
+
+<script>
+let original = {};
+
+async function load() {
+  try {
+    const resp = await fetch('/config');
+    const text = await resp.text();
+    original = parseYaml(text);
+  } catch {
+    original = {};
+  }
+  render(original);
+}
+
+function parseYaml(text) {
+  const obj = {};
+  let current = null;
+  for (const line of text.split('\n')) {
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    const topMatch = line.match(/^(\w[\w_]*):\s*(.*)/);
+    const subMatch = line.match(/^\s{2}(\w[\w_]*):\s*(.*)/);
+    if (subMatch && current) {
+      obj[current][subMatch[1]] = parseVal(subMatch[2]);
+    } else if (topMatch) {
+      const val = topMatch[2].trim();
+      if (val === '' || val === '[]') {
+        current = topMatch[1];
+        if (val === '[]') { obj[current] = []; current = null; }
+        else obj[current] = {};
+      } else {
+        obj[topMatch[1]] = parseVal(val);
+        current = null;
+      }
+    }
+  }
+  return obj;
+}
+
+function parseVal(s) {
+  s = s.trim();
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  if (s === '[]') return [];
+  const n = Number(s);
+  if (!isNaN(n) && s !== '') return n;
+  return s;
+}
+
+function render(cfg) {
+  const el = document.getElementById('editor');
+  el.innerHTML = '';
+  for (const [section, fields] of Object.entries(cfg)) {
+    if (typeof fields !== 'object' || Array.isArray(fields)) continue;
+    const h = document.createElement('h2');
+    h.textContent = section;
+    el.appendChild(h);
+    for (const [key, val] of Object.entries(fields)) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const label = document.createElement('label');
+      label.textContent = key;
+      row.appendChild(label);
+
+      if (typeof val === 'boolean') {
+        const wrap = document.createElement('div');
+        wrap.className = 'toggle';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = val;
+        cb.dataset.section = section;
+        cb.dataset.key = key;
+        cb.className = 'cfg';
+        const span = document.createElement('span');
+        span.textContent = val ? 'on' : 'off';
+        span.style.fontSize = '11px';
+        cb.onchange = () => span.textContent = cb.checked ? 'on' : 'off';
+        wrap.appendChild(cb);
+        wrap.appendChild(span);
+        row.appendChild(wrap);
+      } else if (typeof val === 'number') {
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.value = val;
+        inp.step = val < 1 ? 0.01 : 1;
+        inp.dataset.section = section;
+        inp.dataset.key = key;
+        inp.className = 'cfg';
+        row.appendChild(inp);
+      } else {
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = val;
+        inp.dataset.section = section;
+        inp.dataset.key = key;
+        inp.className = 'cfg';
+        row.appendChild(inp);
+      }
+      el.appendChild(row);
+    }
+  }
+}
+
+function gather() {
+  const cfg = JSON.parse(JSON.stringify(original));
+  for (const el of document.querySelectorAll('.cfg')) {
+    const s = el.dataset.section, k = el.dataset.key;
+    if (!cfg[s]) cfg[s] = {};
+    if (el.type === 'checkbox') cfg[s][k] = el.checked;
+    else if (el.type === 'number') cfg[s][k] = Number(el.value);
+    else cfg[s][k] = el.value;
+  }
+  return cfg;
+}
+
+function toYaml(cfg) {
+  let out = '';
+  for (const [section, fields] of Object.entries(cfg)) {
+    if (Array.isArray(fields)) {
+      out += `${section}: []\n`;
+      continue;
+    }
+    if (typeof fields !== 'object') {
+      out += `${section}: ${fields}\n`;
+      continue;
+    }
+    out += `${section}:\n`;
+    for (const [k, v] of Object.entries(fields)) {
+      out += `  ${k}: ${v}\n`;
+    }
+  }
+  return out;
+}
+
+async function save() {
+  const cfg = gather();
+  const yaml = toYaml(cfg);
+  const status = document.getElementById('status');
+
+  try {
+    const resp = await fetch('/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/yaml' },
+      body: yaml,
+    });
+    if (!resp.ok) throw new Error('Server returned ' + resp.status);
+    original = cfg;
+    status.textContent = 'Saved to config/safety.yaml';
+    status.className = 'status ok';
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.className = 'status err';
+  }
+}
+
+async function saveAndRestart() {
+  const cfg = gather();
+  const yaml = toYaml(cfg);
+  const status = document.getElementById('status');
+
+  try {
+    const saveResp = await fetch('/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/yaml' },
+      body: yaml,
+    });
+    if (!saveResp.ok) throw new Error('Save failed: ' + saveResp.status);
+    original = cfg;
+    status.textContent = 'Saved. Restarting gate...';
+    status.className = 'status ok';
+
+    const restartResp = await fetch('/restart', { method: 'POST' });
+    const result = await restartResp.json();
+    if (result.ok) {
+      status.textContent = 'Saved & gate restarted. ' + (result.message || '');
+      status.className = 'status ok';
+    } else {
+      status.textContent = 'Saved but restart failed: ' + (result.message || 'unknown error');
+      status.className = 'status err';
+    }
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    status.className = 'status err';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

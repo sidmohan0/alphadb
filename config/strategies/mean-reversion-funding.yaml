@@ -1,0 +1,19 @@
+name: mean-reversion-funding
+status: active
+capital_allocation: 0.20
+instruments: [BTC-USD]
+timeframe: 5m
+parameters:
+  funding_zscore_entry: 2.0
+  funding_zscore_exit: 0.5
+  max_hold_candles: 60
+  stop_loss_pct: 0.015
+  take_profit_pct: 0.025
+parameter_bounds:
+  funding_zscore_entry: [1.5, 3.5]
+  funding_zscore_exit: [0.1, 1.0]
+  max_hold_candles: [12, 120]
+  stop_loss_pct: [0.005, 0.03]
+  take_profit_pct: [0.01, 0.05]
+created: 2026-02-18
+version: 1

@@ -1,0 +1,17 @@
+[package]
+name = "trading-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+trading-common = { path = "../common" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { version = "0.9", features = ["std", "serde"] }
+uuid = { version = "1.10", features = ["v4"] }

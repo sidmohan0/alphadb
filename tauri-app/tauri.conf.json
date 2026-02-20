@@ -1,0 +1,30 @@
+{
+  "productName": "AlphaDB",
+  "identifier": "com.alphadb.dashboard",
+  "build": {
+    "devUrl": "http://localhost:8787",
+    "frontendDist": "http://localhost:8787"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ALPHADB",
+        "url": "http://localhost:8787",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  }
+}

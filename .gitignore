@@ -1,0 +1,40 @@
+# Secrets & credentials
+.env
+*.pem
+*.key
+
+# Rust build artifacts
+target/
+tauri-app/target/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data
+data/trades.db
+data/audit.log
+data/performance/
+data/portfolio/
+logs/*.log
+logs/pids.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Archives
+*.zip
+
+# Temp
+temp/
