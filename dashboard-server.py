@@ -387,108 +387,113 @@ def _decision_engine_loop():
         _audit_offset = 0
 
     while True:
-        _decision_cycle_counter += 1
-        cycle_num = _decision_cycle_counter
-        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            _decision_cycle_counter += 1
+            cycle_num = _decision_cycle_counter
+            timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # Query gate for market and portfolio data
-        env = read_env()
-        product = env.get("TRADING_GATE_PRODUCT", "BTC-USD")
+            # Query gate for market and portfolio data
+            env = read_env()
+            product = env.get("TRADING_GATE_PRODUCT", "BTC-USD")
 
-        market_resp = gate_request({"request_type": "GetMarketData", "symbol": product}, timeout=1.5)
-        portfolio_resp = gate_request({"request_type": "GetPortfolio"}, timeout=1.5)
+            market_resp = gate_request({"request_type": "GetMarketData", "symbol": product}, timeout=1.5)
+            portfolio_resp = gate_request({"request_type": "GetPortfolio"}, timeout=1.5)
 
-        gate_reachable = "error" not in market_resp or "error" not in portfolio_resp
+            gate_reachable = "error" not in market_resp or "error" not in portfolio_resp
 
-        # Extract market data
-        mk = None
-        if "error" not in market_resp:
-            mk = market_resp.get("payload", market_resp)
+            # Extract market data
+            mk = None
+            if "error" not in market_resp:
+                mk = market_resp.get("payload", market_resp)
 
-        pf = None
-        if "error" not in portfolio_resp:
-            pf = portfolio_resp.get("payload", portfolio_resp)
+            pf = None
+            if "error" not in portfolio_resp:
+                pf = portfolio_resp.get("payload", portfolio_resp)
 
-        # Build market snapshot
-        price = float(mk["price"]) if mk and "price" in mk else None
-        funding_zscore = mk.get("funding_rate_zscore") if mk else None
-        spread = mk.get("spread_pct") if mk else None
-        volatility = mk.get("realized_volatility") if mk else None
-        regime = mk.get("regime_id") if mk else None
+            # Build market snapshot
+            price = float(mk["price"]) if mk and "price" in mk else None
+            funding_zscore = mk.get("funding_rate_zscore") if mk else None
+            spread = mk.get("spread_pct") if mk else None
+            volatility = mk.get("realized_volatility") if mk else None
+            regime = mk.get("regime_id") if mk else None
 
-        # Evaluate signal (mirrors strategy.rs:40-76)
-        signal = "HOLD"
-        planned_entry = None
-        planned_stop = None
-        strength = 0.0
-        distance = None
+            # Evaluate signal (mirrors strategy.rs:40-76)
+            signal = "HOLD"
+            planned_entry = None
+            planned_stop = None
+            strength = 0.0
+            distance = None
 
-        if funding_zscore is not None:
-            distance = threshold - abs(funding_zscore)
-            strength = min(abs(funding_zscore) / threshold, 2.0)
+            if funding_zscore is not None:
+                distance = threshold - abs(funding_zscore)
+                strength = min(abs(funding_zscore) / threshold, 2.0)
 
-            if funding_zscore <= -threshold:
-                signal = "BUY"
-                if price is not None:
-                    planned_entry = round(price * 0.999, 2)
-                    planned_stop = round(planned_entry * 0.985, 2)
-            elif funding_zscore >= threshold:
-                signal = "SELL"
-                if price is not None:
-                    planned_entry = round(price * 1.001, 2)
-                    planned_stop = round(planned_entry * 1.015, 2)
+                if funding_zscore <= -threshold:
+                    signal = "BUY"
+                    if price is not None:
+                        planned_entry = round(price * 0.999, 2)
+                        planned_stop = round(planned_entry * 0.985, 2)
+                elif funding_zscore >= threshold:
+                    signal = "SELL"
+                    if price is not None:
+                        planned_entry = round(price * 1.001, 2)
+                        planned_stop = round(planned_entry * 1.015, 2)
 
-        # Determine action
-        if not gate_reachable:
-            action = "GATE_UNREACHABLE"
-        elif signal in ("BUY", "SELL"):
-            action = "SIGNAL_ACTIVE"
-        else:
-            action = "MONITORING"
+            # Determine action
+            if not gate_reachable:
+                action = "GATE_UNREACHABLE"
+            elif signal in ("BUY", "SELL"):
+                action = "SIGNAL_ACTIVE"
+            else:
+                action = "MONITORING"
 
-        # Read new audit entries
-        audit_events = _read_new_audit_entries()
+            # Read new audit entries
+            audit_events = _read_new_audit_entries()
 
-        # If we have a signal but audit shows rejection, mark blocked
-        if signal in ("BUY", "SELL") and any(
-            e.get("decision") == "rejected" for e in audit_events
-        ):
-            action = "SIGNAL_BLOCKED"
+            # If we have a signal but audit shows rejection, mark blocked
+            if signal in ("BUY", "SELL") and any(
+                e.get("decision") == "rejected" for e in audit_events
+            ):
+                action = "SIGNAL_BLOCKED"
 
-        # Build cycle record
-        record = {
-            "cycle": cycle_num,
-            "timestamp": timestamp,
-            "market": {
-                "price": price,
-                "funding_zscore": funding_zscore,
-                "spread": spread,
-                "volatility": volatility,
-                "regime": regime,
-                "symbol": product,
-            },
-            "portfolio": {
-                "account_value": pf.get("account_value") if pf else None,
-                "cash": pf.get("available_cash") if pf else None,
-                "positions": pf.get("open_position_count") if pf else None,
-                "daily_pnl": pf.get("daily_pnl") if pf else None,
-                "drawdown": pf.get("drawdown_from_peak") if pf else None,
-            },
-            "signal": signal,
-            "signal_detail": {
-                "funding_zscore": funding_zscore,
-                "threshold": threshold,
-                "distance_to_threshold": round(distance, 4) if distance is not None else None,
-                "strength": round(strength, 4),
-                "planned_entry": planned_entry,
-                "planned_stop": planned_stop,
-            },
-            "action": action,
-            "audit_events": audit_events,
-        }
+            # Build cycle record
+            record = {
+                "cycle": cycle_num,
+                "timestamp": timestamp,
+                "market": {
+                    "price": price,
+                    "funding_zscore": funding_zscore,
+                    "spread": spread,
+                    "volatility": volatility,
+                    "regime": regime,
+                    "symbol": product,
+                },
+                "portfolio": {
+                    "account_value": pf.get("account_value") if pf else None,
+                    "cash": pf.get("available_cash") if pf else None,
+                    "positions": pf.get("open_position_count") if pf else None,
+                    "daily_pnl": pf.get("daily_pnl") if pf else None,
+                    "drawdown": pf.get("drawdown_from_peak") if pf else None,
+                },
+                "signal": signal,
+                "signal_detail": {
+                    "funding_zscore": funding_zscore,
+                    "threshold": threshold,
+                    "distance_to_threshold": round(distance, 4) if distance is not None else None,
+                    "strength": round(strength, 4),
+                    "planned_entry": planned_entry,
+                    "planned_stop": planned_stop,
+                },
+                "action": action,
+                "audit_events": audit_events,
+            }
 
-        with _decision_lock:
-            _decision_cycles.append(record)
+            with _decision_lock:
+                _decision_cycles.append(record)
+
+        except Exception as e:
+            # Never let the thread die — log error and continue
+            print(f"[decision-engine] error in cycle: {e}")
 
         time.sleep(2)
 
