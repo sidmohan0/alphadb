@@ -2,14 +2,16 @@
 
 ## What this report covers
 
-This folder includes the two diagrams produced during the Polymarket Market Channel work:
+This folder now includes the artifacts for the discovery work and the new async run architecture:
 
 - `polymarket-market-channels-visual-plan-diagram.html`
   - A full visual plan + topology/flow diagram for the discovery script.
 - `polymarket-market-channels-call-graph.html`
   - A call graph / call hierarchy for the same file structure.
+- `polymarket-discovery-runs-visual-plan.html`
+  - Architecture and endpoint model for async `discovery_runs` + Postgres/Redis orchestration.
 
-Open these files in a browser for the rendered Mermaid diagrams.
+Open these files in a browser for rendered visuals.
 
 ## Current backend structure (post-refactor)
 
@@ -21,14 +23,18 @@ The discovery feature is now structured as:
   - Shared parsing and extraction helpers.
 - `server/src/polymarket/services/marketChannelDiscoveryService.ts`
   - Service orchestration for REST + optional websocket probing.
-- `server/src/polymarket/cli/runMarketChannels.ts`
-  - CLI entry logic (args/env + result rendering).
 - `server/src/polymarket/controllers/polymarket.controller.ts`
   - HTTP controller (`GET /api/polymarket/market-channels`).
 - `server/src/app.ts`
   - Express app factory (`createApp`) for runtime + testability.
+- `server/src/polymarket/cli/runMarketChannels.ts`
+  - CLI entry logic (args/env + result rendering).
+- `server/src/polymarket/errors.ts`
+  - Centralized typed error mapping and API response contracts.
 - `server/src/polymarketMarketChannels.ts`
   - Thin CLI bootstrap wrapper that invokes the CLI entry and handles terminal failure.
+
+> Planned next step: `server/src/polymarket/domain`, `repositories`, `services`, `infra`, and run orchestration files for the async DB/Redis flow.
 
 ## API behavior
 
@@ -40,7 +46,7 @@ The discovery feature is now structured as:
 - `wsConnectTimeoutMs` (default: `12000`)
 - `wsChunkSize` (default: `500`)
 - `marketFetchTimeoutMs` (default: `15000`)
-- `MARKET_DISCOVERY_CONCURRENCY_LIMIT` env var controls simultaneous in-flight non-cached discoveries (default: `4`)
+- `MARKET_DISCOVERY_CONCURRENCY_LIMIT` env var controls simultaneous in-flight unique non-cached runs (default: `4`)
 
 On error, the endpoint maps structured error codes and status codes to descriptive JSON (for example):
 
@@ -78,7 +84,7 @@ The service keeps empty states explicit:
 
 In-memory request coalescing is now used for concurrent identical discovery requests. If the same request payload arrives while the same discovery run is in flight, callers receive the same Promise instead of duplicate upstream calls.
 
-A hard concurrency ceiling is also applied for unique in-flight discovery runs (default `4`, via `MARKET_DISCOVERY_CONCURRENCY_LIMIT`). Requests above the limit fail immediately with:
+A hard concurrency ceiling is currently applied for unique in-flight discovery runs (default `4`, via `MARKET_DISCOVERY_CONCURRENCY_LIMIT`). Requests above the limit fail immediately with:
 
 - HTTP `429`
 - `code: discovery_concurrency_limit`
@@ -94,7 +100,7 @@ A hard concurrency ceiling is also applied for unique in-flight discovery runs (
   - websocket query params are passed through correctly
   - empty-state response behavior
   - concurrent dedupe for identical service calls
-  - error response mapping
+  - saturation + error mapping
 
 Run tests with:
 

@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Discovery Runs — Visual Plan</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --font-body: 'IBM Plex Sans', sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+      --bg: #f8f8f6;
+      --surface: #ffffff;
+      --surface-soft: #f3efea;
+      --surface-mid: #fffaf5;
+      --border: rgba(0, 0, 0, 0.12);
+      --line: rgba(15, 23, 42, 0.22);
+      --text: #1f2937;
+      --text-dim: #64748b;
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.1);
+      --sage: #4d7c0f;
+      --sage-soft: rgba(77, 124, 15, 0.08);
+      --rose: #be123c;
+      --rose-soft: rgba(190, 18, 60, 0.08);
+      --amber: #b45309;
+      --amber-soft: rgba(180, 83, 9, 0.08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141414;
+        --surface: #1b1b20;
+        --surface-soft: #222128;
+        --surface-mid: #2a2420;
+        --border: rgba(255, 255, 255, 0.12);
+        --line: rgba(226, 232, 240, 0.24);
+        --text: #e2e8f0;
+        --text-dim: #94a3b8;
+        --accent: #5eead4;
+        --accent-soft: rgba(94, 234, 212, 0.14);
+        --sage: #a3e635;
+        --sage-soft: rgba(163, 230, 53, 0.12);
+        --rose: #fda4af;
+        --rose-soft: rgba(253, 164, 175, 0.12);
+        --amber: #fcd34d;
+        --amber-soft: rgba(252, 211, 77, 0.12);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font-body);
+      background: radial-gradient(circle at 20% 0%, rgba(14, 165, 233, 0.10) 0%, transparent 40%),
+                  radial-gradient(circle at 85% 10%, rgba(132, 204, 22, 0.08) 0%, transparent 42%),
+                  var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+      padding: 24px;
+    }
+
+    .sheet {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      box-shadow: 0 8px 30px rgba(2, 6, 23, 0.08);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border: 1px solid transparent;
+      pointer-events: none;
+      border-radius: 12px;
+      background: linear-gradient(120deg, transparent 0%, transparent 48%, var(--accent-soft) 100%);
+      z-index: 0;
+    }
+
+    .card > * { position: relative; z-index: 1; }
+
+    h1, h2, h3 {
+      margin: 0 0 8px;
+    }
+
+    h1 { font-size: 2rem; }
+    h2 { font-size: 1.22rem; margin-top: 2px; }
+    p { margin: 0 0 10px; color: var(--text-dim); }
+
+    .muted { color: var(--text-dim); font-size: 0.95rem; }
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    .node {
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--surface-soft);
+    }
+
+    .node.accent { border-left-color: var(--accent); background: var(--accent-soft); }
+    .node.sage { border-left-color: var(--sage); background: var(--sage-soft); }
+    .node.rose { border-left-color: var(--rose); background: var(--rose-soft); }
+    .node.amber { border-left-color: var(--amber); background: var(--amber-soft); }
+
+    .node h4 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+
+    .node p { font-size: 0.92rem; margin-bottom: 8px; }
+
+    .node code {
+      font-family: var(--font-mono);
+      background: var(--surface-mid);
+      padding: 1px 6px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      color: var(--text);
+      display: inline-block;
+      margin-bottom: 4px;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.76rem;
+      font-family: var(--font-mono);
+      border: 1px solid var(--border);
+      border-left-width: 3px;
+      border-left-color: var(--accent);
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-right: 8px;
+      margin-bottom: 6px;
+      color: var(--text-dim);
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .step {
+      position: relative;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--surface-mid);
+      min-height: 120px;
+    }
+
+    .step::after {
+      content: '→';
+      position: absolute;
+      right: -18px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 24px;
+      color: var(--text-dim);
+    }
+    .step:last-child::after { display: none; }
+
+    .step h4 { margin: 0 0 6px; font-size: 0.95rem; }
+    .step p, .step ul { margin: 0; font-size: 0.9rem; color: var(--text-dim); }
+
+    .state-list {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+
+    .state {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--surface-soft);
+    }
+
+    .state h4 { margin: 0 0 6px; font-size: 0.95rem; }
+    .state p { font-size: 0.86rem; margin: 0; }
+
+    .split {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .split .card {
+      margin-top: 0;
+    }
+
+    .schema {
+      display: grid;
+      gap: 10px;
+    }
+
+    .schema table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      padding: 8px;
+      vertical-align: top;
+    }
+
+    thead th {
+      background: var(--surface-soft);
+      font-weight: 600;
+    }
+
+    .note {
+      border-left: 4px solid var(--amber);
+      background: var(--amber-soft);
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    .endpoint {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--surface-mid);
+      margin-bottom: 10px;
+    }
+
+    .endpoint code {
+      color: var(--text);
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+    }
+
+    @media (max-width: 1024px) {
+      .state-list, .split { grid-template-columns: 1fr; }
+      .pipeline { grid-template-columns: 1fr; }
+      .step::after { content: '↓'; right: 50%; top: auto; bottom: -24px; transform: translateX(50%); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <section class="card">
+      <h1>Polymarket Discovery Runs — Target Backend Architecture</h1>
+      <p class="muted">Visual plan for the next pivot: async run model in Postgres + Redis, while keeping controller logic thin and service-layer orchestration explicit.</p>
+      <div>
+        <span class="badge">DB: Postgres</span>
+        <span class="badge">Cache: Redis</span>
+        <span class="badge">Primary API: POST/GET /runs</span>
+        <span class="badge">Legacy compatibility: GET /market-channels</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Layered Backend Map</h2>
+      <div class="grid" style="grid-template-columns: repeat(12, 1fr); margin-top: 8px;">
+        <div class="node accent" style="grid-column: span 4;">
+          <h4>HTTP Controllers</h4>
+          <p>Parse/validate request params, call services, map structured responses.</p>
+          <code>polymarket.controller.ts</code>
+          <code>GET /runs/:id, POST /runs, GET /runs/latest, legacy GET /market-channels</code>
+        </div>
+        <div class="node sage" style="grid-column: span 4;">
+          <h4>Service Layer</h4>
+          <p>Orchestrates create/attach, dedupe keys, concurrency slotting, job lifecycle, cache/read-through, polling behavior.</p>
+          <code>discovery-run.service.ts</code>
+        </div>
+        <div class="node rose" style="grid-column: span 4;">
+          <h4>Infrastructure</h4>
+          <p>Postgres for durable state, Redis for distributed locks/semaphores, short-lived responses for UI fast-path.</p>
+          <code>discoveryRun.repository.ts</code>
+          <code>run-cache.ts</code>
+        </div>
+        <div class="node amber" style="grid-column: span 6;">
+          <h4>Domain Discovery</h4>
+          <p>Existing extraction logic: fetch `/markets`, parse tokens/assets, optional websocket probing, timeout/error mapping unchanged.</p>
+          <code>market-discovery.service.ts</code>
+          <code>types.ts / errors.ts / utils.ts</code>
+        </div>
+        <div class="node" style="grid-column: span 6;">
+          <h4>Job Execution</h4>
+          <p>Runner function invoked when run is created or dequeued. Produces channel rows + ws scan summary and finalizes run state.</p>
+          <code>jobs/executeDiscoveryRun.ts</code>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Request Flow (Primary Endpoints)</h2>
+      <div class="pipeline">
+        <div class="step" style="grid-column: span 3;">
+          <h4>1) Create</h4>
+          <ul>
+            <li>Client: <code>POST /api/polymarket/market-channels/runs</code></li>
+            <li>Controller normalizes query/body and passes DTO</li>
+            <li>Service computes <code>dedupeKey</code></li>
+          </ul>
+        </div>
+        <div class="step" style="grid-column: span 3;">
+          <h4>2) Concurrency + Dedupe</h4>
+          <ul>
+            <li>Check Redis active lock by <code>dedupeKey</code></li>
+            <li>Acquire semaphore (default limit 4)</li>
+            <li>Attach to existing run if in-flight duplicate</li>
+          </ul>
+        </div>
+        <div class="step" style="grid-column: span 3;">
+          <h4>3) Persist Run</h4>
+          <ul>
+            <li>Create <code>discovery_runs</code> row with status <code>queued</code></li>
+            <li>Write cache pointers: latest run + active dedupe key</li>
+            <li>Return <code>runId + pollUrl</code> as 202</li>
+          </ul>
+        </div>
+        <div class="step" style="grid-column: span 3;">
+          <h4>4) Execute + Read</h4>
+          <ul>
+            <li>Worker marks running and executes discovery</li>
+            <li>Persist channels + ws scan + error metadata</li>
+            <li>GET endpoint reads run + paginated channels</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Run State Lifecycle</h2>
+      <div class="state-list">
+        <div class="state">
+          <h4>queued</h4>
+          <p>Created, waiting for worker slot or existing run resolution.</p>
+        </div>
+        <div class="state">
+          <h4>running</h4>
+          <p>Active fetch + websocket probe in progress; channels may be partially available.</p>
+        </div>
+        <div class="state">
+          <h4>succeeded</h4>
+          <p>All tasks complete. Channels+scan fully materialized.</p>
+        </div>
+        <div class="state">
+          <h4>failed</h4>
+          <p>Error recorded in structured format with <code>code/message/retryable</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="split">
+      <article class="card">
+        <h2>Suggested Endpoints</h2>
+        <div class="endpoint"><strong>POST</strong> <code>/api/polymarket/market-channels/runs</code><br/>Create or attach run. Returns <code>202</code> + <code>runId</code>.</div>
+        <div class="endpoint"><strong>GET</strong> <code>/api/polymarket/market-channels/runs/:runId?offset=0&limit=200</code><br/>Run status + paginated channels + ws scan.</div>
+        <div class="endpoint"><strong>GET</strong> <code>/api/polymarket/market-channels/runs/latest</code><br/>Latest run in default scope for dashboard bootstrap.</div>
+        <div class="endpoint"><strong>GET</strong> <code>/api/polymarket/market-channels</code><br/>Compatibility wrapper; keep thin and delegate to run service with optional short wait.</div>
+      </article>
+
+      <article class="card">
+        <h2>Legacy/Compatibility Strategy</h2>
+        <ul>
+          <li>Controller remains thin; no orchestration in route handlers.</li>
+          <li>Old GET uses same service as new POST endpoint.</li>
+          <li>Optional <code>waitMs</code> lets GET return immediate terminal payload when run already ready.</li>
+          <li>If not complete, return the same async shell used by runs.</li>
+          <li>Structured error contract stays unchanged: <code>code, message, retryable, details, requestId</code>.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>Postgres & Redis Shapes (High-level)</h2>
+      <div class="schema">
+        <div>
+          <h3>Tables</h3>
+          <table>
+            <thead>
+              <tr><th>Table</th><th>Purpose</th><th>Key Columns</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>discovery_runs</code></td>
+                <td>Run lifecycle, status, source metadata, timings, error summary, retention</td>
+                <td>id, dedupe_key, status, clob_api_url, chain_id, ws params, requested_at, started_at, completed_at, market_count, market_channel_count, error_code, request_id</td>
+              </tr>
+              <tr>
+                <td><code>discovery_run_channels</code></td>
+                <td>Normalized channel output for pagination</td>
+                <td>discovery_run_id, asset_id, condition_id, question, outcome, market_slug</td>
+              </tr>
+              <tr>
+                <td><code>discovery_run_ws_scans</code></td>
+                <td>Single ws summary row per run</td>
+                <td>discovery_run_id, ws_url, connected, observed_channels[], message_count, sample_event_count, errors</td>
+              </tr>
+              <tr>
+                <td><code>discovery_run_events</code> (optional)</td>
+                <td>Debug/progress/audit trail</td>
+                <td>discovery_run_id, event_type, event_at, message, metadata</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <h3>Redis Keys</h3>
+          <table>
+            <thead>
+              <tr><th>Key</th><th>Use</th><th>TTL</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>pm:discovery:latest:default</code></td>
+                <td>Latest known run id</td>
+                <td>10m</td>
+              </tr>
+              <tr>
+                <td><code>pm:discovery:run:{runId}</code></td>
+                <td>Cached run payload/read model</td>
+                <td>5–30m</td>
+              </tr>
+              <tr>
+                <td><code>pm:discovery:active:{dedupeKey}</code></td>
+                <td>Distributed dedupe lock (in-flight)</td>
+                <td>max runtime</td>
+              </tr>
+              <tr>
+                <td><code>pm:discovery:active-count</code></td>
+                <td>Semaphore for concurrent run limit</td>
+                <td>same as run duration or ephemeral</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Indexing Focus</h2>
+      <ul>
+        <li><code>discovery_runs(id)</code> PK</li>
+        <li><code>discovery_runs(status, requested_at DESC)</code> for latest/recent views</li>
+        <li><code>discovery_runs(dedupe_key, status)</code> for active dedupe checks</li>
+        <li><code>discovery_runs(expires_at)</code> for cleanup jobs</li>
+        <li><code>discovery_run_channels(discovery_run_id, asset_id)</code> unique per run</li>
+        <li><code>discovery_run_channels(discovery_run_id)</code> for paginated listing</li>
+      </ul>
+      <div class="note">Business rule reminder: constraints and checks in DB, orchestration and transition rules in service layer.</div>
+    </section>
+  </main>
+</body>
+</html>
