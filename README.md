@@ -1,5 +1,7 @@
 # Polymarket Discovery Service (TypeScript Monorepo)
 
+![Homepage screenshot](docs/screenshots/homepage.png)
+
 A production-oriented TypeScript starter that focuses on **Polymarket market-channel discovery** with:
 
 - a layered backend architecture (controller / service / infra)

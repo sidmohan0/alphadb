@@ -63,6 +63,45 @@ label {
   min-width: 0;
 }
 
+.config-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+}
+
+.config-group + .config-group {
+  margin-top: 0.5rem;
+}
+
+.config-group summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.config-group summary::-webkit-details-marker,
+.config-group summary::marker {
+  color: #334155;
+}
+
+.config-group .section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.4rem;
+  padding: 0.1rem 0.15rem 0.2rem;
+}
+
+.config-group .nested {
+  margin-top: 0.4rem;
+  border-color: #e2e8f0;
+  padding: 0.45rem 0.6rem;
+}
+
+.form-help {
+  margin: 0.45rem 0;
+  color: #5b6370;
+  font-size: 0.87rem;
+}
+
 @media (max-width: 768px) {
   .app {
     padding-inline: clamp(0.5rem, 2.5vw, 0.9rem);
@@ -73,17 +112,10 @@ label {
   .card {
     padding: 0.85rem;
   }
-}
 
-.discovery-filters {
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 0.65rem;
-  margin-top: 0.4rem;
-}
-
-.discovery-filters legend {
-  font-weight: 700;
+  .config-group summary {
+    font-size: 0.96rem;
+  }
 }
 
 .filter-grid {

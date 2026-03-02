@@ -17,3 +17,7 @@ yarn-error.log*
 # env
 .env
 .env.local
+
+# temporary debug artifacts
+tmp/
+*.tmp.png
