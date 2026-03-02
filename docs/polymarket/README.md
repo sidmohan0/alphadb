@@ -53,6 +53,44 @@ Compatibility path:
   - `waitMs=0` → no wait (legacy shell)
   - `waitMs>0` → waits up to provided window and returns terminal payload when ready
 
+### Frontend polling contract (ready-to-wire)
+
+Minimal client loop (single `runId`):
+
+```ts
+const response = await fetch("/api/polymarket/market-channels/runs", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ chainId: 137 }),
+});
+const shell = await response.json();
+
+let pollUrl = shell.pollUrl;
+while (true) {
+  const pollResp = await fetch(pollUrl);
+  const payload = await pollResp.json();
+
+  if (pollResp.status === 202) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    continue;
+  }
+
+  if (pollResp.status === 500) {
+    throw new Error(payload.error);
+  }
+
+  // status succeeded/partial + full payload
+  const channels = payload.channels.items;
+  const hasMore = payload.channels.page.hasMore;
+  break;
+}
+```
+
+- Successful terminal payload includes the contract:
+  - `run.id`, `run.status`, `run.source`, `run.marketCount`, `run.marketChannelCount`
+  - `channels.items`, `channels.page` (`offset|limit|total|hasMore`)
+  - optional `wsScan`
+
 Error codes now include:
 
 - `invalid_input`

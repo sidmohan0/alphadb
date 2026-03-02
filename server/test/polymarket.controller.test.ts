@@ -7,6 +7,7 @@ import {
   type DiscoveryRunSummary,
   type MarketChannelRunResult,
 } from "../src/polymarket/types";
+import { mapRunNotFound } from "../src/polymarket/errors";
 import * as discoveryRunService from "../src/polymarket/services/discoveryRunService";
 
 describe("Polymarket discovery controller", () => {
@@ -146,6 +147,35 @@ describe("Polymarket discovery controller", () => {
     expect(response.body).toMatchObject(runResult);
   });
 
+  it("returns 500 contract when compatibility discovery fails", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "waitForRunIfAllowed").mockResolvedValue({
+      status: "failed",
+      runId: "run-1",
+      pollUrl: "/api/polymarket/market-channels/runs/run-1",
+      requestId: "req-123",
+      errorCode: "clob_request_timeout",
+      errorMessage: "Timed out",
+      errorRetryable: true,
+    });
+
+    const response = await request(app)
+      .get("/api/polymarket/market-channels?chainId=137&waitMs=1000")
+      .expect(500)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "clob_request_timeout",
+      message: "Timed out",
+      retryable: true,
+      details: {
+        component: "service",
+        runId: "run-1",
+      },
+      requestId: "req-123",
+    });
+  });
+
   it("returns 400 for invalid offset", async () => {
     const response = await request(app)
       .get("/api/polymarket/market-channels/runs/run-1?offset=abc")
@@ -175,6 +205,53 @@ describe("Polymarket discovery controller", () => {
         component: "controller",
         field: "limit",
       },
+    });
+  });
+
+  it("returns 400 for invalid compatibility waitMs", async () => {
+    const response = await request(app)
+      .get("/api/polymarket/market-channels?chainId=137&waitMs=abc")
+      .expect(400)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "invalid_input",
+      details: {
+        component: "controller",
+        field: "waitMs",
+      },
+    });
+  });
+
+  it("returns 400 for negative compatibility waitMs", async () => {
+    const response = await request(app)
+      .get("/api/polymarket/market-channels?chainId=137&waitMs=-1")
+      .expect(400)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "invalid_input",
+      details: {
+        component: "controller",
+        field: "waitMs",
+      },
+    });
+  });
+
+  it("returns 404 contract for missing latest run", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "getLatestRun").mockRejectedValue(mapRunNotFound("nothing"));
+
+    const response = await request(app).get("/api/polymarket/market-channels/runs/latest").expect(404);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "run_not_found",
+      details: {
+        component: "service",
+      },
+      requestId: expect.any(String),
     });
   });
 });
