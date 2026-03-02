@@ -7,6 +7,7 @@ import * as discoveryService from "../src/polymarket/services/marketChannelDisco
 import {
   DEFAULT_CLOB_API_URL,
   DEFAULT_CHAIN_ID,
+  DEFAULT_MARKET_FETCH_TIMEOUT_MS,
   DEFAULT_WS_CHUNK_SIZE,
   DEFAULT_WS_CONNECT_TIMEOUT_MS,
 } from "../src/polymarket/types";
@@ -15,19 +16,10 @@ const mockResult: MarketChannelRunResult = {
   source: {
     clobApiUrl: "https://clob.polymarket.com",
     chainId: 137,
-    marketCount: 1,
-    marketChannelCount: 2,
+    marketCount: 0,
+    marketChannelCount: 0,
   },
-  channels: [
-    {
-      assetId: "0x111111111111111111111111111111111111111111111111111111111111111111",
-      question: "Will BTC be > 100k?",
-    },
-    {
-      assetId: "0x222222222222222222222222222222222222222222222222222222222222222222",
-      question: "Will BTC be < 100k?",
-    },
-  ],
+  channels: [],
   wsScan: null,
 };
 
@@ -38,42 +30,40 @@ describe("Polymarket controller", () => {
     vi.restoreAllMocks();
   });
 
-  it("calls discovery service and returns channel result", async () => {
-    const spy = vi
-      .spyOn(discoveryService, "discoverMarketChannels")
-      .mockResolvedValue(mockResult);
+  it("calls discovery service and returns an empty-state payload", async () => {
+    const spy = vi.spyOn(discoveryService, "discoverMarketChannels").mockResolvedValue(mockResult);
 
-    const response = await request(app)
-      .get("/api/polymarket/market-channels?chainId=137&clobApiUrl=https://clob.polymarket.com")
-      .expect(200)
-      .expect("Content-Type", /json/);
+    const response = await request(app).get("/api/polymarket/market-channels").expect(200).expect("Content-Type", /json/);
 
-    expect(response.body).toMatchObject({
+    expect(response.body).toEqual({
       source: {
         clobApiUrl: "https://clob.polymarket.com",
         chainId: 137,
+        marketCount: 0,
+        marketChannelCount: 0,
       },
-      channels: expect.arrayContaining([expect.objectContaining({ assetId: mockResult.channels[0].assetId })]),
+      channels: [],
+      wsScan: null,
     });
 
-    expect(spy).toHaveBeenCalledOnce();
     expect(spy).toHaveBeenCalledWith({
-      clobApiUrl: "https://clob.polymarket.com",
-      chainId: 137,
+      clobApiUrl: DEFAULT_CLOB_API_URL,
+      chainId: DEFAULT_CHAIN_ID,
       wsUrl: undefined,
       wsConnectTimeoutMs: DEFAULT_WS_CONNECT_TIMEOUT_MS,
       wsChunkSize: DEFAULT_WS_CHUNK_SIZE,
+      marketFetchTimeoutMs: DEFAULT_MARKET_FETCH_TIMEOUT_MS,
     });
   });
 
-  it("passes websocket-related query params to the service", async () => {
+  it("passes websocket query params to the service", async () => {
     const spy = vi
       .spyOn(discoveryService, "discoverMarketChannels")
       .mockResolvedValue(mockResult);
 
     await request(app)
       .get(
-        "/api/polymarket/market-channels?wsUrl=wss://example.com/ws&wsConnectTimeoutMs=15000&wsChunkSize=42"
+        "/api/polymarket/market-channels?wsUrl=wss://example.com/ws&wsConnectTimeoutMs=15000&wsChunkSize=42&marketFetchTimeoutMs=17000"
       )
       .expect(200);
 
@@ -83,20 +73,43 @@ describe("Polymarket controller", () => {
       wsUrl: "wss://example.com/ws",
       wsConnectTimeoutMs: 15000,
       wsChunkSize: 42,
+      marketFetchTimeoutMs: 17000,
     });
   });
 
-  it("returns an error response when discovery fails", async () => {
-    vi.spyOn(discoveryService, "discoverMarketChannels").mockRejectedValue(new Error("upstream failure"));
-
+  it("returns 400 for invalid integer input", async () => {
     const response = await request(app)
-      .get("/api/polymarket/market-channels")
-      .expect(502)
+      .get("/api/polymarket/market-channels?chainId=abc")
+      .expect(400)
       .expect("Content-Type", /json/);
 
     expect(response.body).toMatchObject({
       error: "Failed to discover market channels",
-      details: "upstream failure",
+      code: "invalid_input",
+      retryable: false,
+      details: {
+        component: "controller",
+        field: "chainId",
+      },
+    });
+  });
+
+  it("returns a richer response on service failure", async () => {
+    vi.spyOn(discoveryService, "discoverMarketChannels").mockRejectedValue(new Error("upstream failure"));
+
+    const response = await request(app)
+      .get("/api/polymarket/market-channels")
+      .expect(500)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "unexpected_error",
+      retryable: false,
+      details: {
+        component: "clob",
+      },
+      requestId: expect.any(String),
     });
   });
 });

@@ -67,6 +67,7 @@ Query params:
 - `wsUrl` (optional): when set, triggers websocket probing for this session
 - `wsConnectTimeoutMs` (optional): default `12000`
 - `wsChunkSize` (optional): default `500`
+- `marketFetchTimeoutMs` (optional): default `15000` per page
 
 Example:
 
@@ -88,3 +89,4 @@ Environment variables:
 - `WS_URL` (optional; websocket host, e.g. `wss://.../ws`)
 - `WS_CONNECT_TIMEOUT_MS` (default: `12000`)
 - `WS_CHUNK_SIZE` (default: `500`)
+- `MARKET_FETCH_TIMEOUT_MS` (default: `15000`)

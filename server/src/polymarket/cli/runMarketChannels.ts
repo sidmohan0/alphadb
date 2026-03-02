@@ -3,6 +3,7 @@ import {
   DEFAULT_CHAIN_ID,
   DEFAULT_WS_CHUNK_SIZE,
   DEFAULT_WS_CONNECT_TIMEOUT_MS,
+  DEFAULT_MARKET_FETCH_TIMEOUT_MS,
   type MarketChannelRunResult,
 } from "../types";
 import { discoverMarketChannels } from "../services/marketChannelDiscoveryService";
@@ -44,6 +45,7 @@ export async function runPolymarketMarketChannels(): Promise<void> {
   const wsUrl = process.env.WS_URL;
   const wsConnectTimeoutMs = parseNumber(process.env.WS_CONNECT_TIMEOUT_MS, DEFAULT_WS_CONNECT_TIMEOUT_MS);
   const wsChunkSize = parseNumber(process.env.WS_CHUNK_SIZE, DEFAULT_WS_CHUNK_SIZE);
+  const marketFetchTimeoutMs = parseNumber(process.env.MARKET_FETCH_TIMEOUT_MS, DEFAULT_MARKET_FETCH_TIMEOUT_MS);
   const emitJson = process.argv.includes("--json") || process.argv.includes("-j");
 
   if (emitJson) {
@@ -56,6 +58,7 @@ export async function runPolymarketMarketChannels(): Promise<void> {
     wsUrl,
     wsConnectTimeoutMs,
     wsChunkSize,
+    marketFetchTimeoutMs,
   });
 
   if (emitJson) {

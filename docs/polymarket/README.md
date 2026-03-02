@@ -39,24 +39,45 @@ The discovery feature is now structured as:
 - `wsUrl` (optional)
 - `wsConnectTimeoutMs` (default: `12000`)
 - `wsChunkSize` (default: `500`)
+- `marketFetchTimeoutMs` (default: `15000`)
 
-On error, the endpoint returns HTTP `502` with:
+On error, the endpoint maps structured error codes and status codes to descriptive JSON (for example):
 
 ```json
 {
   "error": "Failed to discover market channels",
-  "details": "..."
+  "code": "clob_request_network",
+  "message": "Clob request failed with code ENOTFOUND",
+  "retryable": true,
+  "details": {
+    "component": "clob",
+    "status": 502
+  },
+  "requestId": "..."
 }
 ```
+
+The service keeps empty states explicit:
+
+- `channels: []` when no markets or asset IDs are discovered
+- `wsScan: null` when websocket probe is not requested
+- `source.marketChannelCount` mirrors `channels.length`
+
+### Concurrency and de-duplication behavior
+
+In-memory request coalescing is now used for concurrent identical discovery requests. If the same request payload arrives while the same discovery run is in flight, callers receive the same Promise instead of duplicate upstream calls.
 
 ## Test coverage added
 
 - Added integration tests at `server/test/polymarket.controller.test.ts`.
+- Added service unit tests at `server/test/polymarket.discovery.service.test.ts`.
 - Tests validate:
   - service invocation + response mapping
   - default values when query params are omitted
   - websocket query params are passed through correctly
-  - error propagation as 502
+  - empty-state response behavior
+  - concurrent dedupe for identical service calls
+  - error response mapping
 
 Run tests with:
 

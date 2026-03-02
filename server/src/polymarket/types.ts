@@ -2,6 +2,7 @@ export const DEFAULT_CLOB_API_URL = "https://clob.polymarket.com";
 export const DEFAULT_CHAIN_ID = 137;
 export const DEFAULT_WS_CONNECT_TIMEOUT_MS = 12_000;
 export const DEFAULT_WS_CHUNK_SIZE = 500;
+export const DEFAULT_MARKET_FETCH_TIMEOUT_MS = 15_000;
 
 /**
  * Broad JSON object shape used while traversing unknown payloads.
@@ -94,4 +95,5 @@ export type MarketDiscoveryConfig = {
   wsUrl?: string;
   wsConnectTimeoutMs: number;
   wsChunkSize: number;
+  marketFetchTimeoutMs: number;
 };
