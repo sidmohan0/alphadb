@@ -59,9 +59,25 @@ Verify they are healthy before continuing:
 docker compose -f docker-compose.discovery-stack.yml ps
 ```
 
-### 3) Configure required environment
+### 3) Configure environment
 
-Discovery runs now require both DB and Redis in normal mode:
+A starter `.env.example` is included:
+
+```bash
+cp .env.example .env
+```
+
+Load it in your shell for local sessions:
+
+```bash
+set -a
+. ./.env
+set +a
+```
+
+Set `DISCOVERY_RUN_PRUNER_ENABLED=1` in `.env` if you want background cleanup enabled.
+
+Alternatively, export inline for ad-hoc runs:
 
 ```bash
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/alphadb"

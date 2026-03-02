@@ -87,9 +87,11 @@ This applies:
 # 1) start infra
 docker-compose -f docker-compose.discovery-stack.yml up -d
 
-# 2) configure required env
-export DATABASE_URL="postgres://postgres:postgres@localhost:5432/alphadb"
-export REDIS_URL="redis://localhost:6379"
+# 2) load local env (.env is tracked from .env.example)
+cp .env.example .env
+set -a
+. ./.env
+set +a
 
 # 3) apply schema
 npm run polymarket:discovery-migrate
