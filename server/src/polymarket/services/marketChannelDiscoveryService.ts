@@ -3,6 +3,7 @@ import { ClobClient } from "@polymarket/clob-client";
 import {
   DEFAULT_CLOB_API_URL,
   DEFAULT_CHAIN_ID,
+  DEFAULT_MARKET_DISCOVERY_CONCURRENCY_LIMIT,
   DEFAULT_MARKET_FETCH_TIMEOUT_MS,
   DEFAULT_WS_CHUNK_SIZE,
   DEFAULT_WS_CONNECT_TIMEOUT_MS,
@@ -27,6 +28,7 @@ import {
 } from "../utils";
 import {
   mapClobRequestFailure,
+  mapDiscoveryConcurrencyLimit,
   mapInvalidInput,
   mapWebsocketInvalidUrl,
   PolymarketDiscoveryError,
@@ -44,6 +46,18 @@ export const DEFAULT_DISCOVERY_CONFIG = {
 } as const;
 
 const inFlightDiscoveries = new Map<string, Promise<MarketChannelRunResult>>();
+let activeDiscoveryCount = 0;
+
+function getDiscoveryConcurrencyLimit(): number {
+  const raw = process.env.MARKET_DISCOVERY_CONCURRENCY_LIMIT;
+
+  const fromEnv = Number(raw);
+  if (Number.isFinite(fromEnv) && fromEnv > 0 && Number.isInteger(fromEnv)) {
+    return fromEnv;
+  }
+
+  return DEFAULT_MARKET_DISCOVERY_CONCURRENCY_LIMIT;
+}
 
 function discoveryRequestKey(config: MarketDiscoveryConfig): string {
   return JSON.stringify({
@@ -322,36 +336,48 @@ export async function discoverMarketChannels(config: MarketDiscoveryConfig): Pro
   const run = (async (): Promise<MarketChannelRunResult> => {
     assertDiscoveryConfig(config);
 
-    const clobClient = new ClobClient(config.clobApiUrl, config.chainId);
-
-    const safeMarketFetchTimeoutMs =
-      Number.isFinite(config.marketFetchTimeoutMs) && config.marketFetchTimeoutMs > 0
-        ? Math.floor(config.marketFetchTimeoutMs)
-        : DEFAULT_MARKET_FETCH_TIMEOUT_MS;
-
-    const { channels, marketCount } = await fetchMarketChannels(clobClient, safeMarketFetchTimeoutMs);
-
-    const result: MarketChannelRunResult = {
-      source: {
-        clobApiUrl: config.clobApiUrl,
-        chainId: config.chainId,
-        marketCount,
-        marketChannelCount: channels.length,
-      },
-      channels: channels,
-      wsScan: null,
-    };
-
-    if (config.wsUrl) {
-      result.wsScan = await probeMarketChannelsFromWebSocket({
-        wsUrl: config.wsUrl,
-        assetIds: channels.map((channel) => channel.assetId),
-        durationMs: config.wsConnectTimeoutMs,
-        chunkSize: config.wsChunkSize,
+    const limit = getDiscoveryConcurrencyLimit();
+    if (activeDiscoveryCount >= limit) {
+      throw mapDiscoveryConcurrencyLimit(limit, {
+        operation: "discoverMarketChannels",
       });
     }
 
-    return result;
+    activeDiscoveryCount += 1;
+    try {
+      const clobClient = new ClobClient(config.clobApiUrl, config.chainId);
+
+      const safeMarketFetchTimeoutMs =
+        Number.isFinite(config.marketFetchTimeoutMs) && config.marketFetchTimeoutMs > 0
+          ? Math.floor(config.marketFetchTimeoutMs)
+          : DEFAULT_MARKET_FETCH_TIMEOUT_MS;
+
+      const { channels, marketCount } = await fetchMarketChannels(clobClient, safeMarketFetchTimeoutMs);
+
+      const result: MarketChannelRunResult = {
+        source: {
+          clobApiUrl: config.clobApiUrl,
+          chainId: config.chainId,
+          marketCount,
+          marketChannelCount: channels.length,
+        },
+        channels: channels,
+        wsScan: null,
+      };
+
+      if (config.wsUrl) {
+        result.wsScan = await probeMarketChannelsFromWebSocket({
+          wsUrl: config.wsUrl,
+          assetIds: channels.map((channel) => channel.assetId),
+          durationMs: config.wsConnectTimeoutMs,
+          chunkSize: config.wsChunkSize,
+        });
+      }
+
+      return result;
+    } finally {
+      activeDiscoveryCount = Math.max(activeDiscoveryCount - 1, 0);
+    }
   })();
 
   inFlightDiscoveries.set(requestKey, run);

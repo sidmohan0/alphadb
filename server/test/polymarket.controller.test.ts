@@ -3,6 +3,7 @@ import request from "supertest";
 
 import { createApp } from "../src/app";
 import type { MarketChannelRunResult } from "../src/polymarket/types";
+import { PolymarketDiscoveryError } from "../src/polymarket/errors";
 import * as discoveryService from "../src/polymarket/services/marketChannelDiscoveryService";
 import {
   DEFAULT_CLOB_API_URL,
@@ -110,6 +111,30 @@ describe("Polymarket controller", () => {
         component: "clob",
       },
       requestId: expect.any(String),
+    });
+  });
+
+  it("returns a concurrency limit error when service rejects", async () => {
+    vi.spyOn(discoveryService, "discoverMarketChannels").mockRejectedValue(
+      new PolymarketDiscoveryError("Concurrency limit reached", "discovery_concurrency_limit", 429, true, {
+        component: "service",
+        limit: 1,
+      })
+    );
+
+    const response = await request(app)
+      .get("/api/polymarket/market-channels")
+      .expect(429)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "discovery_concurrency_limit",
+      retryable: true,
+      details: {
+        component: "service",
+        limit: 1,
+      },
     });
   });
 });

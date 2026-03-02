@@ -40,6 +40,7 @@ The discovery feature is now structured as:
 - `wsConnectTimeoutMs` (default: `12000`)
 - `wsChunkSize` (default: `500`)
 - `marketFetchTimeoutMs` (default: `15000`)
+- `MARKET_DISCOVERY_CONCURRENCY_LIMIT` env var controls simultaneous in-flight non-cached discoveries (default: `4`)
 
 On error, the endpoint maps structured error codes and status codes to descriptive JSON (for example):
 
@@ -57,6 +58,16 @@ On error, the endpoint maps structured error codes and status codes to descripti
 }
 ```
 
+- Additional `code` values you can expect:
+  - `invalid_input` (`400`)
+  - `clob_request_timeout` (`504`)
+  - `clob_request_network` (`502`)
+  - `clob_request_failure` (`502`)
+  - `discovery_concurrency_limit` (`429`, `retryable: true`)
+  - `websocket_invalid_url` (`400`) — only when probe URL parsing fails
+  - `websocket_request_error` (`502`)
+  - `unexpected_error` (`500`)
+
 The service keeps empty states explicit:
 
 - `channels: []` when no markets or asset IDs are discovered
@@ -66,6 +77,12 @@ The service keeps empty states explicit:
 ### Concurrency and de-duplication behavior
 
 In-memory request coalescing is now used for concurrent identical discovery requests. If the same request payload arrives while the same discovery run is in flight, callers receive the same Promise instead of duplicate upstream calls.
+
+A hard concurrency ceiling is also applied for unique in-flight discovery runs (default `4`, via `MARKET_DISCOVERY_CONCURRENCY_LIMIT`). Requests above the limit fail immediately with:
+
+- HTTP `429`
+- `code: discovery_concurrency_limit`
+- `retryable: true` in the response body
 
 ## Test coverage added
 

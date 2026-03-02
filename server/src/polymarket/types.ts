@@ -3,6 +3,7 @@ export const DEFAULT_CHAIN_ID = 137;
 export const DEFAULT_WS_CONNECT_TIMEOUT_MS = 12_000;
 export const DEFAULT_WS_CHUNK_SIZE = 500;
 export const DEFAULT_MARKET_FETCH_TIMEOUT_MS = 15_000;
+export const DEFAULT_MARKET_DISCOVERY_CONCURRENCY_LIMIT = 4;
 
 /**
  * Broad JSON object shape used while traversing unknown payloads.

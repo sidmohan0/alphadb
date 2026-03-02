@@ -5,6 +5,7 @@ type ErrorCode =
   | "clob_request_timeout"
   | "clob_request_network"
   | "clob_request_failure"
+  | "discovery_concurrency_limit"
   | "websocket_invalid_url"
   | "websocket_request_error"
   | "unexpected_error";
@@ -12,7 +13,7 @@ type ErrorCode =
 export type DiscoveryErrorCode = ErrorCode;
 
 export interface DiscoveryErrorDetails {
-  component?: "clob" | "websocket" | "controller";
+  component?: "clob" | "websocket" | "service" | "controller";
   operation?: string;
   requestId?: string;
   [key: string]: unknown;
@@ -286,4 +287,21 @@ export function mapInvalidInput(message: string, field: string): PolymarketDisco
     field,
     message,
   });
+}
+
+export function mapDiscoveryConcurrencyLimit(
+  limit: number,
+  context: DiscoveryErrorDetails = {}
+): PolymarketDiscoveryError {
+  return new PolymarketDiscoveryError(
+    `Discovery concurrency limit reached (max in-flight runs: ${limit})`,
+    "discovery_concurrency_limit",
+    429,
+    true,
+    {
+      ...context,
+      component: "service",
+      limit,
+    }
+  );
 }

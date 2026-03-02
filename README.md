@@ -90,3 +90,4 @@ Environment variables:
 - `WS_CONNECT_TIMEOUT_MS` (default: `12000`)
 - `WS_CHUNK_SIZE` (default: `500`)
 - `MARKET_FETCH_TIMEOUT_MS` (default: `15000`)
+- `MARKET_DISCOVERY_CONCURRENCY_LIMIT` (default: `4`)
