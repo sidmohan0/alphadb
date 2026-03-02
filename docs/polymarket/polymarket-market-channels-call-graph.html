@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Market Channels · Full Call Graph</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --line: #374151;
+      --accent: #67e8f9;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --panel: #ffffff;
+        --text: #0f172a;
+        --muted: #475569;
+        --line: #d9e2f0;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(99, 102, 241, 0.12), transparent 48%),
+        var(--bg);
+      line-height: 1.45;
+    }
+
+    .sheet {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      background: color-mix(in srgb, var(--panel), transparent 2%);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+    }
+
+    h1 { font-size: 1.6rem; margin-bottom: 6px; }
+    h2 { font-size: 1.2rem; margin: 4px 0 8px; }
+    p { margin: 8px 0; }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .mermaid {
+      overflow-x: auto;
+      min-height: 340px;
+    }
+
+    .note {
+      margin-top: 10px;
+      border-left: 3px solid var(--accent);
+      background: color-mix(in srgb, var(--accent), transparent 90%);
+      border-radius: 6px;
+      padding: 10px;
+      color: var(--text);
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.86rem;
+      color: #a5b4fc;
+      margin: 2px 0;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <section class="card">
+      <h1>Polymarket Market Channels: Full Call Graph</h1>
+      <p>
+        This is a <strong>call graph / call hierarchy</strong> of <code>server/src/polymarketMarketChannels.ts</code>,
+        not a runtime crash trace.
+      </p>
+      <p class="muted">Canonical entry is <code>run()</code> and the optional websocket branch is guarded by <code>WS_URL</code>.</p>
+    </section>
+
+    <section class="card">
+      <h2>1) File-level call graph</h2>
+      <pre class="mono">Mermaid v10 flowchart</pre>
+      <div class="mermaid">
+flowchart TD
+  A["Program module load"] --> B["run()"]
+  B --> C["Read env + args + defaults"]
+  C --> D["parseNumber(CHAIN_ID)"]
+  C --> E["parseNumber(WS_CONNECT_TIMEOUT_MS)"]
+  C --> F["parseNumber(WS_CHUNK_SIZE)"]
+  C --> G["parseNumber(other ints)"]
+
+  B --> H["Create ClobClient"]
+  B --> I["fetchMarketChannels()"]
+  I --> J["getMarkets loop"]
+  I --> K["collectChannelsFromMarket()"]
+  K --> L["toStringOrUndefined()"]
+  K --> M["collectTokenChannel()"]
+  M --> N["isAssetIdCandidate()"]
+  M --> O["isString()"]
+  L --> O
+
+  B --> P{"WS_URL present?"}
+  P -->|yes| Q["probeMarketChannelsFromWebSocket()"]
+  P -->|no| R["Skip WS probe"]
+
+  Q --> S["normalizeWsUrl()"]
+  Q --> T["chunk()"]
+  Q --> U["parseMessageData()"]
+  Q --> V["extractAssetIdsFromWsPayload()"]
+  V --> N
+  U --> W["ArrayBuffer path"]
+  U --> X["Blob path"]
+
+  B --> Y["Human output"]
+  B --> Z["JSON output"]
+  B --> AA["Print channel list"]
+
+  B --> AB["run().catch()"]
+  AB --> AC["process.exit(1)"]
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>2) Runtime execution path (REST only vs REST + WS)</h2>
+      <p class="muted">
+        One concrete successful path, with WS branch shown separately.
+      </p>
+      <div class="mermaid">
+flowchart LR
+  subgraph REST_ONLY
+    R0["run()"] --> R1["fetchMarketChannels()"]
+    R1 --> R2["while pagination loop"]
+    R2 --> R3["collectChannelsFromMarket()"]
+    R3 --> R4["collectTokenChannel()"]
+    R4 --> R5["isAssetIdCandidate()"]
+    R5 --> R6["dedupe + push channel"]
+    R6 --> R7["output summary/list"]
+  end
+
+  subgraph WITH_WS
+    W0["run() with WS_URL"] --> W1["probeMarketChannelsFromWebSocket()"]
+    W1 --> W2["normalizeWsUrl()"]
+    W2 --> W3["chunk(assetIds)"]
+    W3 --> W4["open socket"]
+    W4 --> W5["send subscribe payloads"]
+    W5 --> W6["message event"]
+    W6 --> W7["parseMessageData()"]
+    W7 --> W8["extractAssetIdsFromWsPayload()"]
+    W8 --> W9["accumulate observed channels"]
+    W9 --> W10["timeout + finalize"]
+  end
+
+  R7 --> END["run completion / catch point"]
+  W10 --> END
+</div>
+    </section>
+
+    <section class="card">
+      <h2>3) Is run() at the bottom intentional?</h2>
+      <div class="note">
+        <strong>Not coincidental.</strong> In JS/TS, function declarations are hoisted, so <code>run()</code> can be called even if it is defined near the bottom. It is a style/readability choice:
+        orchestration is often kept near the end, while helpers live above or below.
+      </div>
+
+      <p class="muted">
+        For a <em>runtime</em> trace during a failure, you want a <strong>stack trace</strong> (runtime call stack). What is shown above is a static <strong>call graph</strong>.
+      </p>
+    </section>
+  </main>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      securityLevel: 'loose',
+      themeVariables: {
+        fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+        primaryColor: '#1f2937',
+        lineColor: '#334155',
+      },
+    });
+  </script>
+</body>
+</html>

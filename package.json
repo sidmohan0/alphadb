@@ -3,11 +3,12 @@
   "private": true,
   "version": "1.0.0",
   "description": "Simple TypeScript full-stack boilerplate (Express API + React client).",
-
   "scripts": {
     "dev": "concurrently -n server,client -c auto \"npm run dev --workspace server\" \"npm run dev --workspace client\"",
     "build": "npm run build --workspace server && npm run build --workspace client",
-    "start": "npm run start --workspace server"
+    "start": "npm run start --workspace server",
+    "test": "npm run test --workspace server",
+    "polymarket:market-channels": "ts-node --transpile-only server/src/polymarketMarketChannels.ts"
   },
   "workspaces": [
     "server",
@@ -15,5 +16,9 @@
   ],
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@polymarket/clob-client": "^5.3.0",
+    "ethers": "^6.16.0"
   }
 }

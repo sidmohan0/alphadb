@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Polymarket Market Channel Discovery — Visual Plan + Diagram</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --font-body: 'IBM Plex Sans', sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+      --bg: #f8f6f2;
+      --surface: #ffffff;
+      --surface-2: #f3eeea;
+      --surface-elevated: #fffaf5;
+      --border: rgba(30, 41, 59, 0.16);
+      --text: #111827;
+      --text-dim: #64748b;
+      --line: #94a3b8;
+      --rose: #c2410c;
+      --rose-dim: rgba(194, 65, 12, 0.08);
+      --sage: #0f766e;
+      --sage-dim: rgba(15, 118, 110, 0.08);
+      --gold: #854d0e;
+      --gold-dim: rgba(133, 77, 14, 0.08);
+      --green: #166534;
+      --amber: #b45309;
+      --red: #b91c1c;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #12151d;
+        --surface: #1a202c;
+        --surface-2: #202838;
+        --surface-elevated: #242f41;
+        --border: rgba(241, 245, 249, 0.16);
+        --text: #e2e8f0;
+        --text-dim: #94a3b8;
+        --line: #64748b;
+        --green: #86efac;
+        --amber: #fcd34d;
+        --red: #fda4af;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-body);
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+      line-height: 1.45;
+      min-height: 100vh;
+      background-image:
+        radial-gradient(circle at 22% 8%, var(--rose-dim), transparent 42%),
+        radial-gradient(circle at 78% 95%, var(--sage-dim), transparent 42%);
+    }
+
+    .container { max-width: 1200px; margin: 0 auto; }
+    .topbar, section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 4px 24px rgba(15, 23, 42, 0.05);
+    }
+
+    .topbar { background: var(--surface-elevated); }
+
+    h1 {
+      font-size: clamp(26px, 3.4vw, 42px);
+      font-weight: 700;
+      line-height: 1.05;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+      margin-bottom: 12px;
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .muted {
+      color: var(--text-dim);
+      margin-bottom: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      border: 1px solid var(--border);
+      border-left-width: 3px;
+      border-radius: 999px;
+      padding: 4px 10px;
+      margin-right: 8px;
+      margin-bottom: 6px;
+      background: var(--surface);
+    }
+
+    .pill.green { color: var(--green); border-left-color: var(--green); }
+    .pill.amber { color: var(--amber); border-left-color: var(--amber); }
+    .pill.rose { color: var(--rose); border-left-color: var(--rose); }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .col-4 { grid-column: span 4; min-width: 0; }
+    .col-6 { grid-column: span 6; min-width: 0; }
+    .col-8 { grid-column: span 8; min-width: 0; }
+    .col-12 { grid-column: span 12; min-width: 0; }
+
+    @media (max-width: 980px) {
+      .col-4, .col-8, .col-12 { grid-column: span 12; }
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--surface-2);
+      height: 100%;
+    }
+
+    .caption {
+      font-size: 0.73rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      font-family: var(--font-mono);
+    }
+
+    ul { padding-left: 20px; margin-top: 8px; }
+    li { margin: 6px 0; }
+
+    .callout {
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      padding: 10px;
+      margin-top: 10px;
+      border-left: 4px solid;
+    }
+
+    .callout h3 {
+      font-size: 0.9rem;
+      margin-bottom: 4px;
+    }
+
+    .callout.rose { border-left-color: var(--rose); background: color-mix(in srgb, var(--rose) 6%, var(--surface)); }
+    .callout.sage { border-left-color: var(--sage); background: color-mix(in srgb, var(--sage) 6%, var(--surface)); }
+    .callout.gold { border-left-color: var(--gold); background: color-mix(in srgb, var(--gold) 6%, var(--surface)); }
+
+    .mermaid-wrap {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: var(--surface);
+      margin: 10px 0 16px;
+      overflow: hidden;
+    }
+
+    .mermaid { width: 100%; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.92rem;
+      table-layout: fixed;
+    }
+
+    th {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      text-align: left;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      z-index: 1;
+      padding: 9px;
+      text-wrap: balance;
+    }
+
+    td {
+      border-bottom: 1px solid var(--border);
+      padding: 9px;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    tr:nth-child(even) td { background: var(--surface-2); }
+
+    .status-ok { color: var(--green); }
+    .status-warn { color: var(--amber); }
+    .status-no { color: var(--red); }
+
+    code {
+      font-family: var(--font-mono);
+      background: color-mix(in srgb, var(--surface-2), transparent 20%);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0 4px;
+      font-size: 0.84em;
+      word-break: break-word;
+    }
+
+    pre {
+      margin-top: 8px;
+      background: #0b1220;
+      color: #dbeafe;
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      border-radius: 8px;
+      padding: 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      max-height: 330px;
+    }
+
+    .muted a {
+      color: inherit;
+      text-decoration: underline;
+      text-decoration-color: var(--line);
+      text-underline-offset: 3px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 10px;
+      z-index: 2;
+      display: grid;
+      grid-auto-flow: column;
+      gap: 8px;
+      overflow-x: auto;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+    }
+
+    .toc a {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--text-dim);
+      text-decoration: none;
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      padding: 6px 10px;
+      white-space: nowrap;
+      background: var(--surface);
+    }
+
+    .toc a:hover { color: var(--text); border-color: var(--line); }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <nav class="toc" aria-label="Section links">
+      <a href="#overview">1 Overview</a>
+      <a href="#before-after">2 Before vs After</a>
+      <a href="#flow-diagram">3 Flow diagram</a>
+      <a href="#state">4 State + variables</a>
+      <a href="#functions">5 Functions</a>
+      <a href="#edges">6 Edge cases</a>
+      <a href="#references">7 References</a>
+    </nav>
+
+    <header id="overview" class="topbar">
+      <h1>Polymarket Market Channel Discovery — Consolidated Visual Plan + Diagram</h1>
+      <p class="muted">A single visual report combining implementation plan, topology diagram, API mapping, and verification plan for the current script in <code>server/src/polymarketMarketChannels.ts</code>.</p>
+      <div>
+        <span class="pill green">✅ Executed via <code>npm run polymarket:market-channels</code></span>
+        <span class="pill amber">📁 Entry point: <code>server/src/polymarketMarketChannels.ts</code></span>
+        <span class="pill rose">⚠️ Websocket output optional via <code>WS_URL</code></span>
+      </div>
+    </header>
+
+    <section id="before-after">
+      <h2>1) Current behavior vs desired behavior</h2>
+      <div class="row">
+        <article class="col-6 card">
+          <div class="caption">Before (legacy / conceptual)</div>
+          <ul>
+            <li>No explicit pagination stopping criteria in flow notes.</li>
+            <li>Websocket payloads were consumed as-is without explicit defensive extraction strategy.</li>
+            <li>Runtime types were ad-hoc at call sites and hard to reason about for future edits.</li>
+            <li>Output format changed manually and needed external notes for API details.</li>
+          </ul>
+        </article>
+        <article class="col-6 card">
+          <div class="caption">After (implemented script)</div>
+          <ul>
+            <li>Deterministic REST pagination loop using <code>next_cursor</code> until terminal/end-cursor.</li>
+            <li>Token-channel extraction via tolerant parser with multi-key fallbacks (<code>token_id</code>, <code>tokenId</code>, <code>asset_id</code>, <code>assetId</code>).</li>
+            <li>Chunked websocket subscriptions, periodic PING, recursive WS payload traversal for asset IDs.</li>
+            <li>Single canonical output model with JSON and human-readable modes.</li>
+          </ul>
+        </article>
+      </div>
+      <div class="callout sage">
+        <h3>Design implication</h3>
+        This is not just a fetch script; it is a dual-channel discovery pipeline where REST extraction and WS validation share the same canonical channel model for consistency and testing.
+      </div>
+    </section>
+
+    <section id="flow-diagram">
+      <h2>2) Execution + topology diagram</h2>
+      <p class="muted">Mermaid flowchart showing the runtime path and major data transformations.</p>
+
+      <div class="mermaid-wrap">
+        <div class="mermaid">
+flowchart TD
+  A[Run CLI] --> B[Load env]
+  B --> C[Create client]
+  C --> D{WS_URL present?}
+
+  D -->|no| E[REST only]
+  D -->|yes| F[REST + WS path]
+
+  E --> M[fetchMarketChannels]
+  F --> M
+
+  M --> P[while loop]
+  P --> Q[getMarkets]
+  Q --> R[Decode response]
+  R --> S[Iterate markets]
+  S --> T[collectChannelsFromMarket]
+  T --> U[collectTokenChannel]
+  U --> V[validate asset IDs]
+  V --> P2{has cursor and not terminal}
+  P2 -->|yes| P
+  P2 -->|no| W[marketCount + unique channels]
+
+  W --> X{Emit JSON}
+  X --> X1[JSON summary]
+  X --> X2[human summary]
+
+  F --> Y[probeMarketChannelsFromWebSocket]
+  Y --> Z[normalizeWsUrl]
+  Z --> AA[Connect WebSocket]
+  AA --> AB[Chunk and subscribe]
+  AB --> AC[message listener]
+  AC --> AD[parseMessageData]
+  AD --> AE[extract asset ids]
+  AE --> AF[Collect observed channels]
+  AF --> AG[timeout + ping loop]
+
+  W --> AG
+  AG --> AJ[Print wsScan summary]
+
+
+        </div>
+      </div>
+
+      <div class="row">
+        <article class="col-12 card">
+          <div class="caption">Topology / contract boundary notes</div>
+          <ul>
+            <li>CLI layer reads <code>CLOB_API_URL</code>, <code>CHAIN_ID</code>, <code>WS_URL</code>, <code>WS_CONNECT_TIMEOUT_MS</code>, <code>WS_CHUNK_SIZE</code>.</li>
+            <li>REST layer is bounded by <code>next_cursor</code> and guarded against infinite loops.</li>
+            <li>Websocket is optional and only attached when <code>WS_URL</code> is configured.</li>
+            <li>Shared canonical output is <code>MarketChannelRunResult</code>.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="state">
+      <h2>3) State machine + runtime state</h2>
+
+      <div class="row">
+        <article class="col-6 card">
+          <div class="caption">State progression</div>
+          <div class="mermaid-wrap">
+            <div class="mermaid">
+flowchart TD
+  CONFIGURED([CONFIGURED])
+  CONFIGURED --> REST_FETCH[REST_FETCH]
+  REST_FETCH --> REST_PAGINATING[next_cursor loop]
+  REST_PAGINATING --> REST_PAGINATING{next_cursor exists?}
+  REST_PAGINATING --> READY_TO_OUTPUT[ready output]
+  READY_TO_OUTPUT --> WS_PROBE[WS probe]
+  READY_TO_OUTPUT --> DONE[done]
+  WS_PROBE --> WS_STREAMING[ws streaming]
+  WS_STREAMING --> DONE
+  WS_PROBE --> FAILED[failed]
+  REST_FETCH --> FAILED
+            </div>
+          </div>
+        </article>
+        <article class="col-6 card">
+          <div class="caption">Runtime state & mutable data</div>
+          <table>
+            <thead>
+              <tr>
+                <th>State variable</th>
+                <th>Type / source</th>
+                <th>Purpose</th>
+                <th>Behavior</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>result.wsScan</code></td>
+                <td><code>WsScanSummary | null</code> / run aggregator</td>
+                <td>Capture websocket diagnostics</td>
+                <td>Set only in WS mode; includes url, connected, observedChannels, message counters, errors.</td>
+              </tr>
+              <tr>
+                <td><code>channels</code></td>
+                <td><code>MarketChannel[]</code> / dedupe set</td>
+                <td>Canonical output model for market channels</td>
+                <td>Filled during REST pagination, emitted in output.</td>
+              </tr>
+              <tr>
+                <td><code>marketCount</code></td>
+                <td><code>number</code> / fetch loop</td>
+                <td>Visibility metric</td>
+                <td>Incremented per page’s <code>markets</code> length.</td>
+              </tr>
+              <tr>
+                <td><code>observed</code></td>
+                <td><code>Set&lt;string&gt;</code> / WS probe</td>
+                <td>Live verification channels</td>
+                <td>Populated from recursive payload extraction.</td>
+              </tr>
+              <tr>
+                <td><code>seen</code></td>
+                <td><code>Set&lt;string&gt;</code> / REST loop</td>
+                <td>Dedupe strategy</td>
+                <td>Prevents duplicate output channels in large market pages.</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+
+    <section id="functions">
+      <h2>4) File-level implementation map + key snippets</h2>
+      <div class="row">
+        <article class="col-12 card">
+          <div class="caption">Modified / introduced functions</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Function</th>
+                <th>Where used</th>
+                <th>Role</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>fetchMarketChannels(clobClient)</code></td>
+                <td><code>run()</code></td>
+                <td>Page REST /markets repeatedly until cursor ends; return deduplicated channels + market count.</td>
+              </tr>
+              <tr>
+                <td><code>collectChannelsFromMarket(market)</code></td>
+                <td>inside <code>fetchMarketChannels</code></td>
+                <td>Extract candidate channels from <code>tokens</code> or fallback <code>market.asset_id</code>.</td>
+              </tr>
+              <tr>
+                <td><code>collectTokenChannel(token, ...)</code></td>
+                <td><code>collectChannelsFromMarket</code></td>
+                <td>Normalize multiple id field names into canonical <code>MarketChannel</code>.</td>
+              </tr>
+              <tr>
+                <td><code>normalizeWsUrl</code></td>
+                <td><code>probeMarketChannelsFromWebSocket</code></td>
+                <td>Force endpoint shape to <code>/ws/market</code> for compatibility.</td>
+              </tr>
+              <tr>
+                <td><code>probeMarketChannelsFromWebSocket</code></td>
+                <td><code>run()</code> (if WS mode)</td>
+                <td>Subscribe chunked channels, ping keep-alive, recursive payload extraction.</td>
+              </tr>
+              <tr>
+                <td><code>extractAssetIdsFromWsPayload</code></td>
+                <td>WS message handler</td>
+                <td>Defensive traversal of undocumented payload structures.</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+      </div>
+
+      <div class="row">
+        <article class="col-12 card">
+          <div class="caption">Representative parser and loop snippets</div>
+          <pre>
+const result: MarketChannelRunResult = {
+  source: { clobApiUrl, chainId, marketCount, marketChannelCount: channels.length },
+  channels,
+  wsScan: null,
+};
+
+// Pagination guard: terminal cursor from clob-client constants (LTE=) and missing cursor
+while (true) {
+  const payload = await clobClient.getMarkets(nextCursor) as MarketPayload;
+  const markets = Array.isArray(payload?.data) ? payload.data : [];
+
+  for (const market of markets) {
+    for (const channel of collectChannelsFromMarket(market)) {
+      if (!seen.has(channel.assetId)) {
+        seen.add(channel.assetId);
+        channels.push(channel);
+      }
+    }
+  }
+
+  const cursor = payload?.next_cursor;
+  if (!cursor || cursor === "LTE=" || cursor === nextCursor || markets.length === 0) break;
+  nextCursor = cursor;
+}
+
+// Websocket guard
+const base = wsUrl.endsWith('/') ? wsUrl.slice(0, -1) : wsUrl;
+if (/\/ws\/(market|user)$/.test(base)) return base;
+if (base.endsWith('/ws')) return `${base}/market`;
+return `${base}/ws/market`;
+          </pre>
+
+          <div class="callout gold">
+            <h3>Important invariant</h3>
+            <p>The script intentionally uses partial input types for API payloads (e.g. <code>MarketPayload</code>, <code>MarketLike</code>, <code>MarketToken</code>) to avoid over-fitting to undocumented fields while preserving runtime resilience.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="edges">
+      <h2>5) Edge cases and behavior matrix</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Expected handling</th>
+            <th>Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pagination cursor missing or null</td>
+            <td>Stop loop and emit channels collected so far</td>
+            <td class="status-ok">✅ Correct terminal condition</td>
+          </tr>
+          <tr>
+            <td>Next cursor equals terminal sentinel <code>LTE=</code></td>
+            <td>Stop loop</td>
+            <td class="status-ok">✅ Prevents infinite fetch loop</td>
+          </tr>
+          <tr>
+            <td>Malformed/unsupported token id shape</td>
+            <td>Filter out via <code>isAssetIdCandidate</code></td>
+            <td class="status-warn">⚠️ Skips invalid IDs only</td>
+          </tr>
+          <tr>
+            <td>WS open never fires</td>
+            <td>Timeout warning in <code>errors</code>, finalize with <code>connected=false</code></td>
+            <td class="status-warn">⚠️ Non-fatal if REST succeeded</td>
+          </tr>
+          <tr>
+            <td>Non-JSON websocket payload</td>
+            <td>Ignored safely, no crash</td>
+            <td class="status-ok">✅ Parser-safe branch</td>
+          </tr>
+          <tr>
+            <td>Invalid/empty env values</td>
+            <td>Fallback to defaults for chain/id/chunk/timeouts</td>
+            <td class="status-ok">✅ Config resilient</td>
+          </tr>
+          <tr>
+            <td>Duplicate channels across pages</td>
+            <td>De-duplicated by set and output once</td>
+            <td class="status-ok">✅ Ensures stable output</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout rose">
+        <h3>Suggested additions (future hardening)</h3>
+        <ul>
+          <li>Add integration tests for <code>next_cursor</code> progression: normal page, zero-page page, and repeated cursor.</li>
+          <li>Add WS payload fixtures with deeply nested keys for regression against <code>extractAssetIdsFromWsPayload</code>.</li>
+          <li>Capture and assert normalized URL behavior in <code>normalizeWsUrl</code>.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="references">
+      <h2>6) Grounded API references</h2>
+      <div class="row">
+        <article class="col-6 card">
+          <div class="caption">Internal code sources</div>
+          <ul>
+            <li><code>@polymarket/clob-client/src/client.ts</code>: <code>getMarkets(next_cursor = INITIAL_CURSOR)</code> resolves to endpoint <code>GET_MARKETS = "/markets" on the configured host</code></li>
+            <li><code>@polymarket/clob-client/src/endpoints.ts</code>: <code>GET_MARKETS = &quot;/markets&quot;</code></li>
+            <li><code>@polymarket/clob-client/src/constants.ts</code>: <code>INITIAL_CURSOR = &quot;MA==&quot;</code>, <code>END_CURSOR = &quot;LTE=&quot;</code></li>
+            <li><code>@polymarket/clob-client/examples/socketConnection.ts</code>: market/user ws open + subscription format; <code>type</code>, <code>markets</code>, <code>assets_ids</code>, <code>initial_dump</code>, <code>PING</code>.</li>
+          </ul>
+          <p class="muted">These references are used for implementation parity and are checked by code inspection.</p>
+        </article>
+        <article class="col-6 card">
+          <div class="caption">External docs</div>
+          <ul>
+            <li>Polymarket Gamma Markets API docs: <a href="https://docs.polymarket.com/developers/gamma-markets-api/get-markets" target="_blank">https://docs.polymarket.com/developers/gamma-markets-api/get-markets</a></li>
+            <li>OpenAPI spec mirror referenced in repo: <a href="https://docs.polymarket.com/api-spec/data-openapi.yaml" target="_blank">https://docs.polymarket.com/api-spec/data-openapi.yaml</a></li>
+            <li>Polymarket clob-client package: <a href="https://github.com/polymarket/clob-client" target="_blank">https://github.com/polymarket/clob-client</a></li>
+          </ul>
+          <p class="muted">Where docs vary from runtime behavior, the script intentionally uses defensive runtime checks and partial types over strict schema assumptions.</p>
+        </article>
+      </div>
+
+      <div class="row">
+        <article class="col-12 card">
+          <div class="caption">Project command matrix</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Output mode</th>
+                <th>Use-case</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>npm run polymarket:market-channels</code></td>
+                <td>human</td>
+                <td>manual execution in terminal</td>
+              </tr>
+              <tr>
+                <td><code>npm run polymarket:market-channels -- --json</code></td>
+                <td>JSON</td>
+                <td>scripting / automation</td>
+              </tr>
+              <tr>
+                <td><code>npm run polymarket:market-channels -- --json &gt; out.json</code></td>
+                <td>artifact</td>
+                <td>CI/CD or post-processing</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      securityLevel: 'loose',
+      themeVariables: {
+        fontFamily: "IBM Plex Sans",
+        fontSize: '17px',
+        primaryColor: '#ffffff',
+        primaryTextColor: '#111827',
+        lineColor: '#64748b',
+        edgeLabelBackground: '#fff7ed',
+      }
+    });
+  </script>
+</body>
+</html>
