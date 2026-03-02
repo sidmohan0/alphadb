@@ -57,4 +57,4 @@ This folder defines the backend execution model for async discovery runs backed 
 
 - Add CI job coverage for integration profile.
 - Add OpenTelemetry/structured tracing around run lifecycle events.
-- Add dead-letter/error queue handling if required beyond event logging + retries.
+- Add optional DLQ/retry worker integration settings per deployment profile (implemented as `discovery_run_retries` + `DISCOVERY_RETRY_*` flags).

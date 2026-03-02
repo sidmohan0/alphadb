@@ -109,8 +109,8 @@ DISCOVERY_REQUIRE_SCHEMA=1 DISCOVERY_SCHEMA_TARGET_VERSION=1 npm run dev
 # or run explicit migration beforehand if you prefer manual control
 npm run polymarket:discovery-migrate
 
-# 4) run the stack with optional pruning
-DISCOVERY_RUN_PRUNER_ENABLED=1 npm run dev
+# 4) run the stack with optional pruning and retry worker
+DISCOVERY_RUN_PRUNER_ENABLED=1 DISCOVERY_RETRY_WORKER_ENABLED=1 DISCOVERY_RETRY_ENABLED=1 npm run dev
 ```
 
 ### Smoke checks after startup

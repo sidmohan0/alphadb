@@ -2,7 +2,10 @@ import { closeRedisClient, getRedisClient } from "./polymarket/infra/cache/redis
 import { closePgPool } from "./polymarket/infra/db/postgres";
 import { ensureDiscoverySchema } from "./polymarket/maintenance/discoverySchema";
 import { createApp } from "./app";
-import { startDiscoveryRunPruner } from "./polymarket/services/discoveryRunService";
+import {
+  startDiscoveryRunPruner,
+  startDiscoveryRunRetryWorker,
+} from "./polymarket/services/discoveryRunService";
 
 function parseBooleanEnv(name: string, fallback = false): boolean {
   const value = process.env[name];
@@ -41,6 +44,7 @@ const PORT = parseIntEnv("PORT", 4000);
 const app = createApp();
 
 let prunerStop: (() => void) | null = null;
+let retryWorkerStop: (() => void) | null = null;
 let isShuttingDown = false;
 let server: ReturnType<typeof app.listen>;
 
@@ -48,6 +52,13 @@ function stopPruner(): void {
   if (prunerStop) {
     prunerStop();
     prunerStop = null;
+  }
+}
+
+function stopRetryWorker(): void {
+  if (retryWorkerStop) {
+    retryWorkerStop();
+    retryWorkerStop = null;
   }
 }
 
@@ -68,6 +79,7 @@ async function shutdown(): Promise<void> {
 
   try {
     stopPruner();
+    stopRetryWorker();
 
     if (server) {
       await new Promise<void>((resolve, reject) => {
@@ -103,10 +115,17 @@ async function bootstrap(): Promise<void> {
     prunerStop = startDiscoveryRunPruner().stop;
   }
 
+  if (parseBooleanEnv("DISCOVERY_RETRY_WORKER_ENABLED", false)) {
+    retryWorkerStop = startDiscoveryRunRetryWorker().stop;
+  }
+
   server = app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     if (prunerStop) {
       console.log("🧹 Discovery run pruner enabled");
+    }
+    if (retryWorkerStop) {
+      console.log("🔁 Discovery run retry worker enabled");
     }
   });
 }

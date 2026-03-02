@@ -302,6 +302,13 @@ npm run polymarket:market-channels -- --json
   - `DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE` (`1` to allow local fallback; single-process only)
   - `DISCOVERY_RUN_PRUNER_ENABLED` (`1` to enable automatic stale-run pruning)
   - `DISCOVERY_PRUNE_INTERVAL_SECONDS` (default: `300`)
+  - `DISCOVERY_RETRY_ENABLED` (`1` to enable retry scheduling)
+  - `DISCOVERY_RETRY_MAX_ATTEMPTS` (default: `3`)
+  - `DISCOVERY_RETRY_BASE_DELAY_MS` (default: `1000`)
+  - `DISCOVERY_RETRY_MAX_DELAY_MS` (default: `30000`)
+  - `DISCOVERY_RETRY_WORKER_ENABLED` (`1` to enable background retry worker)
+  - `DISCOVERY_RETRY_WORKER_INTERVAL_SECONDS` (default: `30`)
+  - `DISCOVERY_RETRY_WORKER_BATCH_SIZE` (default: `10`)
 
 - Redis client tuning:
   - `REDIS_CONNECT_TIMEOUT_MS` (default: `2000`)

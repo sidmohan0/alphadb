@@ -9,7 +9,12 @@ import {
   MarketDiscoveryConfig,
 } from "../types";
 import { assertDiscoveryConfig, discoverMarketChannels } from "./marketChannelDiscoveryService";
-import { mapDiscoveryConcurrencyLimit, mapRunNotFound, toHttpErrorResponse, PolymarketDiscoveryError } from "../errors";
+import {
+  mapDiscoveryConcurrencyLimit,
+  mapRunNotFound,
+  toHttpErrorResponse,
+  PolymarketDiscoveryError,
+} from "../errors";
 import { createDiscoveryChannelRepository, DiscoveryChannelRepository } from "../repositories/discoveryChannel.repository";
 import {
   createDiscoveryRunRepository,
@@ -24,6 +29,11 @@ import {
   createDiscoveryRunEventRepository,
   DiscoveryRunEventRepository,
 } from "../repositories/discoveryRunEvent.repository";
+import {
+  createDiscoveryRunRetryQueueRepository,
+  DiscoveryRunRetryQueueRepository,
+  DiscoveryRunRetryQueueRecord,
+} from "../repositories/discoveryRunRetryQueue.repository";
 
 const DEFAULT_SCOPE = "default";
 
@@ -34,12 +44,20 @@ interface DiscoveryServiceDeps {
   channelRepository: DiscoveryChannelRepository;
   wsScanRepository: DiscoveryRunWsScanRepository;
   eventRepository: DiscoveryRunEventRepository;
+  retryQueueRepository: DiscoveryRunRetryQueueRepository;
   cache: DiscoveryRunCache;
   runTtlSec: number;
   cacheTtlSec: number;
   concurrencyLimit: number;
   semaphoreTtlSec: number;
   scope: string;
+  retryEnabled: boolean;
+  retryMaxAttempts: number;
+  retryBaseDelayMs: number;
+  retryMaxDelayMs: number;
+  retryWorkerEnabled: boolean;
+  retryWorkerIntervalSeconds: number;
+  retryWorkerBatchSize: number;
 }
 
 function parseIntEnv(name: string, fallback: number): number {
@@ -52,18 +70,35 @@ function parseIntEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 && Number.isInteger(parsed) ? parsed : fallback;
 }
 
+function parseBooleanEnv(name: string, fallback = false): boolean {
+  const value = process.env[name];
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
 function resolveDeps(overrides?: Partial<DiscoveryServiceDeps>): DiscoveryServiceDeps {
   return {
     runRepository: overrides?.runRepository ?? createDiscoveryRunRepository(),
     channelRepository: overrides?.channelRepository ?? createDiscoveryChannelRepository(),
     wsScanRepository: overrides?.wsScanRepository ?? createDiscoveryRunWsScanRepository(),
     eventRepository: overrides?.eventRepository ?? createDiscoveryRunEventRepository(),
+    retryQueueRepository: overrides?.retryQueueRepository ?? createDiscoveryRunRetryQueueRepository(),
     cache: overrides?.cache ?? createDiscoveryRunCache(process.env.DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE === "1"),
     runTtlSec: overrides?.runTtlSec ?? parseIntEnv("DISCOVERY_RUN_TTL_SECONDS", 60 * 60 * 24),
     cacheTtlSec: overrides?.cacheTtlSec ?? parseIntEnv("DISCOVERY_RUN_CACHE_TTL_SECONDS", 10 * 60),
     concurrencyLimit: overrides?.concurrencyLimit ?? parseIntEnv("MARKET_DISCOVERY_CONCURRENCY_LIMIT", DEFAULT_MARKET_DISCOVERY_CONCURRENCY_LIMIT),
     semaphoreTtlSec: overrides?.semaphoreTtlSec ?? parseIntEnv("DISCOVERY_SEMAPHORE_TTL_SECONDS", 60),
     scope: overrides?.scope ?? process.env.DISCOVERY_SCOPE ?? DEFAULT_SCOPE,
+    retryEnabled: overrides?.retryEnabled ?? parseBooleanEnv("DISCOVERY_RETRY_ENABLED", false),
+    retryMaxAttempts: overrides?.retryMaxAttempts ?? parseIntEnv("DISCOVERY_RETRY_MAX_ATTEMPTS", 3),
+    retryBaseDelayMs: overrides?.retryBaseDelayMs ?? parseIntEnv("DISCOVERY_RETRY_BASE_DELAY_MS", 1000),
+    retryMaxDelayMs: overrides?.retryMaxDelayMs ?? parseIntEnv("DISCOVERY_RETRY_MAX_DELAY_MS", 30000),
+    retryWorkerEnabled: overrides?.retryWorkerEnabled ?? parseBooleanEnv("DISCOVERY_RETRY_WORKER_ENABLED", false),
+    retryWorkerIntervalSeconds: overrides?.retryWorkerIntervalSeconds ?? parseIntEnv("DISCOVERY_RETRY_WORKER_INTERVAL_SECONDS", 30),
+    retryWorkerBatchSize: overrides?.retryWorkerBatchSize ?? parseIntEnv("DISCOVERY_RETRY_WORKER_BATCH_SIZE", 10),
   };
 }
 
@@ -150,7 +185,27 @@ function toShell(run: DiscoveryRunRecord): DiscoveryRunSummary {
   };
 }
 
-async function refreshRunCache(deps: DiscoveryServiceDeps, runId: string, readModel: DiscoveryRunReadModel): Promise<void> {
+function runRecordToConfig(run: DiscoveryRunRecord): MarketDiscoveryConfig {
+  return {
+    clobApiUrl: run.clobApiUrl,
+    chainId: run.chainId,
+    wsUrl: run.wsUrl ?? undefined,
+    wsConnectTimeoutMs: run.wsConnectTimeoutMs,
+    wsChunkSize: run.wsChunkSize,
+    marketFetchTimeoutMs: run.marketFetchTimeoutMs,
+  };
+}
+
+function computeRetryDelayMs(attempt: number, baseDelayMs: number, maxDelayMs: number): number {
+  const exponential = Math.pow(2, Math.max(attempt - 1, 0));
+  return Math.min(baseDelayMs * exponential, maxDelayMs);
+}
+
+async function refreshRunCache(
+  deps: DiscoveryServiceDeps,
+  runId: string,
+  readModel: DiscoveryRunReadModel
+): Promise<void> {
   await Promise.all([
     deps.cache.setCachedRun(runId, readModel, deps.cacheTtlSec),
     deps.cache.setLatestRunId(deps.scope, runId, deps.cacheTtlSec),
@@ -180,6 +235,86 @@ async function attachRunIfActive(deps: DiscoveryServiceDeps, dedupeKey: string):
 
   await deps.cache.setActiveRunIdByDedupeKey(dedupeKey, dbRun.id, dedupeLockTtlSec(deps));
   return dbRun;
+}
+
+async function scheduleRetryIfConfigured(
+  deps: DiscoveryServiceDeps,
+  runId: string,
+  dedupeKey: string,
+  error: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    details?: unknown;
+  },
+  requestId: string
+): Promise<boolean> {
+  if (!deps.retryEnabled || !error.retryable) {
+    return false;
+  }
+
+  const current = await deps.retryQueueRepository.get(runId);
+  const nextAttempt = (current?.attempt ?? 0) + 1;
+
+  if (nextAttempt > deps.retryMaxAttempts) {
+    await deps.retryQueueRepository.markDead(runId);
+    await emitRunEvent(
+      deps.eventRepository,
+      runId,
+      "run_retry_gave_up",
+      "retry attempts exhausted; run marked dead",
+      {
+        dedupeKey,
+        attempt: nextAttempt,
+        requestId,
+        reason: "max_attempts_reached",
+      }
+    );
+    return false;
+  }
+
+  const delayMs = computeRetryDelayMs(nextAttempt, deps.retryBaseDelayMs, deps.retryMaxDelayMs);
+  const nextAttemptAt = new Date(Date.now() + delayMs);
+
+  await deps.retryQueueRepository.upsert(runId, nextAttempt, deps.retryMaxAttempts, nextAttemptAt, {
+    code: error.code,
+    message: error.message,
+    retryable: error.retryable,
+    details: error.details,
+  });
+
+  await deps.runRepository.updateRun(runId, {
+    status: "queued",
+    completedAt: null,
+    errorCode: error.code,
+    errorMessage: error.message,
+    errorRetryable: error.retryable,
+    errorDetails: error.details,
+  });
+
+  await emitRunEvent(
+    deps.eventRepository,
+    runId,
+    "run_retry_scheduled",
+    "retry scheduled for run",
+    {
+      dedupeKey,
+      attempt: nextAttempt,
+      requestId,
+      delayMs,
+      maxAttempts: deps.retryMaxAttempts,
+    }
+  );
+
+  logDiscoveryEvent("run_retry_scheduled", {
+    runId,
+    dedupeKey,
+    attempt: nextAttempt,
+    requestId,
+    delayMs,
+  });
+
+  return true;
 }
 
 export async function createOrAttachRun(
@@ -315,13 +450,7 @@ export async function getRun(
     deps.wsScanRepository.getScan(runId),
   ]);
 
-  const runModel = toRunModel(
-    runRecord,
-    channels,
-    offset,
-    limit,
-    wsScan
-  );
+  const runModel = toRunModel(runRecord, channels, offset, limit, wsScan);
 
   await refreshRunCache(deps, runId, runModel);
   return runModel;
@@ -438,6 +567,7 @@ export async function pruneExpiredRuns(overrides?: Partial<DiscoveryServiceDeps>
           emitRunEvent(deps.eventRepository, run.runId, "run_pruned", "run expired and removed", {
             dedupeKey: run.dedupeKey,
           }),
+          deps.retryQueueRepository.markDead(run.runId),
         ]);
       })
     );
@@ -456,6 +586,10 @@ export interface DiscoveryRunPrunerHandle {
   stop: () => void;
 }
 
+export interface DiscoveryRunRetryWorkerHandle {
+  stop: () => void;
+}
+
 export function startDiscoveryRunPruner(overrides?: Partial<DiscoveryServiceDeps>): DiscoveryRunPrunerHandle {
   const intervalSeconds = parseIntEnv("DISCOVERY_PRUNE_INTERVAL_SECONDS", 300);
   const intervalMs = Math.max(5, intervalSeconds) * 1000;
@@ -470,7 +604,11 @@ export function startDiscoveryRunPruner(overrides?: Partial<DiscoveryServiceDeps
     try {
       const deleted = await pruneExpiredRuns(overrides);
       if (deleted > 0 && process.env.NODE_ENV !== "test") {
-        logDiscoveryEvent("pruner_tick", { deleted, intervalSeconds, scope: overrides?.scope ?? process.env.DISCOVERY_SCOPE ?? DEFAULT_SCOPE });
+        logDiscoveryEvent("pruner_tick", {
+          deleted,
+          intervalSeconds,
+          scope: overrides?.scope ?? process.env.DISCOVERY_SCOPE ?? DEFAULT_SCOPE,
+        });
       }
     } catch (error) {
       if (process.env.NODE_ENV !== "test") {
@@ -490,6 +628,73 @@ export function startDiscoveryRunPruner(overrides?: Partial<DiscoveryServiceDeps
     stop: () => {
       clearInterval(timer);
     },
+  };
+}
+
+async function processRetryItem(deps: DiscoveryServiceDeps, item: DiscoveryRunRetryQueueRecord): Promise<void> {
+  const run = await deps.runRepository.findById(item.runId);
+  if (!run) {
+    await deps.retryQueueRepository.markDead(item.runId);
+    return;
+  }
+
+  if (run.status !== "failed" && run.status !== "queued") {
+    await deps.retryQueueRepository.markDead(item.runId);
+    return;
+  }
+
+  const config = runRecordToConfig(run);
+  const dedupeKey = buildDedupeKey(config);
+
+  await emitRunEvent(
+    deps.eventRepository,
+    run.id,
+    "run_retrying",
+    "retrying failed run",
+    {
+      attempt: item.attempt,
+      dedupeKey,
+      maxAttempts: item.maxAttempts,
+    }
+  );
+
+  void runDiscoveryInBackground(run.id, config, `${run.requestId}-retry-${item.attempt}`, dedupeKey, deps);
+}
+
+export function startDiscoveryRunRetryWorker(overrides?: Partial<DiscoveryServiceDeps>): DiscoveryRunRetryWorkerHandle {
+  const deps = resolveDeps(overrides);
+  const intervalMs = Math.max(5, deps.retryWorkerIntervalSeconds) * 1000;
+  let running = false;
+
+  const runOnce = async () => {
+    if (running) {
+      return;
+    }
+
+    running = true;
+    try {
+      const due = await deps.retryQueueRepository.claimDue(new Date(), deps.retryWorkerBatchSize);
+      for (const item of due) {
+        try {
+          await processRetryItem(deps, item);
+        } catch (error) {
+          if (process.env.NODE_ENV !== "test") {
+            console.error("[discovery-run] retry_worker_failed", error);
+          }
+        }
+      }
+    } finally {
+      running = false;
+    }
+  };
+
+  void runOnce();
+  const timer = setInterval(() => {
+    void runOnce();
+  }, intervalMs);
+
+  return {
+    stop: () => clearInterval(timer),
   };
 }
 
@@ -536,6 +741,8 @@ async function runDiscoveryInBackground(
       errorDetails: null,
     });
 
+    await deps.retryQueueRepository.markDone(runId);
+
     logDiscoveryEvent("run_status", {
       action: "succeeded",
       runId,
@@ -566,28 +773,43 @@ async function runDiscoveryInBackground(
       errorMessage: converted.message,
     });
 
-    await deps.runRepository.updateRun(runId, {
-      status: "failed",
-      completedAt: new Date(),
-      errorCode: converted.code,
-      errorMessage: converted.message,
-      errorRetryable: converted.retryable,
-      errorDetails: converted.details,
-      marketCount: 0,
-      marketChannelCount: 0,
-    });
-
-    await emitRunEvent(
-      deps.eventRepository,
+    const retried = await scheduleRetryIfConfigured(
+      deps,
       runId,
-      "run_failed",
-      "run failed",
+      dedupeKey,
       {
+        code: converted.code,
+        message: converted.message,
+        retryable: converted.retryable,
+        details: converted.details,
+      },
+      requestId
+    );
+
+    if (!retried) {
+      await deps.runRepository.updateRun(runId, {
+        status: "failed",
+        completedAt: new Date(),
         errorCode: converted.code,
         errorMessage: converted.message,
-        retryable: converted.retryable,
-      }
-    );
+        errorRetryable: converted.retryable,
+        errorDetails: converted.details,
+        marketCount: 0,
+        marketChannelCount: 0,
+      });
+
+      await emitRunEvent(
+        deps.eventRepository,
+        runId,
+        "run_failed",
+        "run failed",
+        {
+          errorCode: converted.code,
+          errorMessage: converted.message,
+          retryable: converted.retryable,
+        }
+      );
+    }
   } finally {
     await deps.cache.deleteActiveRunIdByDedupeKey(dedupeKey);
     await deps.cache.releaseSlot("global");
@@ -601,6 +823,7 @@ export const discoveryRunService = {
   waitForRunIfAllowed,
   pruneExpiredRuns,
   startDiscoveryRunPruner,
+  startDiscoveryRunRetryWorker,
 };
 
 export {
@@ -608,6 +831,7 @@ export {
   createDiscoveryChannelRepository,
   createDiscoveryRunWsScanRepository,
   createDiscoveryRunEventRepository,
+  createDiscoveryRunRetryQueueRepository,
 };
 
 export type { DiscoveryServiceDeps };

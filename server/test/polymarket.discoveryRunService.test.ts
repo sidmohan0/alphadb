@@ -17,6 +17,8 @@ import { DiscoveryRunRepository } from "../src/polymarket/repositories/discovery
 import { DiscoveryRunEventRepository } from "../src/polymarket/repositories/discoveryRunEvent.repository";
 import { DiscoveryChannelRepository } from "../src/polymarket/repositories/discoveryChannel.repository";
 import { DiscoveryRunWsScanRepository } from "../src/polymarket/repositories/discoveryWsScan.repository";
+import { DiscoveryRunRetryQueueRepository } from "../src/polymarket/repositories/discoveryRunRetryQueue.repository";
+import * as marketChannelDiscoveryService from "../src/polymarket/services/marketChannelDiscoveryService";
 
 function makeConfig(): MarketDiscoveryConfig {
   return {
@@ -150,11 +152,20 @@ function makeRepositoryMocks() {
     listRunEvents: vi.fn(async () => []),
   };
 
+  const retryQueueRepository: DiscoveryRunRetryQueueRepository = {
+    get: vi.fn(async () => null),
+    upsert: vi.fn(async () => undefined),
+    markDone: vi.fn(async () => undefined),
+    markDead: vi.fn(async () => undefined),
+    claimDue: vi.fn(async () => []),
+  };
+
   return {
     runRepository,
     channelRepository,
     wsScanRepository,
     eventRepository,
+    retryQueueRepository,
   };
 }
 
@@ -198,9 +209,12 @@ function makeCache(activeRunId?: string, slot = true): DiscoveryRunCache {
 }
 
 describe("discovery run service", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   it("returns active run for identical in-flight dedupe key", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
 
     const existing: DiscoveryRunSummary = {
       runId: "active-1",
@@ -245,6 +259,7 @@ describe("discovery run service", () => {
       channelRepository,
       wsScanRepository,
       eventRepository,
+      retryQueueRepository,
       cache: makeCache("active-1"),
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -259,7 +274,7 @@ describe("discovery run service", () => {
 
   it("returns explicit concurrency limit when slot is unavailable", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
 
     await expect(
       createOrAttachRun(config, "req-1", {
@@ -267,6 +282,7 @@ describe("discovery run service", () => {
         channelRepository,
         wsScanRepository,
         eventRepository,
+        retryQueueRepository,
         cache: makeCache(undefined, false),
         runTtlSec: 3600,
         cacheTtlSec: 600,
@@ -284,7 +300,7 @@ describe("discovery run service", () => {
 
   it("returns paged run data", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
 
     const run: DiscoveryRunReadModel = {
       run: {
@@ -357,6 +373,7 @@ describe("discovery run service", () => {
       channelRepository,
       wsScanRepository,
       eventRepository,
+      retryQueueRepository,
       cache: makeCache("run-1"),
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -384,7 +401,7 @@ describe("discovery run service", () => {
 
   it("attaches to an active DB row when the in-memory/redis lock is absent", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
 
     (runRepository.findActiveByDedupeKey as any).mockResolvedValue({
       id: "active-db",
@@ -421,6 +438,7 @@ describe("discovery run service", () => {
       channelRepository,
       wsScanRepository,
       eventRepository,
+      retryQueueRepository,
       cache: makeCache(undefined),
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -435,7 +453,7 @@ describe("discovery run service", () => {
 
   it("falls back to DB latest when cached latest run id is missing", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
     const cache = makeCache("stale-latest-id");
 
     const latestRow = {
@@ -487,6 +505,7 @@ describe("discovery run service", () => {
       channelRepository,
       wsScanRepository,
       eventRepository,
+      retryQueueRepository,
       cache,
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -501,9 +520,59 @@ describe("discovery run service", () => {
     expect((cache.setLatestRunId as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("default", "run-latest", 600);
   });
 
+  it("schedules retry entry for retryable failure when enabled", async () => {
+    const config = makeConfig();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
+
+    vi.spyOn(marketChannelDiscoveryService, "discoverMarketChannels").mockRejectedValue(new Error("market discovery timeout"));
+
+    await createOrAttachRun(config, "req-retry", {
+      runRepository,
+      channelRepository,
+      wsScanRepository,
+      eventRepository,
+      retryQueueRepository,
+      cache: makeCache(undefined),
+      runTtlSec: 3600,
+      cacheTtlSec: 600,
+      concurrencyLimit: 1,
+      semaphoreTtlSec: 30,
+      retryEnabled: true,
+      retryMaxAttempts: 3,
+      retryBaseDelayMs: 1,
+      retryMaxDelayMs: 1,
+      retryWorkerEnabled: false,
+      retryWorkerBatchSize: 1,
+      retryWorkerIntervalSeconds: 1,
+      scope: "default",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(retryQueueRepository.upsert).toHaveBeenCalledWith(
+      "run-1",
+      1,
+      3,
+      expect.any(Date),
+      expect.objectContaining({
+        code: "clob_request_timeout",
+        message: expect.any(String),
+        retryable: true,
+      })
+    );
+    expect(runRepository.updateRun).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({
+        status: "queued",
+        errorCode: "clob_request_timeout",
+        errorRetryable: true,
+      })
+    );
+  });
+
   it("cleans stale cache and dedupe state when pruning expired runs", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
     const cache = makeCache();
     const pruneSpy = runRepository.pruneExpired as unknown as ReturnType<typeof vi.fn>;
 
@@ -517,6 +586,7 @@ describe("discovery run service", () => {
       channelRepository,
       wsScanRepository,
       eventRepository,
+      retryQueueRepository,
       cache,
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -528,5 +598,7 @@ describe("discovery run service", () => {
     expect(deleted).toBe(1);
     expect((cache.clearCachedRun as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("run-1");
     expect((cache.deleteActiveRunIdByDedupeKey as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("dedupe-1");
+    expect((retryQueueRepository.markDead as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("run-1");
+    expect(pruneSpy).toHaveBeenCalled();
   });
 });

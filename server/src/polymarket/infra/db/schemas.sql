@@ -90,3 +90,21 @@ CREATE TABLE IF NOT EXISTS discovery_run_events (
 
 CREATE INDEX IF NOT EXISTS idx_discovery_run_events_run_id_at
   ON discovery_run_events (discovery_run_id, event_at DESC);
+
+CREATE TABLE IF NOT EXISTS discovery_run_retries (
+  id TEXT PRIMARY KEY,
+  discovery_run_id TEXT NOT NULL UNIQUE REFERENCES discovery_runs(id) ON DELETE CASCADE,
+  attempt INT NOT NULL DEFAULT 1,
+  max_attempts INT NOT NULL,
+  next_attempt_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'dead')),
+  last_error_code TEXT,
+  last_error_message TEXT,
+  last_error_retryable BOOLEAN,
+  last_error_details JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_run_retries_status_next_attempt
+  ON discovery_run_retries (status, next_attempt_at);
