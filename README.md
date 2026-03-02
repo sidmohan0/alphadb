@@ -20,6 +20,7 @@ The repo also includes a lightweight full-stack shell (Express + React/Vite) so 
 - **In-flight dedupe** for identical concurrent discovery requests
 - **Concurrency ceiling** for unique discovery runs (defaults to 4)
 - **Tests first**: controller + service coverage for success, error, empty, and saturation cases
+- **Run orchestration** with DB/Redis-ready layers for async execution and polling
 
 ## Prerequisites
 
@@ -80,13 +81,36 @@ Runs server integration tests (including Polymarket controller/service scenarios
 
 ## Polymarket discovery API
 
-Use the same discovery flow through HTTP:
+The API now supports:
 
-```bash
-GET /api/polymarket/market-channels
-```
+- asynchronous run creation + polling
+- paginated run reads
+- latest run lookup
+- legacy compatibility wrapper
 
-Query params:
+### Primary async endpoints
+
+- `POST /api/polymarket/market-channels/runs`
+  - Creates or attaches to a run (dedupe), returns:
+  ```json
+  {
+    "status": "queued",
+    "runId": "..."
+  }
+  ```
+- `GET /api/polymarket/market-channels/runs/{runId}?offset=0&limit=200`
+  - Returns full run payload + paginated channels.
+- `GET /api/polymarket/market-channels/runs/latest`
+  - Returns latest run by creation time.
+
+### Compatibility wrapper
+
+- `GET /api/polymarket/market-channels`
+  - Keeps old shape via dedupe-aware compatibility shell.
+  - By default returns `202` with shell when run is in-flight.
+  - With optional `waitMs`, returns terminal payload when ready.
+
+Query params on discovery requests:
 
 - `clobApiUrl` (optional): override endpoint (defaults to `https://clob.polymarket.com`)
 - `chainId` (optional): override chain ID (defaults `137`)
@@ -98,20 +122,32 @@ Query params:
 Example:
 
 ```bash
-curl "http://localhost:4000/api/polymarket/market-channels?chainId=137"
+curl "http://localhost:4000/api/polymarket/market-channels?chainId=137&waitMs=0"
 ```
 
-### Example response shape
+### Example run response shape
 
 ```json
 {
-  "source": {
-    "clobApiUrl": "https://clob.polymarket.com",
-    "chainId": 137,
+  "run": {
+    "id": "run_...",
+    "status": "succeeded",
+    "source": {
+      "clobApiUrl": "https://clob.polymarket.com",
+      "chainId": 137
+    },
     "marketCount": 0,
     "marketChannelCount": 0
   },
-  "channels": [],
+  "channels": {
+    "items": [],
+    "page": {
+      "offset": 0,
+      "limit": 200,
+      "total": 0,
+      "hasMore": false
+    }
+  },
   "wsScan": null
 }
 ```
@@ -133,8 +169,13 @@ npm run polymarket:market-channels -- --json
 - `WS_URL` (optional websocket host, e.g. `wss://.../ws`)
 - `WS_CONNECT_TIMEOUT_MS` (default: `12000`)
 - `WS_CHUNK_SIZE` (default: `500`)
-- `MARKET_FETCH_TIMEOUT_MS` (default: `15000`)
+- `MARKET_FETCH_TIMEOUT_MS` (default: `15_000`)
 - `MARKET_DISCOVERY_CONCURRENCY_LIMIT` (default: `4`)
+- `DISCOVERY_RUN_TTL_SECONDS` (default: `86400`)
+- `DISCOVERY_RUN_CACHE_TTL_SECONDS` (default: `600`)
+- `DISCOVERY_SCOPE` (default: `default`)
+- `DATABASE_URL` (required for DB-backed run persistence)
+- `REDIS_URL` (required for distributed dedupe/locks)
 
 ## Error contract
 
@@ -156,12 +197,15 @@ Common codes:
 - `discovery_concurrency_limit` (`429`, retryable)
 - `websocket_invalid_url` (`400`)
 - `websocket_request_error` (`502`)
+- `run_not_found` (`404`)
 - `unexpected_error` (`500`)
 
 ## Architecture reference
 
-- `server/src/polymarket/services/` — orchestration and extraction logic
-- `server/src/polymarket/controllers/` — HTTP endpoint
+- `server/src/polymarket/services/` — orchestration, discovery execution, and run services
+- `server/src/polymarket/controllers/` — HTTP endpoint surface
+- `server/src/polymarket/repositories/` — DB persistence adapters
+- `server/src/polymarket/infra/` — DB/cache/queue wiring
 - `server/src/polymarket/cli/` — CLI entrypoint and rendering
 - `server/src/polymarket/utils.ts` — parsing and traversal helpers
 - `server/src/polymarket/errors.ts` — centralized error mapping

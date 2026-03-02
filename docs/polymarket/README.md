@@ -2,7 +2,7 @@
 
 ## What this report covers
 
-This folder now includes the artifacts for the discovery work and the new async run architecture:
+This folder now includes the artifacts for the discovery work and the async run architecture:
 
 - `polymarket-market-channels-visual-plan-diagram.html`
   - A full visual plan + topology/flow diagram for the discovery script.
@@ -15,16 +15,18 @@ Open these files in a browser for rendered visuals.
 
 ## Current backend structure (post-refactor)
 
-The discovery feature is now structured as:
+The discovery feature now follows a layered async run model:
 
 - `server/src/polymarket/types.ts`
-  - Shared types, DTO contracts, constants.
+  - Shared types, DTO contracts, and constants.
 - `server/src/polymarket/utils.ts`
   - Shared parsing and extraction helpers.
 - `server/src/polymarket/services/marketChannelDiscoveryService.ts`
-  - Service orchestration for REST + optional websocket probing.
+  - Domain discovery orchestration for REST + optional websocket probing.
+- `server/src/polymarket/services/discoveryRunService.ts`
+  - Async run orchestration (queue/running/terminal states, paging, and compatibility shell behavior).
 - `server/src/polymarket/controllers/polymarket.controller.ts`
-  - HTTP controller (`GET /api/polymarket/market-channels`).
+  - HTTP controller for async APIs + backward-compatible `/market-channels`.
 - `server/src/app.ts`
   - Express app factory (`createApp`) for runtime + testability.
 - `server/src/polymarket/cli/runMarketChannels.ts`
@@ -33,12 +35,26 @@ The discovery feature is now structured as:
   - Centralized typed error mapping and API response contracts.
 - `server/src/polymarketMarketChannels.ts`
   - Thin CLI bootstrap wrapper that invokes the CLI entry and handles terminal failure.
-
-> Planned next step: `server/src/polymarket/domain`, `repositories`, `services`, `infra`, and run orchestration files for the async DB/Redis flow.
+- `server/src/polymarket/infra`
+  - DB/Redis infra scaffolding and shared connection utilities.
+- `server/src/polymarket/repositories`
+  - DB persistence adapters for runs, channels, and websocket scan metadata.
 
 ## API behavior
 
-`GET /api/polymarket/market-channels` now maps request query params into the same domain config used by CLI/service:
+Primary async discovery run APIs:
+
+- `POST /api/polymarket/market-channels/runs` (dedupe + queued return)
+- `GET /api/polymarket/market-channels/runs/{runId}`
+- `GET /api/polymarket/market-channels/runs/latest`
+
+Compatibility path:
+
+- `GET /api/polymarket/market-channels`
+  - Returns shell (`202`) when still queued/running.
+  - Returns terminal payload (`200`) after `waitMs` if run finishes in time.
+
+Query params on discovery requests:
 
 - `clobApiUrl` (default: `https://clob.polymarket.com`)
 - `chainId` (default: `137`)
@@ -46,9 +62,12 @@ The discovery feature is now structured as:
 - `wsConnectTimeoutMs` (default: `12000`)
 - `wsChunkSize` (default: `500`)
 - `marketFetchTimeoutMs` (default: `15000`)
-- `MARKET_DISCOVERY_CONCURRENCY_LIMIT` env var controls simultaneous in-flight unique non-cached runs (default: `4`)
+- `waitMs` (compatibility timeout in ms, optional)
+- `offset` / `limit` for paginated run reads
 
-On error, the endpoint maps structured error codes and status codes to descriptive JSON (for example):
+On error, endpoints return structured error contracts from `server/src/polymarket/errors.ts`.
+
+Example error payload:
 
 ```json
 {
@@ -64,15 +83,17 @@ On error, the endpoint maps structured error codes and status codes to descripti
 }
 ```
 
-- Additional `code` values you can expect:
-  - `invalid_input` (`400`)
-  - `clob_request_timeout` (`504`)
-  - `clob_request_network` (`502`)
-  - `clob_request_failure` (`502`)
-  - `discovery_concurrency_limit` (`429`, `retryable: true`)
-  - `websocket_invalid_url` (`400`) — only when probe URL parsing fails
-  - `websocket_request_error` (`502`)
-  - `unexpected_error` (`500`)
+Common codes:
+
+- `invalid_input` (`400`)
+- `clob_request_timeout` (`504`)
+- `clob_request_network` (`502`)
+- `clob_request_failure` (`502`)
+- `discovery_concurrency_limit` (`429`, `retryable: true`)
+- `websocket_invalid_url` (`400`) — only when probe URL parsing fails
+- `websocket_request_error` (`502`)
+- `run_not_found` (`404`)
+- `unexpected_error` (`500`)
 
 The service keeps empty states explicit:
 
@@ -82,25 +103,18 @@ The service keeps empty states explicit:
 
 ### Concurrency and de-duplication behavior
 
-In-memory request coalescing is now used for concurrent identical discovery requests. If the same request payload arrives while the same discovery run is in flight, callers receive the same Promise instead of duplicate upstream calls.
-
-A hard concurrency ceiling is currently applied for unique in-flight discovery runs (default `4`, via `MARKET_DISCOVERY_CONCURRENCY_LIMIT`). Requests above the limit fail immediately with:
-
-- HTTP `429`
-- `code: discovery_concurrency_limit`
-- `retryable: true` in the response body
+- In-memory/Redis-assisted dedupe is used for identical in-flight discovery requests.
+- Hard concurrency ceiling is applied for queued unique discovery runs (default `4`, via `MARKET_DISCOVERY_CONCURRENCY_LIMIT`).
+- Requests above the limit fail immediately with:
+  - HTTP `429`
+  - `code: discovery_concurrency_limit`
 
 ## Test coverage added
 
 - Added integration tests at `server/test/polymarket.controller.test.ts`.
-- Added service unit tests at `server/test/polymarket.discovery.service.test.ts`.
-- Tests validate:
-  - service invocation + response mapping
-  - default values when query params are omitted
-  - websocket query params are passed through correctly
-  - empty-state response behavior
-  - concurrent dedupe for identical service calls
-  - saturation + error mapping
+- Added service unit tests at:
+  - `server/test/polymarket.discovery.service.test.ts`
+  - `server/test/polymarket.discoveryRunService.test.ts`
 
 Run tests with:
 
@@ -112,4 +126,4 @@ npm run test
 
 - `call graph` is the right structural term for these diagrams.
 - `stack trace` refers to runtime failure stack, not full-file architecture.
-- This split is not purely controller logic; it is a service/CLI/controller structured API-ready architecture.
+- This split is intentionally service/CLI/controller oriented rather than controller-only.

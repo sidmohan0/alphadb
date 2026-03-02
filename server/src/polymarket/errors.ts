@@ -8,6 +8,7 @@ type ErrorCode =
   | "discovery_concurrency_limit"
   | "websocket_invalid_url"
   | "websocket_request_error"
+  | "run_not_found"
   | "unexpected_error";
 
 export type DiscoveryErrorCode = ErrorCode;
@@ -169,6 +170,16 @@ export function toHttpErrorResponse(error: unknown, requestId?: string): Discove
     );
   }
 
+  if (status === 404) {
+    return toHttpError(
+      new PolymarketDiscoveryError("Resource not found", "run_not_found", 404, false, {
+        component: "service",
+        message,
+      }),
+      requestIdSafe
+    );
+  }
+
   if (status === 429) {
     return toHttpError(
       new PolymarketDiscoveryError("Rate limit exceeded", "clob_request_failure", 429, true, {
@@ -304,4 +315,11 @@ export function mapDiscoveryConcurrencyLimit(
       limit,
     }
   );
+}
+
+export function mapRunNotFound(message: string): PolymarketDiscoveryError {
+  return new PolymarketDiscoveryError("Run not found", "run_not_found", 404, false, {
+    component: "service",
+    message,
+  });
 }

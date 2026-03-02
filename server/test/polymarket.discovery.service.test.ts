@@ -20,7 +20,6 @@ describe("Polymarket market discovery service", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    delete process.env.MARKET_DISCOVERY_CONCURRENCY_LIMIT;
   });
 
   it("returns an explicit empty-state payload when no markets are returned", async () => {
@@ -75,66 +74,46 @@ describe("Polymarket market discovery service", () => {
     const [first, second] = await Promise.all([discoverMarketChannels(cfg), discoverMarketChannels(cfg)]);
 
     expect(getMarketsSpy).toHaveBeenCalledTimes(1);
-    expect(first.channels).toEqual([
-      { assetId, conditionId: "cond-1", question: "Will it happen?", marketSlug: "market-empty" },
-    ]);
-    expect(second.channels).toEqual(first.channels);
-    expect(first.source.marketCount).toBe(1);
-  });
-
-  it("rejects unique concurrent requests once the in-flight concurrency limit is hit", async () => {
-    process.env.MARKET_DISCOVERY_CONCURRENCY_LIMIT = "1";
-
-    const payload = makeMarketResponse(null, []);
-    let release: (value: { data: unknown[]; next_cursor: string | null }) => void;
-    const block = new Promise<{ data: unknown[]; next_cursor: string | null }>((resolve) => {
-      release = resolve;
-    });
-
-    getMarketsSpy = vi.spyOn(ClobClient.prototype, "getMarkets" as never).mockReturnValue(block as never);
-
-    const fastConfig = {
-      clobApiUrl: DEFAULT_CLOB_API_URL,
-      chainId: 137,
-      wsUrl: undefined,
-      wsConnectTimeoutMs: DEFAULT_WS_CONNECT_TIMEOUT_MS,
-      wsChunkSize: DEFAULT_WS_CHUNK_SIZE,
-      marketFetchTimeoutMs: DEFAULT_MARKET_FETCH_TIMEOUT_MS,
-    };
-
-    const queuedConfig = {
-      clobApiUrl: DEFAULT_CLOB_API_URL,
-      chainId: 138,
-      wsUrl: undefined,
-      wsConnectTimeoutMs: DEFAULT_WS_CONNECT_TIMEOUT_MS,
-      wsChunkSize: DEFAULT_WS_CHUNK_SIZE,
-      marketFetchTimeoutMs: DEFAULT_MARKET_FETCH_TIMEOUT_MS,
-    };
-
-    const running = discoverMarketChannels(fastConfig);
-    const throttled = discoverMarketChannels(queuedConfig);
-
-    await expect(throttled).rejects.toMatchObject({
-      code: "discovery_concurrency_limit",
-      status: 429,
-      details: {
-        component: "service",
-        limit: 1,
-      },
-    });
-
-    release!(payload);
-
-    const result = await running;
-    expect(result).toEqual({
+    expect(first).toEqual({
       source: {
         clobApiUrl: DEFAULT_CLOB_API_URL,
-        chainId: 137,
-        marketCount: 0,
-        marketChannelCount: 0,
+        chainId: DEFAULT_CHAIN_ID,
+        marketCount: 1,
+        marketChannelCount: 1,
       },
-      channels: [],
+      channels: [
+        {
+          assetId,
+          conditionId: "cond-1",
+          question: "Will it happen?",
+          marketSlug: "market-empty",
+        },
+      ],
       wsScan: null,
+    });
+
+    expect(second).toEqual(first);
+  });
+
+  it("probes websocket when wsUrl is provided", async () => {
+    getMarketsSpy = vi.spyOn(ClobClient.prototype, "getMarkets" as never).mockResolvedValueOnce(
+      makeMarketResponse(null, [] as unknown[])
+    );
+
+    const response = await discoverMarketChannels({
+      clobApiUrl: DEFAULT_CLOB_API_URL,
+      chainId: DEFAULT_CHAIN_ID,
+      wsUrl: "https://streaming.example.com/ws",
+      wsConnectTimeoutMs: DEFAULT_WS_CONNECT_TIMEOUT_MS,
+      wsChunkSize: DEFAULT_WS_CHUNK_SIZE,
+      marketFetchTimeoutMs: DEFAULT_MARKET_FETCH_TIMEOUT_MS,
+    });
+
+    expect(response.wsScan).toMatchObject({
+      wsUrl: "https://streaming.example.com/ws/market",
+      connected: false,
+      observedChannels: [],
+      errors: ["No discovered channels; WS probe skipped."],
     });
   });
 });

@@ -2,138 +2,162 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
 import { createApp } from "../src/app";
-import type { MarketChannelRunResult } from "../src/polymarket/types";
-import { PolymarketDiscoveryError } from "../src/polymarket/errors";
-import * as discoveryService from "../src/polymarket/services/marketChannelDiscoveryService";
 import {
-  DEFAULT_CLOB_API_URL,
-  DEFAULT_CHAIN_ID,
-  DEFAULT_MARKET_FETCH_TIMEOUT_MS,
-  DEFAULT_WS_CHUNK_SIZE,
-  DEFAULT_WS_CONNECT_TIMEOUT_MS,
+  type DiscoveryRunReadModel,
+  type DiscoveryRunSummary,
+  type MarketChannelRunResult,
 } from "../src/polymarket/types";
+import * as discoveryRunService from "../src/polymarket/services/discoveryRunService";
 
-const mockResult: MarketChannelRunResult = {
-  source: {
-    clobApiUrl: "https://clob.polymarket.com",
-    chainId: 137,
-    marketCount: 0,
-    marketChannelCount: 0,
-  },
-  channels: [],
-  wsScan: null,
-};
-
-describe("Polymarket controller", () => {
+describe("Polymarket discovery controller", () => {
   const app = createApp();
+
+  const shell: DiscoveryRunSummary = {
+    runId: "run-1",
+    status: "queued",
+    dedupeKey: '{"clobApiUrl":"https://clob.polymarket.com","chainId":137}',
+    pollUrl: "/api/polymarket/market-channels/runs/run-1",
+    requestId: "req-123",
+  };
+
+  const runReadModel: DiscoveryRunReadModel = {
+    run: {
+      id: "run-1",
+      status: "succeeded",
+      dedupeKey: shell.dedupeKey,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+      source: {
+        clobApiUrl: "https://clob.polymarket.com",
+        chainId: 137,
+        wsConnectTimeoutMs: 12000,
+        wsChunkSize: 500,
+        marketFetchTimeoutMs: 15000,
+      },
+      marketCount: 0,
+      marketChannelCount: 0,
+      requestId: "req-123",
+    },
+    channels: {
+      items: [],
+      page: {
+        offset: 0,
+        limit: 200,
+        total: 0,
+        hasMore: false,
+      },
+    },
+    wsScan: null,
+  };
+
+  const runResult: MarketChannelRunResult = {
+    source: {
+      clobApiUrl: "https://clob.polymarket.com",
+      chainId: 137,
+      marketCount: 0,
+      marketChannelCount: 0,
+    },
+    channels: [],
+    wsScan: null,
+  };
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("calls discovery service and returns an empty-state payload", async () => {
-    const spy = vi.spyOn(discoveryService, "discoverMarketChannels").mockResolvedValue(mockResult);
+  it("creates a discovery run via POST /market-channels/runs", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "createOrAttachRun").mockResolvedValue(shell);
 
-    const response = await request(app).get("/api/polymarket/market-channels").expect(200).expect("Content-Type", /json/);
+    const response = await request(app).post("/api/polymarket/market-channels/runs").send({ chainId: 137 }).expect(202);
 
-    expect(response.body).toEqual({
-      source: {
-        clobApiUrl: "https://clob.polymarket.com",
-        chainId: 137,
-        marketCount: 0,
-        marketChannelCount: 0,
-      },
-      channels: [],
-      wsScan: null,
-    });
-
-    expect(spy).toHaveBeenCalledWith({
-      clobApiUrl: DEFAULT_CLOB_API_URL,
-      chainId: DEFAULT_CHAIN_ID,
-      wsUrl: undefined,
-      wsConnectTimeoutMs: DEFAULT_WS_CONNECT_TIMEOUT_MS,
-      wsChunkSize: DEFAULT_WS_CHUNK_SIZE,
-      marketFetchTimeoutMs: DEFAULT_MARKET_FETCH_TIMEOUT_MS,
+    expect(response.body).toMatchObject({
+      status: "queued",
+      runId: "run-1",
+      pollUrl: "/api/polymarket/market-channels/runs/run-1",
+      requestId: "req-123",
     });
   });
 
-  it("passes websocket query params to the service", async () => {
-    const spy = vi
-      .spyOn(discoveryService, "discoverMarketChannels")
-      .mockResolvedValue(mockResult);
+  it("reads a run with pagination", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "getRun").mockResolvedValue(runReadModel);
 
-    await request(app)
-      .get(
-        "/api/polymarket/market-channels?wsUrl=wss://example.com/ws&wsConnectTimeoutMs=15000&wsChunkSize=42&marketFetchTimeoutMs=17000"
-      )
-      .expect(200);
-
-    expect(spy).toHaveBeenCalledWith({
-      clobApiUrl: DEFAULT_CLOB_API_URL,
-      chainId: DEFAULT_CHAIN_ID,
-      wsUrl: "wss://example.com/ws",
-      wsConnectTimeoutMs: 15000,
-      wsChunkSize: 42,
-      marketFetchTimeoutMs: 17000,
-    });
-  });
-
-  it("returns 400 for invalid integer input", async () => {
     const response = await request(app)
-      .get("/api/polymarket/market-channels?chainId=abc")
+      .get("/api/polymarket/market-channels/runs/run-1?offset=0&limit=2")
+      .expect(200)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      run: {
+        id: "run-1",
+        status: "succeeded",
+      },
+      channels: {
+        items: [],
+        page: {
+          offset: 0,
+        },
+      },
+    });
+  });
+
+  it("reads latest run", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "getLatestRun").mockResolvedValue(runReadModel);
+
+    const response = await request(app).get("/api/polymarket/market-channels/runs/latest").expect(200);
+
+    expect(response.body).toMatchObject({
+      run: {
+        id: "run-1",
+      },
+    });
+  });
+
+  it("returns async shell on legacy GET by default", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "waitForRunIfAllowed").mockResolvedValue({
+      status: "queued",
+      runId: "run-1",
+      pollUrl: "/api/polymarket/market-channels/runs/run-1",
+      requestId: "req-123",
+    });
+
+    const response = await request(app).get("/api/polymarket/market-channels?chainId=137").expect(202);
+
+    expect(response.body).toMatchObject({
+      status: "queued",
+      runId: "run-1",
+      pollUrl: "/api/polymarket/market-channels/runs/run-1",
+      requestId: "req-123",
+    });
+  });
+
+  it("returns discovered payload on legacy GET when ready", async () => {
+    vi.spyOn(discoveryRunService.discoveryRunService, "waitForRunIfAllowed").mockResolvedValue({
+      status: "succeeded",
+      runId: "run-1",
+      pollUrl: "/api/polymarket/market-channels/runs/run-1",
+      requestId: "req-123",
+      payload: runResult,
+    });
+
+    const response = await request(app)
+      .get("/api/polymarket/market-channels?chainId=137&waitMs=1000")
+      .expect(200)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject(runResult);
+  });
+
+  it("returns 400 for invalid input", async () => {
+    const response = await request(app)
+      .get("/api/polymarket/market-channels/runs/run-1?offset=abc")
       .expect(400)
       .expect("Content-Type", /json/);
 
     expect(response.body).toMatchObject({
       error: "Failed to discover market channels",
       code: "invalid_input",
-      retryable: false,
       details: {
         component: "controller",
-        field: "chainId",
-      },
-    });
-  });
-
-  it("returns a richer response on service failure", async () => {
-    vi.spyOn(discoveryService, "discoverMarketChannels").mockRejectedValue(new Error("upstream failure"));
-
-    const response = await request(app)
-      .get("/api/polymarket/market-channels")
-      .expect(500)
-      .expect("Content-Type", /json/);
-
-    expect(response.body).toMatchObject({
-      error: "Failed to discover market channels",
-      code: "unexpected_error",
-      retryable: false,
-      details: {
-        component: "clob",
-      },
-      requestId: expect.any(String),
-    });
-  });
-
-  it("returns a concurrency limit error when service rejects", async () => {
-    vi.spyOn(discoveryService, "discoverMarketChannels").mockRejectedValue(
-      new PolymarketDiscoveryError("Concurrency limit reached", "discovery_concurrency_limit", 429, true, {
-        component: "service",
-        limit: 1,
-      })
-    );
-
-    const response = await request(app)
-      .get("/api/polymarket/market-channels")
-      .expect(429)
-      .expect("Content-Type", /json/);
-
-    expect(response.body).toMatchObject({
-      error: "Failed to discover market channels",
-      code: "discovery_concurrency_limit",
-      retryable: true,
-      details: {
-        component: "service",
-        limit: 1,
+        field: "offset",
       },
     });
   });
