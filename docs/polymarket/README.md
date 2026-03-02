@@ -91,6 +91,39 @@ while (true) {
   - `channels.items`, `channels.page` (`offset|limit|total|hasMore`)
   - optional `wsScan`
 
+## Frontend implementation (client)
+
+The client app now includes a discover-orchestrating page under:
+
+- `client/src/features/discovery/DiscoveryPage.tsx`
+- `client/src/features/discovery/api/discoveryApi.ts`
+- `client/src/features/discovery/hooks/useDiscoveryPoller.ts`
+- `client/src/features/discovery/components/*`
+
+### Component structure
+
+- `DiscoveryPage` (root)
+  - launches/attaches runs via `useDiscoveryPoller`
+  - shows status + paginated channels
+  - wires error states + resume/refresh controls
+- `DiscoveryLauncher`
+  - form for `chainId` + optional `wsUrl`
+  - starts new run / cancels active poll
+- `RunStatusPanel`
+  - displays shell + run summary
+- `ChannelsTable`
+  - page/offset aware list with prev/next controls
+- `DiscoveryErrorBanner`
+  - displays normalized API contract error payload
+
+### Poller behavior (implemented)
+
+- uses async fetch loop against `GET /api/polymarket/market-channels/runs/{runId}`
+- supports `202` shell responses and terminal `200` read model payloads
+- local storage persistence for resumable polling shell (`autoRestore` defaults configurable)
+- abortable in-flight requests on cancel/unmount
+- exponential-ish backoff with a hard poll timeout guard
+
 Error codes now include:
 
 - `invalid_input`

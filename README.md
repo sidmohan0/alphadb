@@ -363,6 +363,28 @@ Common codes:
 - `server/src/polymarket/errors.ts` — centralized error mapping
 - `docs/polymarket/` — implementation notes and diagrams
 
-## Frontend path (ready for wiring)
+## Frontend path (discovery page now implemented)
 
-A Vite React frontend is already scaffolded and wired against the `/api/*` proxy. Use it as a consumer surface for discovery APIs when you are ready to build the UI layer.
+A Vite React frontend is scaffolded and wired against the `/api/*` proxy.
+
+The first-pass discovery consumer UI is now implemented at:
+
+- `client/src/features/discovery/DiscoveryPage.tsx`
+- `client/src/features/discovery/api/discoveryApi.ts`
+- `client/src/features/discovery/hooks/useDiscoveryPoller.ts`
+- `client/src/features/discovery/components/*`
+
+It currently supports:
+
+- start discovery runs (`chainId` + optional `wsUrl`)
+- 202 polling lifecycle and terminal payload handling
+- resilient polling with backoff and abort-on-stop
+- local resumable poll shell (restores in-flight run on refresh)
+- paginated channel table (`offset`, `limit`, `total`, `hasMore`)
+- normalized error contract rendering
+
+Run the app and open `http://localhost:5173` to exercise it.
+
+Related docs:
+
+- [Polymarket run + discovery docs](./docs/polymarket/README.md)
