@@ -23,6 +23,8 @@ import { DiscoveryRunCache, createDiscoveryRunCache } from "../infra/cache/run-c
 
 const DEFAULT_SCOPE = "default";
 
+type LogContext = Record<string, unknown>;
+
 interface DiscoveryServiceDeps {
   runRepository: DiscoveryRunRepository;
   channelRepository: DiscoveryChannelRepository;
@@ -50,7 +52,7 @@ function resolveDeps(overrides?: Partial<DiscoveryServiceDeps>): DiscoveryServic
     runRepository: overrides?.runRepository ?? createDiscoveryRunRepository(),
     channelRepository: overrides?.channelRepository ?? createDiscoveryChannelRepository(),
     wsScanRepository: overrides?.wsScanRepository ?? createDiscoveryRunWsScanRepository(),
-    cache: overrides?.cache ?? createDiscoveryRunCache(true),
+    cache: overrides?.cache ?? createDiscoveryRunCache(process.env.DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE === "1"),
     runTtlSec: overrides?.runTtlSec ?? parseIntEnv("DISCOVERY_RUN_TTL_SECONDS", 60 * 60 * 24),
     cacheTtlSec: overrides?.cacheTtlSec ?? parseIntEnv("DISCOVERY_RUN_CACHE_TTL_SECONDS", 10 * 60),
     concurrencyLimit: overrides?.concurrencyLimit ?? parseIntEnv("MARKET_DISCOVERY_CONCURRENCY_LIMIT", DEFAULT_MARKET_DISCOVERY_CONCURRENCY_LIMIT),
@@ -77,6 +79,14 @@ function buildDedupeKey(config: MarketDiscoveryConfig): string {
 function dedupeLockTtlSec(deps: DiscoveryServiceDeps): number {
   // Keep lock alive for the expected run TTL while still allowing conservative failover.
   return Math.max(deps.runTtlSec, 1);
+}
+
+function logDiscoveryEvent(message: string, context: LogContext): void {
+  if (process.env.NODE_ENV === "test" && process.env.DISCOVERY_RUN_LOGS !== "1") {
+    return;
+  }
+
+  console.log(`[discovery-run] ${message}`, JSON.stringify(context));
 }
 
 function toRunModel(
@@ -161,6 +171,12 @@ export async function createOrAttachRun(
 
   const active = await attachRunIfActive(deps, dedupeKey);
   if (active) {
+    logDiscoveryEvent("run_attached", {
+      action: "attach",
+      runId: active.id,
+      dedupeKey,
+      requestId: requestIdSafe,
+    });
     return toShell(active);
   }
 
@@ -169,12 +185,24 @@ export async function createOrAttachRun(
   if (!lockAcquired) {
     const raced = await attachRunIfActive(deps, dedupeKey);
     if (raced) {
+      logDiscoveryEvent("run_race_attach", {
+        action: "attach-after-lock-fail",
+        runId: raced.id,
+        dedupeKey,
+        requestId: requestIdSafe,
+      });
       return toShell(raced);
     }
 
     if (attempt < 1) {
       return createOrAttachRun(config, requestIdSafe, overrides, attempt + 1);
     }
+
+    logDiscoveryEvent("run_dedupe_lock_denied", {
+      action: "dedupe",
+      dedupeKey,
+      requestId: requestIdSafe,
+    });
 
     throw mapDiscoveryConcurrencyLimit(deps.concurrencyLimit, {
       operation: "createOrAttachRun",
@@ -206,6 +234,13 @@ export async function createOrAttachRun(
 
     await deps.cache.setActiveRunIdByDedupeKey(dedupeKey, createdRunId, dedupeLockTtlSec(deps));
     await deps.cache.setLatestRunId(deps.scope, createdRunId, deps.cacheTtlSec);
+
+    logDiscoveryEvent("run_created", {
+      action: "created",
+      runId: createdRunId,
+      dedupeKey,
+      requestId: requestIdSafe,
+    });
 
     void runDiscoveryInBackground(createdRunId, config, requestIdSafe, dedupeKey, deps);
 
@@ -353,6 +388,62 @@ export async function waitForRunIfAllowed(
   };
 }
 
+export async function pruneExpiredRuns(overrides?: Partial<DiscoveryServiceDeps>): Promise<number> {
+  const deps = resolveDeps(overrides);
+  const deleted = await deps.runRepository.pruneExpired(new Date());
+
+  if (deleted > 0) {
+    await deps.cache.clearLatestRunId(deps.scope);
+    logDiscoveryEvent("runs_pruned", {
+      deleted,
+      scope: deps.scope,
+    });
+  }
+
+  return deleted;
+}
+
+export interface DiscoveryRunPrunerHandle {
+  stop: () => void;
+}
+
+export function startDiscoveryRunPruner(overrides?: Partial<DiscoveryServiceDeps>): DiscoveryRunPrunerHandle {
+  const intervalSeconds = parseIntEnv("DISCOVERY_PRUNE_INTERVAL_SECONDS", 300);
+  const intervalMs = Math.max(5, intervalSeconds) * 1000;
+  let running = false;
+
+  const runOnce = async () => {
+    if (running) {
+      return;
+    }
+
+    running = true;
+    try {
+      const deleted = await pruneExpiredRuns(overrides);
+      if (deleted > 0 && process.env.NODE_ENV !== "test") {
+        logDiscoveryEvent("pruner_tick", { deleted, intervalSeconds, scope: overrides?.scope ?? process.env.DISCOVERY_SCOPE ?? DEFAULT_SCOPE });
+      }
+    } catch (error) {
+      if (process.env.NODE_ENV !== "test") {
+        console.error("[discovery-run] pruner_failed", error);
+      }
+    } finally {
+      running = false;
+    }
+  };
+
+  void runOnce();
+  const timer = setInterval(() => {
+    void runOnce();
+  }, intervalMs);
+
+  return {
+    stop: () => {
+      clearInterval(timer);
+    },
+  };
+}
+
 async function runDiscoveryInBackground(
   runId: string,
   config: MarketDiscoveryConfig,
@@ -367,6 +458,11 @@ async function runDiscoveryInBackground(
       status: "running",
       startedAt: new Date(),
     } satisfies DiscoveryRunPatch);
+
+    logDiscoveryEvent("run_status", {
+      action: "running",
+      runId,
+    });
 
     const result = await discoverMarketChannels(config);
 
@@ -387,10 +483,25 @@ async function runDiscoveryInBackground(
       errorDetails: null,
     });
 
+    logDiscoveryEvent("run_status", {
+      action: "succeeded",
+      runId,
+      marketCount: result.source.marketCount,
+      marketChannelCount: result.source.marketChannelCount,
+    });
+
     const read = await getRun(runId, 0, 100, deps);
     await refreshRunCache(deps, runId, read);
   } catch (error) {
     const converted = toHttpErrorResponse(error, requestId).body;
+
+    logDiscoveryEvent("run_status", {
+      action: "failed",
+      runId,
+      errorCode: converted.code,
+      errorMessage: converted.message,
+    });
+
     await deps.runRepository.updateRun(runId, {
       status: "failed",
       completedAt: new Date(),
@@ -412,6 +523,8 @@ export const discoveryRunService = {
   getRun,
   getLatestRun,
   waitForRunIfAllowed,
+  pruneExpiredRuns,
+  startDiscoveryRunPruner,
 };
 
 export { createDiscoveryRunRepository, createDiscoveryChannelRepository, createDiscoveryRunWsScanRepository };

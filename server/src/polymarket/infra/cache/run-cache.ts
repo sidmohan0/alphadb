@@ -4,6 +4,7 @@ import { getRedisClient } from "./redis";
 export interface DiscoveryRunCache {
   getLatestRunId(scope: string): Promise<string | null>;
   setLatestRunId(scope: string, runId: string, ttlSec: number): Promise<void>;
+  clearLatestRunId(scope: string): Promise<void>;
 
   getCachedRun(runId: string): Promise<DiscoveryRunReadModel | null>;
   setCachedRun(runId: string, payload: DiscoveryRunReadModel, ttlSec: number): Promise<void>;
@@ -60,6 +61,10 @@ class InMemoryDiscoveryRunCache implements DiscoveryRunCache {
 
   async setLatestRunId(scope: string, runId: string, ttlSec: number): Promise<void> {
     this.setWithTTL(scope, this.latest, runId, ttlSec);
+  }
+
+  async clearLatestRunId(scope: string): Promise<void> {
+    this.latest.delete(scope);
   }
 
   async getCachedRun(runId: string): Promise<DiscoveryRunReadModel | null> {
@@ -143,6 +148,11 @@ class RedisDiscoveryRunCache implements DiscoveryRunCache {
     await (redis as unknown as any).set(this.keyLatest(scope), runId, "EX", Math.max(1, ttlSec));
   }
 
+  async clearLatestRunId(scope: string): Promise<void> {
+    const redis = getRedisClient();
+    await redis.del(this.keyLatest(scope));
+  }
+
   async getCachedRun(runId: string): Promise<DiscoveryRunReadModel | null> {
     const redis = getRedisClient();
     const raw = await redis.get(this.keyRun(runId));
@@ -207,7 +217,7 @@ class RedisDiscoveryRunCache implements DiscoveryRunCache {
   }
 }
 
-export function createDiscoveryRunCache(useInMemoryFallback = true): DiscoveryRunCache {
+export function createDiscoveryRunCache(useInMemoryFallback = false): DiscoveryRunCache {
   if (!process.env.REDIS_URL) {
     if (useInMemoryFallback) {
       return new InMemoryDiscoveryRunCache();

@@ -2,128 +2,126 @@
 
 ## What this report covers
 
-This folder now includes the artifacts for the discovery work and the async run architecture:
+This folder contains implementation notes and runbook artifacts for the discovery work and async run architecture:
 
 - `polymarket-market-channels-visual-plan-diagram.html`
-  - A full visual plan + topology/flow diagram for the discovery script.
+  - Visual plan + topology/flow diagram.
 - `polymarket-market-channels-call-graph.html`
-  - A call graph / call hierarchy for the same file structure.
+  - Call graph / call hierarchy.
 - `polymarket-discovery-runs-visual-plan.html`
   - Architecture and endpoint model for async `discovery_runs` + Postgres/Redis orchestration.
 
 Open these files in a browser for rendered visuals.
 
-## Current backend structure (post-refactor)
+## Current backend structure
 
-The discovery feature now follows a layered async run model:
+The discovery feature now follows a distributed async model:
 
 - `server/src/polymarket/types.ts`
-  - Shared types, DTO contracts, and constants.
+  - Run lifecycle contracts, config defaults, paging contracts.
 - `server/src/polymarket/utils.ts`
-  - Shared parsing and extraction helpers.
+  - Parsing and extraction helpers.
 - `server/src/polymarket/services/marketChannelDiscoveryService.ts`
-  - Domain discovery orchestration for REST + optional websocket probing.
+  - Discovery orchestration and websocket probing.
 - `server/src/polymarket/services/discoveryRunService.ts`
-  - Async run orchestration (queue/running/terminal states, paging, and compatibility shell behavior).
+  - Async run orchestration (`queued/running/succeeded/partial/failed`), dedupe, concurrency and pruning.
 - `server/src/polymarket/controllers/polymarket.controller.ts`
-  - HTTP controller for async APIs + backward-compatible `/market-channels`.
-- `server/src/app.ts`
-  - Express app factory (`createApp`) for runtime + testability.
-- `server/src/polymarket/cli/runMarketChannels.ts`
-  - CLI entry logic (args/env + result rendering).
-- `server/src/polymarket/errors.ts`
-  - Centralized typed error mapping and API response contracts.
-- `server/src/polymarketMarketChannels.ts`
-  - Thin CLI bootstrap wrapper that invokes the CLI entry and handles terminal failure.
-- `server/src/polymarket/infra`
-  - DB/Redis infra scaffolding and shared connection utilities.
-- `server/src/polymarket/repositories`
-  - DB persistence adapters for runs, channels, and websocket scan metadata.
+  - HTTP controller for async endpoints + compatibility wrapper.
+- `server/src/polymarket/infra/db/*`
+  - Postgres pool + schema scripts.
+- `server/src/polymarket/infra/cache/*`
+  - Redis-backed lock/semaphore/cache layer.
+- `server/src/polymarket/repositories/*`
+  - Persistence adapters for runs/channels/ws scan.
+- `server/src/polymarket/maintenance/migrateDiscoveryRuns.ts`
+  - Schema bootstrap helper.
 
 ## API behavior
 
-Primary async discovery run APIs:
+Primary async endpoints:
 
-- `POST /api/polymarket/market-channels/runs` (dedupe + queued return)
+- `POST /api/polymarket/market-channels/runs`
+  - Returns `{ status, runId, pollUrl, requestId }`.
 - `GET /api/polymarket/market-channels/runs/{runId}`
+  - Returns full run payload + `channels` page slice.
 - `GET /api/polymarket/market-channels/runs/latest`
+  - Returns latest run in DB/cache for dashboard bootstrap.
 
 Compatibility path:
 
 - `GET /api/polymarket/market-channels`
-  - Returns shell (`202`) when still queued/running.
-  - Returns terminal payload (`200`) after `waitMs` if run finishes in time.
+  - `waitMs=0` → no wait (legacy shell)
+  - `waitMs>0` → waits up to provided window and returns terminal payload when ready
 
-Query params on discovery requests:
+Error codes now include:
 
-- `clobApiUrl` (default: `https://clob.polymarket.com`)
-- `chainId` (default: `137`)
-- `wsUrl` (optional)
-- `wsConnectTimeoutMs` (default: `12000`)
-- `wsChunkSize` (default: `500`)
-- `marketFetchTimeoutMs` (default: `15000`)
-- `waitMs` (compatibility timeout in ms, optional)
-- `offset` / `limit` for paginated run reads
+- `invalid_input`
+- `clob_request_timeout`
+- `clob_request_network`
+- `clob_request_failure`
+- `discovery_concurrency_limit`
+- `websocket_invalid_url`
+- `websocket_request_error`
+- `run_not_found`
+- `unexpected_error`
 
-On error, endpoints return structured error contracts from `server/src/polymarket/errors.ts`.
+## Operations / rollout checklist
 
-Example error payload:
-
-```json
-{
-  "error": "Failed to discover market channels",
-  "code": "clob_request_network",
-  "message": "Clob request failed with code ENOTFOUND",
-  "retryable": true,
-  "details": {
-    "component": "clob",
-    "status": 502
-  },
-  "requestId": "..."
-}
-```
-
-Common codes:
-
-- `invalid_input` (`400`)
-- `clob_request_timeout` (`504`)
-- `clob_request_network` (`502`)
-- `clob_request_failure` (`502`)
-- `discovery_concurrency_limit` (`429`, `retryable: true`)
-- `websocket_invalid_url` (`400`) — only when probe URL parsing fails
-- `websocket_request_error` (`502`)
-- `run_not_found` (`404`)
-- `unexpected_error` (`500`)
-
-The service keeps empty states explicit:
-
-- `channels: []` when no markets or asset IDs are discovered
-- `wsScan: null` when websocket probe is not requested
-- `source.marketChannelCount` mirrors `channels.length`
-
-### Concurrency and de-duplication behavior
-
-- In-memory/Redis-assisted dedupe is used for identical in-flight discovery requests.
-- Hard concurrency ceiling is applied for queued unique discovery runs (default `4`, via `MARKET_DISCOVERY_CONCURRENCY_LIMIT`).
-- Requests above the limit fail immediately with:
-  - HTTP `429`
-  - `code: discovery_concurrency_limit`
-
-## Test coverage added
-
-- Added integration tests at `server/test/polymarket.controller.test.ts`.
-- Added service unit tests at:
-  - `server/test/polymarket.discovery.service.test.ts`
-  - `server/test/polymarket.discoveryRunService.test.ts`
-
-Run tests with:
+### One-time schema setup
 
 ```bash
-npm run test
+npm run polymarket:discovery-migrate
+```
+
+This applies:
+
+- `server/src/polymarket/infra/db/schemas.sql`
+  - `discovery_runs`
+  - `discovery_run_channels`
+  - `discovery_run_ws_scans`
+  - `discovery_run_events`
+
+### Local operator runbook
+
+- Spin up dependencies:
+
+```bash
+docker-compose -f docker-compose.discovery-stack.yml up -d
+```
+
+- Start API and verify run creation + polling works.
+- Enable pruner in non-idle environments:
+
+```bash
+DISCOVERY_RUN_PRUNER_ENABLED=1 npm run start
+```
+
+### Production polish recommendations implemented
+
+- ✅ Run pruning job:
+  - `startDiscoveryRunPruner` + `DISCOVERY_RUN_PRUNER_ENABLED`
+- ✅ Cache invalidation on prune:
+  - Latest-run cache key is refreshed when stale
+- ✅ Structured run lifecycle logs:
+  - State transitions logged (`queued`, `running`, `succeeded`, `failed`).
+- ✅ Integration verification path:
+  - `npm run --workspace server test:integration`
+
+## Suggested manual checks
+
+- Query a run:
+
+```bash
+curl http://localhost:4000/api/polymarket/market-channels/runs/<runId>
+```
+
+- Poll via compatibility wrapper:
+
+```bash
+curl "http://localhost:4000/api/polymarket/market-channels?chainId=137&waitMs=250"
 ```
 
 ## Notes
 
-- `call graph` is the right structural term for these diagrams.
-- `stack trace` refers to runtime failure stack, not full-file architecture.
-- This split is intentionally service/CLI/controller oriented rather than controller-only.
+- This model intentionally places orchestration decisions in services and persistence/caching in infra.
+- Redis is the default production mode for dedupe/locks and cross-instance concurrency guarantees.

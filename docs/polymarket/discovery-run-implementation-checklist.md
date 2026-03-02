@@ -1,8 +1,8 @@
 # Discovery Runs Implementation Checklist
 
-## Status: In Progress
+## Status: In Progress (core implementation complete)
 
-This folder now defines the backend execution model for async discovery runs backed by **Postgres + Redis**.
+This folder defines the backend execution model for async discovery runs backed by **Postgres + Redis**.
 
 ## Execution Model
 
@@ -14,45 +14,40 @@ This folder now defines the backend execution model for async discovery runs bac
 ## Data and Ownership
 
 - **Controller:** parse/validate → delegate → map response.
-- **Service:** orchestration + policy (dedupe keying, slot acquisition, state transitions, caching decisions, error mapping to run state).
+- **Service:** orchestration + policy (dedupe keying, slot acquisition, state transitions, cache decisions, periodic cleanup).
 - **DB/Cache Layers:** persistence and fast lookup only.
 
-## Commit Steps
+## Completed Items
 
-1. **Types + contracts (`types.ts`)**
-   - Add run status + request/response contracts.
-   - Add page response models for `channels`.
-   - Add discovery run config contract and defaults for run/env behavior.
+1. **Types + contracts (`types.ts`)** ✅
+   - Run status + request/response contracts.
+   - Page contracts for `channels`.
+   - Run config + defaults for discovery config.
 
-2. **Schema + repository layer (`infra/db`, `repositories`)**
-   - Add SQL schema file for `discovery_runs`, `discovery_run_channels`, `discovery_run_ws_scans` (+ optional events table).
-   - Implement repository adapters for CRUD + paginated channel read.
+2. **Schema + repository layer (`infra/db`, `repositories`)** ✅
+   - SQL schema added (`discovery_runs`, `discovery_run_channels`, `discovery_run_ws_scans`, `discovery_run_events`).
+   - Repository adapters for CRUD + paginated channel read.
 
-3. **Redis cache/lock layer (`infra/cache`)**
-   - Implement keys for:
-     - active run pointer (`latest`)
-     - cached run read model
-     - dedupe lock by normalized request key
-     - distributed concurrency semaphore
+3. **Redis cache/lock layer (`infra/cache`)** ✅
+   - Distributed locks for dedupe and semaphore.
+   - Cache keys for latest run, run read-model snapshot, lock state.
 
-4. **Service orchestration (`services/discoveryRunService.ts`)**
+4. **Service orchestration (`services/discoveryRunService.ts`)** ✅
    - `createOrAttachRun`, `waitForRunIfAllowed`, `getRun`, `getLatestRun`.
-   - Add worker path that runs existing discovery sync function, persists result, updates cache, and handles cleanup of locks/slots.
+   - Added service-level prune (`pruneExpiredRuns`) and background pruner (`startDiscoveryRunPruner`).
+   - Added explicit state transition logs and improved lock attachment behavior.
 
-5. **Routes (`controllers`)**
-   - Add primary runs endpoints.
-   - Convert old route to compatibility wrapper with `waitMs` handling.
+5. **Routes (`controllers`)** ✅
+   - Async create/read/latest endpoints.
+   - Legacy wrapper with `waitMs` handling.
 
-6. **Tests + docs updates**
-   - Add unit tests for service orchestration behavior.
-   - Update controller tests for new flows and compatibility behavior.
-   - Keep existing service extraction tests focused on parsing/extraction behavior.
-   - Update docs (`README`, `docs/polymarket/README`, docs index) to match API surface.
+6. **Tests + docs** ✅
+   - Unit tests for service/controller behavior.
+   - **Integration test scaffold** for real Postgres + Redis (`server/test/polymarket.discovery.integration.test.ts`).
+   - Docs and operational notes updated in `README.md` and `docs/README.md`.
 
-## Core Invariants
+## Remaining Optional Enhancements
 
-- Keep business rules in service layer, not inside SQL constraints.
-- DB stores durable state + constraints.
-- Redis enforces runtime uniqueness/concurrency across instances.
-- Controller stays thin.
-- Existing structured error contract remains the canonical response for failures (`code`, `message`, `retryable`, `requestId`, `details`).
+- Add explicit migration/bootstrapping docs (included in repo docs and scripts).
+- Add CI job coverage for integration profile.
+- Add OpenTelemetry/structured tracing around run lifecycle events.
