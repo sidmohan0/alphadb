@@ -6,7 +6,10 @@ import type {
   DiscoveryPollResultShell,
   DiscoveryRunReadModel,
   DiscoveryRunShell,
+  DiscoveryActiveRunsResponse,
   StartDiscoveryRequest,
+  StartDiscoveryEstimateRequest,
+  DiscoveryEstimateResult,
 } from "../types";
 
 async function parseJsonResponse<T>(response: Response, fallbackErrorMessage: string): Promise<T> {
@@ -79,6 +82,46 @@ export async function startDiscoveryRun(
   return payload;
 }
 
+export async function estimateDiscoveryRun(
+  request: StartDiscoveryEstimateRequest,
+  signal?: AbortSignal
+): Promise<DiscoveryEstimateResult> {
+  const payload = {
+    ...request,
+    sampleLimit:
+      request.sampleLimit ??
+      request.maxMarkets ??
+      undefined,
+  };
+
+  const response = await fetch("/api/polymarket/market-channels/runs/estimate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!response.ok) {
+    const body = await parseJsonResponse<DiscoveryApiError>(
+      response,
+      "Discovery preview request returned an invalid error payload"
+    );
+
+    if (!isDiscoveryApiError(body)) {
+      throw new Error("Discovery preview run failed");
+    }
+
+    throw body;
+  }
+
+  return parseJsonResponse<DiscoveryEstimateResult>(
+    response,
+    "Discovery preview request returned an invalid response"
+  );
+}
+
 export async function pollDiscoveryRun(
   pollUrl: string,
   offset: number,
@@ -140,4 +183,56 @@ export async function pollDiscoveryRun(
   };
 
   return result;
+}
+
+export async function listActiveDiscoveryRuns(signal?: AbortSignal): Promise<DiscoveryActiveRunsResponse> {
+  const response = await fetch("/api/polymarket/market-channels/runs/active", {
+    signal,
+  });
+
+  if (!response.ok) {
+    const payload = await parseJsonResponse<DiscoveryApiError>(
+      response,
+      "Discovery active runs request returned an invalid error payload"
+    );
+
+    if (!isDiscoveryApiError(payload)) {
+      throw new Error("Discovery active runs request failed");
+    }
+
+    throw payload;
+  }
+
+  return parseJsonResponse<DiscoveryActiveRunsResponse>(
+    response,
+    "Discovery active runs request returned an invalid response"
+  );
+}
+
+export async function cancelDiscoveryRun(
+  runId: string,
+  signal?: AbortSignal
+): Promise<DiscoveryRunShell> {
+  const response = await fetch(`/api/polymarket/market-channels/runs/${runId}/cancel`, {
+    method: "POST",
+    signal,
+  });
+
+  if (!response.ok) {
+    const payload = await parseJsonResponse<DiscoveryApiError>(
+      response,
+      "Discovery cancel run request returned an invalid error payload"
+    );
+
+    if (!isDiscoveryApiError(payload)) {
+      throw new Error("Discovery cancel run failed");
+    }
+
+    throw payload;
+  }
+
+  return parseJsonResponse<DiscoveryRunShell>(
+    response,
+    "Discovery cancel run request returned an invalid response"
+  );
 }

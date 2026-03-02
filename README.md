@@ -208,11 +208,28 @@ curl -X POST http://localhost:4000/api/polymarket/market-channels/runs \
   -d '{"chainId":137}'
 ```
 
+- `POST /api/polymarket/market-channels/runs/estimate`
+  - Fast preview endpoint for quickly sampling and tuning discovery filters.
+  - Accepts the same discovery filters as the full-run endpoint and a `sampleLimit` (or `maxMarkets`) cap.
+  - Returns sample channels plus metadata (`marketCount`, `marketChannelCount`, `pagesScanned`, `stoppedByLimit`, `hasMore`).
+
+```bash
+curl -X POST http://localhost:4000/api/polymarket/market-channels/runs/estimate \
+  -H "Content-Type: application/json" \
+  -d '{"chainId":137,"questionContains":"president","maxMarkets":10}'
+```
+
 - `GET /api/polymarket/market-channels/runs/{runId}?offset=0&limit=200`
   - Returns full run payload + paginated channels.
 
 - `GET /api/polymarket/market-channels/runs/latest`
   - Returns latest run for configured scope.
+
+- `GET /api/polymarket/market-channels/runs/active`
+  - Returns currently running jobs for UI monitoring and cancellation.
+
+- `POST /api/polymarket/market-channels/runs/{runId}/cancel`
+  - Cancels an in-flight run.
 
 ### Compatibility wrapper
 
@@ -225,10 +242,12 @@ curl -X POST http://localhost:4000/api/polymarket/market-channels/runs \
 
 - `clobApiUrl` (optional, default `https://clob.polymarket.com`)
 - `chainId` (optional, default `137`)
+- `maxMarkets` (optional, for full run cap; use `sampleLimit` on estimate endpoint for preview)
 - `wsUrl` (optional): enables websocket probing when present
 - `wsConnectTimeoutMs` (optional, default `12000`)
 - `wsChunkSize` (optional, default `500`)
 - `marketFetchTimeoutMs` (optional, default `15000`)
+- Discovery filters: status/flag fields (`active`, `closed`, `archived`, `acceptingOrders`, etc.), numeric ranges (`minimumOrderSize*`, `makerBaseFee*`, etc.), timestamps, and text contains fields (`questionContains`, `marketSlugContains`, `conditionIdContains`, etc.).
 
 Example status polling flow:
 
@@ -376,12 +395,13 @@ The first-pass discovery consumer UI is now implemented at:
 
 It currently supports:
 
-- start discovery runs (`chainId` + optional `wsUrl`)
+- start discovery runs with rich filter controls (status, fees, volume thresholds, text contains, timestamps, tags, chain/API URL overrides)
 - 202 polling lifecycle and terminal payload handling
 - resilient polling with backoff and abort-on-stop
 - local resumable poll shell (restores in-flight run on refresh)
 - paginated channel table (`offset`, `limit`, `total`, `hasMore`)
 - normalized error contract rendering
+- "Preview sample" flow to run a capped sample before launching full discovery
 
 Run the app and open `http://localhost:5173` to exercise it.
 

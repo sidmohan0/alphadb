@@ -1,12 +1,18 @@
-import type { DiscoveryRunReadModel } from "../types";
+import type { DiscoveryPhase, DiscoveryRunReadModel } from "../types";
 
 interface ChannelsTableProps {
   model?: DiscoveryRunReadModel;
+  phase: DiscoveryPhase;
   onPrevious?: () => void;
   onNext?: () => void;
 }
 
-export function ChannelsTable({ model, onPrevious, onNext }: ChannelsTableProps): JSX.Element {
+export function ChannelsTable({
+  model,
+  phase,
+  onPrevious,
+  onNext,
+}: ChannelsTableProps): JSX.Element {
   if (!model) {
     return (
       <section className="card">
@@ -17,12 +23,15 @@ export function ChannelsTable({ model, onPrevious, onNext }: ChannelsTableProps)
   }
 
   const { channels } = model;
+  const isScanning = phase === "submitting" || phase === "polling";
 
   return (
     <section className="card">
       <h3>Discovered channels</h3>
       <p>
-        Showing {channels.page.offset + 1} - {channels.page.offset + channels.items.length} of {channels.page.total}
+        {channels.page.total === 0
+          ? "No channels discovered yet for the current scan window."
+          : `Showing ${channels.page.offset + 1} - ${channels.page.offset + channels.items.length} of ${channels.page.total}`}
       </p>
 
       <div className="channels-shell">
@@ -39,7 +48,11 @@ export function ChannelsTable({ model, onPrevious, onNext }: ChannelsTableProps)
           <tbody>
             {channels.items.length === 0 ? (
               <tr>
-                <td colSpan={5}>No channels found for this page.</td>
+                <td colSpan={5}>
+                  {isScanning
+                    ? "Discovery is still running. No channels found for this page yet."
+                    : "No channels found for this page."}
+                </td>
               </tr>
             ) : (
               channels.items.map((row) => (

@@ -11,10 +11,51 @@ export const DEFAULT_MARKET_DISCOVERY_CONCURRENCY_LIMIT = 4;
 export type MarketDiscoveryConfig = {
   clobApiUrl: string;
   chainId: number;
+  maxMarkets?: number;
   wsUrl?: string;
   wsConnectTimeoutMs: number;
   wsChunkSize: number;
   marketFetchTimeoutMs: number;
+  enableOrderBook?: boolean;
+  minimumTickSizeMin?: number;
+  minimumTickSizeMax?: number;
+  makerBaseFeeMin?: number;
+  makerBaseFeeMax?: number;
+  takerBaseFeeMin?: number;
+  takerBaseFeeMax?: number;
+  notificationsEnabled?: boolean;
+  negRisk?: boolean;
+  fpmm?: string;
+  secondsDelayMin?: number;
+  secondsDelayMax?: number;
+  acceptingOrderTimestampMin?: number;
+  acceptingOrderTimestampMax?: number;
+  questionIdContains?: string;
+  rewardsHasRates?: boolean;
+  rewardsMinSizeMin?: number;
+  rewardsMinSizeMax?: number;
+  rewardsMaxSpreadMin?: number;
+  rewardsMaxSpreadMax?: number;
+  iconContains?: string;
+  imageContains?: string;
+  descriptionContains?: string;
+  conditionIdContains?: string;
+  negRiskMarketIdContains?: string;
+  negRiskRequestIdContains?: string;
+  endDateIsoMin?: string;
+  endDateIsoMax?: string;
+  gameStartTimeMin?: string;
+  gameStartTimeMax?: string;
+  acceptingOrders?: boolean;
+  minimumOrderSizeMin?: number;
+  minimumOrderSizeMax?: number;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  isFiftyFiftyOutcome?: boolean;
+  tags?: string[];
+  questionContains?: string;
+  marketSlugContains?: string;
 };
 
 /**
@@ -70,10 +111,51 @@ export interface DiscoveryRunReadModel {
     source: {
       clobApiUrl: string;
       chainId: number;
+      maxMarkets?: number;
       wsUrl?: string;
       wsConnectTimeoutMs: number;
       wsChunkSize: number;
       marketFetchTimeoutMs: number;
+      enableOrderBook?: boolean;
+      minimumTickSizeMin?: number;
+      minimumTickSizeMax?: number;
+      makerBaseFeeMin?: number;
+      makerBaseFeeMax?: number;
+      takerBaseFeeMin?: number;
+      takerBaseFeeMax?: number;
+      notificationsEnabled?: boolean;
+      negRisk?: boolean;
+      fpmm?: string;
+      secondsDelayMin?: number;
+      secondsDelayMax?: number;
+      acceptingOrderTimestampMin?: number;
+      acceptingOrderTimestampMax?: number;
+      questionIdContains?: string;
+      rewardsHasRates?: boolean;
+      rewardsMinSizeMin?: number;
+      rewardsMinSizeMax?: number;
+      rewardsMaxSpreadMin?: number;
+      rewardsMaxSpreadMax?: number;
+      iconContains?: string;
+      imageContains?: string;
+      descriptionContains?: string;
+      conditionIdContains?: string;
+      negRiskMarketIdContains?: string;
+      negRiskRequestIdContains?: string;
+      endDateIsoMin?: string;
+      endDateIsoMax?: string;
+      gameStartTimeMin?: string;
+      gameStartTimeMax?: string;
+      acceptingOrders?: boolean;
+      minimumOrderSizeMin?: number;
+      minimumOrderSizeMax?: number;
+      active?: boolean;
+      closed?: boolean;
+      archived?: boolean;
+      isFiftyFiftyOutcome?: boolean;
+      tags?: string[];
+      questionContains?: string;
+      marketSlugContains?: string;
     };
     marketCount: number;
     marketChannelCount: number;
@@ -144,10 +226,35 @@ export type MarketToken = {
  * Minimal market payload object shape used by the service.
  */
 export type MarketLike = {
+  question_id?: unknown;
   condition_id?: unknown;
   question?: unknown;
+  icon?: unknown;
+  image?: unknown;
+  rewards?: unknown;
   tokens?: unknown;
   market_slug?: unknown;
+  active?: unknown;
+  closed?: unknown;
+  archived?: unknown;
+  is_50_50_outcome?: unknown;
+  accepting_orders?: unknown;
+  minimum_order_size?: unknown;
+  accepting_order_timestamp?: unknown;
+  minimum_tick_size?: unknown;
+  maker_base_fee?: unknown;
+  taker_base_fee?: unknown;
+  enable_order_book?: unknown;
+  fpmm?: unknown;
+  notifications_enabled?: unknown;
+  neg_risk?: unknown;
+  seconds_delay?: unknown;
+  end_date_iso?: unknown;
+  game_start_time?: unknown;
+  description?: unknown;
+  neg_risk_market_id?: unknown;
+  neg_risk_request_id?: unknown;
+  tags?: unknown;
 };
 
 /**
@@ -173,6 +280,9 @@ export type WsScanSummary = {
 export type FetchMarketChannelsResult = {
   channels: MarketChannel[];
   marketCount: number;
+  pagesScanned: number;
+  stoppedByLimit: boolean;
+  hasMore: boolean;
 };
 
 export type ProbeMarketChannelsParams = {
@@ -191,4 +301,18 @@ export type MarketChannelRunResult = {
   };
   channels: MarketChannel[];
   wsScan: WsScanSummary | null;
+};
+
+export type MarketChannelEstimateResult = {
+  source: {
+    clobApiUrl: string;
+    chainId: number;
+    marketCount: number;
+    marketChannelCount: number;
+    sampleLimit: number;
+    pagesScanned: number;
+    stoppedByLimit: boolean;
+    hasMore: boolean;
+  };
+  channels: MarketChannel[];
 };

@@ -34,6 +34,7 @@ import {
   DiscoveryRunRetryQueueRepository,
   DiscoveryRunRetryQueueRecord,
 } from "../repositories/discoveryRunRetryQueue.repository";
+import { toStringOrUndefined } from "../utils";
 
 const DEFAULT_SCOPE = "default";
 
@@ -106,14 +107,234 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeTagList(tags: unknown): string[] {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+
+  const normalized = tags
+    .map((tag) => (typeof tag === "string" ? tag.trim().toLowerCase() : ""))
+    .filter((tag) => tag.length > 0);
+
+  return Array.from(new Set(normalized)).sort((left, right) => left.localeCompare(right));
+}
+
+function parseDiscoveryConfigFromPayload(payload: Record<string, unknown> | undefined): {
+  maxMarkets?: number;
+  acceptingOrders?: boolean;
+  enableOrderBook?: boolean;
+  minimumOrderSizeMin?: number;
+  minimumOrderSizeMax?: number;
+  minimumTickSizeMin?: number;
+  minimumTickSizeMax?: number;
+  makerBaseFeeMin?: number;
+  makerBaseFeeMax?: number;
+  takerBaseFeeMin?: number;
+  takerBaseFeeMax?: number;
+  notificationsEnabled?: boolean;
+  negRisk?: boolean;
+  fpmm?: string;
+  secondsDelayMin?: number;
+  secondsDelayMax?: number;
+  acceptingOrderTimestampMin?: number;
+  acceptingOrderTimestampMax?: number;
+  questionIdContains?: string;
+  rewardsHasRates?: boolean;
+  rewardsMinSizeMin?: number;
+  rewardsMinSizeMax?: number;
+  rewardsMaxSpreadMin?: number;
+  rewardsMaxSpreadMax?: number;
+  iconContains?: string;
+  imageContains?: string;
+  descriptionContains?: string;
+  conditionIdContains?: string;
+  negRiskMarketIdContains?: string;
+  negRiskRequestIdContains?: string;
+  endDateIsoMin?: string;
+  endDateIsoMax?: string;
+  gameStartTimeMin?: string;
+  gameStartTimeMax?: string;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  isFiftyFiftyOutcome?: boolean;
+  tags?: string[];
+  questionContains?: string;
+  marketSlugContains?: string;
+} {
+  if (!payload) {
+    return {};
+  }
+
+  function parsePositiveNumberValue(raw: unknown): number | undefined {
+    if (typeof raw === "number") {
+      return Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+    }
+
+    const asString = toStringOrUndefined(raw);
+    if (!asString) {
+      return undefined;
+    }
+
+    const parsed = Number(asString);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  }
+
+  function parseDate(raw: unknown): string | undefined {
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (!trimmed) return undefined;
+
+      const parsed = Date.parse(trimmed);
+      return Number.isFinite(parsed) ? trimmed : undefined;
+    }
+
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      const date = new Date(raw);
+      return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+    }
+
+    return undefined;
+  }
+
+  const maxMarkets =
+    typeof payload.maxMarkets === "number" && Number.isFinite(payload.maxMarkets)
+      ? payload.maxMarkets
+      : typeof payload.maxMarkets === "string"
+      ? Number(payload.maxMarkets)
+      : undefined;
+
+  const questionContainsRaw = toStringOrUndefined(payload.questionContains);
+  const marketSlugContainsRaw = toStringOrUndefined(payload.marketSlugContains);
+  const descriptionContains = toStringOrUndefined(payload.descriptionContains);
+  const conditionIdContains = toStringOrUndefined(payload.conditionIdContains);
+  const fpmm = toStringOrUndefined(payload.fpmm);
+  const negRiskMarketIdContains = toStringOrUndefined(payload.negRiskMarketIdContains);
+  const negRiskRequestIdContains = toStringOrUndefined(payload.negRiskRequestIdContains);
+  const questionIdContains = toStringOrUndefined(payload.questionIdContains);
+  const iconContains = toStringOrUndefined(payload.iconContains);
+  const imageContains = toStringOrUndefined(payload.imageContains);
+  const minimumOrderSizeMin = parsePositiveNumberValue(payload.minimumOrderSizeMin);
+  const minimumOrderSizeMax = parsePositiveNumberValue(payload.minimumOrderSizeMax);
+  const minimumTickSizeMin = parsePositiveNumberValue(payload.minimumTickSizeMin);
+  const minimumTickSizeMax = parsePositiveNumberValue(payload.minimumTickSizeMax);
+  const makerBaseFeeMin = parsePositiveNumberValue(payload.makerBaseFeeMin);
+  const makerBaseFeeMax = parsePositiveNumberValue(payload.makerBaseFeeMax);
+  const takerBaseFeeMin = parsePositiveNumberValue(payload.takerBaseFeeMin);
+  const takerBaseFeeMax = parsePositiveNumberValue(payload.takerBaseFeeMax);
+  const secondsDelayMin = parsePositiveNumberValue(payload.secondsDelayMin);
+  const secondsDelayMax = parsePositiveNumberValue(payload.secondsDelayMax);
+  const acceptingOrderTimestampMin = parsePositiveNumberValue(payload.acceptingOrderTimestampMin);
+  const acceptingOrderTimestampMax = parsePositiveNumberValue(payload.acceptingOrderTimestampMax);
+  const rewardsMinSizeMin = parsePositiveNumberValue(payload.rewardsMinSizeMin);
+  const rewardsMinSizeMax = parsePositiveNumberValue(payload.rewardsMinSizeMax);
+  const rewardsMaxSpreadMin = parsePositiveNumberValue(payload.rewardsMaxSpreadMin);
+  const rewardsMaxSpreadMax = parsePositiveNumberValue(payload.rewardsMaxSpreadMax);
+  const endDateIsoMin = parseDate(payload.endDateIsoMin);
+  const endDateIsoMax = parseDate(payload.endDateIsoMax);
+  const gameStartTimeMin = parseDate(payload.gameStartTimeMin);
+  const gameStartTimeMax = parseDate(payload.gameStartTimeMax);
+
+  return {
+    ...(Number.isInteger(maxMarkets) && maxMarkets > 0 ? { maxMarkets } : {}),
+    ...(typeof payload.acceptingOrders === "boolean" ? { acceptingOrders: payload.acceptingOrders } : {}),
+    ...(typeof payload.enableOrderBook === "boolean" ? { enableOrderBook: payload.enableOrderBook } : {}),
+    ...(minimumOrderSizeMin !== undefined ? { minimumOrderSizeMin } : {}),
+    ...(minimumOrderSizeMax !== undefined ? { minimumOrderSizeMax } : {}),
+    ...(minimumTickSizeMin !== undefined ? { minimumTickSizeMin } : {}),
+    ...(minimumTickSizeMax !== undefined ? { minimumTickSizeMax } : {}),
+    ...(makerBaseFeeMin !== undefined ? { makerBaseFeeMin } : {}),
+    ...(makerBaseFeeMax !== undefined ? { makerBaseFeeMax } : {}),
+    ...(takerBaseFeeMin !== undefined ? { takerBaseFeeMin } : {}),
+    ...(takerBaseFeeMax !== undefined ? { takerBaseFeeMax } : {}),
+    ...(typeof payload.notificationsEnabled === "boolean"
+      ? { notificationsEnabled: payload.notificationsEnabled }
+      : {}),
+    ...(typeof payload.negRisk === "boolean" ? { negRisk: payload.negRisk } : {}),
+    ...(fpmm ? { fpmm } : {}),
+    ...(secondsDelayMin !== undefined ? { secondsDelayMin } : {}),
+    ...(secondsDelayMax !== undefined ? { secondsDelayMax } : {}),
+    ...(acceptingOrderTimestampMin !== undefined ? { acceptingOrderTimestampMin } : {}),
+    ...(acceptingOrderTimestampMax !== undefined ? { acceptingOrderTimestampMax } : {}),
+    ...(questionIdContains ? { questionIdContains: questionIdContains.trim() } : {}),
+    ...(typeof payload.rewardsHasRates === "boolean" ? { rewardsHasRates: payload.rewardsHasRates } : {}),
+    ...(rewardsMinSizeMin !== undefined ? { rewardsMinSizeMin } : {}),
+    ...(rewardsMinSizeMax !== undefined ? { rewardsMinSizeMax } : {}),
+    ...(rewardsMaxSpreadMin !== undefined ? { rewardsMaxSpreadMin } : {}),
+    ...(rewardsMaxSpreadMax !== undefined ? { rewardsMaxSpreadMax } : {}),
+    ...(iconContains ? { iconContains: iconContains.trim() } : {}),
+    ...(imageContains ? { imageContains: imageContains.trim() } : {}),
+    ...(descriptionContains ? { descriptionContains: descriptionContains.trim() } : {}),
+    ...(conditionIdContains ? { conditionIdContains: conditionIdContains.trim() } : {}),
+    ...(negRiskMarketIdContains ? { negRiskMarketIdContains: negRiskMarketIdContains.trim() } : {}),
+    ...(negRiskRequestIdContains ? { negRiskRequestIdContains: negRiskRequestIdContains.trim() } : {}),
+    ...(endDateIsoMin ? { endDateIsoMin } : {}),
+    ...(endDateIsoMax ? { endDateIsoMax } : {}),
+    ...(gameStartTimeMin ? { gameStartTimeMin } : {}),
+    ...(gameStartTimeMax ? { gameStartTimeMax } : {}),
+    ...(typeof payload.active === "boolean" ? { active: payload.active } : {}),
+    ...(typeof payload.closed === "boolean" ? { closed: payload.closed } : {}),
+    ...(typeof payload.archived === "boolean" ? { archived: payload.archived } : {}),
+    ...(typeof payload.isFiftyFiftyOutcome === "boolean"
+      ? { isFiftyFiftyOutcome: payload.isFiftyFiftyOutcome }
+      : {}),
+    ...(Array.isArray(payload.tags)
+      ? { tags: normalizeTagList(payload.tags) }
+      : {}),
+    ...(questionContainsRaw ? { questionContains: questionContainsRaw.trim() } : {}),
+    ...(marketSlugContainsRaw ? { marketSlugContains: marketSlugContainsRaw.trim() } : {}),
+  };
+}
+
 function buildDedupeKey(config: MarketDiscoveryConfig): string {
   return JSON.stringify({
     clobApiUrl: config.clobApiUrl,
     chainId: config.chainId,
+    maxMarkets: config.maxMarkets,
     wsUrl: config.wsUrl ?? null,
     wsConnectTimeoutMs: config.wsConnectTimeoutMs,
     wsChunkSize: config.wsChunkSize,
     marketFetchTimeoutMs: config.marketFetchTimeoutMs,
+    acceptingOrders: config.acceptingOrders,
+    minimumOrderSizeMin: config.minimumOrderSizeMin,
+    minimumOrderSizeMax: config.minimumOrderSizeMax,
+    minimumTickSizeMin: config.minimumTickSizeMin,
+    minimumTickSizeMax: config.minimumTickSizeMax,
+    makerBaseFeeMin: config.makerBaseFeeMin,
+    makerBaseFeeMax: config.makerBaseFeeMax,
+    takerBaseFeeMin: config.takerBaseFeeMin,
+    takerBaseFeeMax: config.takerBaseFeeMax,
+    enableOrderBook: config.enableOrderBook,
+    notificationsEnabled: config.notificationsEnabled,
+    negRisk: config.negRisk,
+    fpmm: config.fpmm,
+    secondsDelayMin: config.secondsDelayMin,
+    secondsDelayMax: config.secondsDelayMax,
+    acceptingOrderTimestampMin: config.acceptingOrderTimestampMin,
+    acceptingOrderTimestampMax: config.acceptingOrderTimestampMax,
+    questionIdContains: config.questionIdContains,
+    rewardsHasRates: config.rewardsHasRates,
+    rewardsMinSizeMin: config.rewardsMinSizeMin,
+    rewardsMinSizeMax: config.rewardsMinSizeMax,
+    rewardsMaxSpreadMin: config.rewardsMaxSpreadMin,
+    rewardsMaxSpreadMax: config.rewardsMaxSpreadMax,
+    iconContains: config.iconContains,
+    imageContains: config.imageContains,
+    descriptionContains: config.descriptionContains,
+    conditionIdContains: config.conditionIdContains,
+    negRiskMarketIdContains: config.negRiskMarketIdContains,
+    negRiskRequestIdContains: config.negRiskRequestIdContains,
+    endDateIsoMin: config.endDateIsoMin,
+    endDateIsoMax: config.endDateIsoMax,
+    gameStartTimeMin: config.gameStartTimeMin,
+    gameStartTimeMax: config.gameStartTimeMax,
+    active: config.active,
+    closed: config.closed,
+    archived: config.archived,
+    isFiftyFiftyOutcome: config.isFiftyFiftyOutcome,
+    tags: normalizeTagList(config.tags),
+    questionContains: config.questionContains,
+    marketSlugContains: config.marketSlugContains,
   });
 }
 
@@ -185,14 +406,29 @@ function toShell(run: DiscoveryRunRecord): DiscoveryRunSummary {
   };
 }
 
+function toActiveRunSummary(run: DiscoveryRunRecord): DiscoveryRunSummary {
+  return {
+    runId: run.id,
+    status: run.status,
+    dedupeKey: run.dedupeKey,
+    pollUrl: `/api/polymarket/market-channels/runs/${run.id}`,
+    requestId: run.requestId,
+  };
+}
+
 function runRecordToConfig(run: DiscoveryRunRecord): MarketDiscoveryConfig {
+  const requestPayload = run.requestPayload;
+  const parsedPayload = parseDiscoveryConfigFromPayload(requestPayload as Record<string, unknown>);
+
   return {
     clobApiUrl: run.clobApiUrl,
     chainId: run.chainId,
+    maxMarkets: parsedPayload.maxMarkets,
     wsUrl: run.wsUrl ?? undefined,
     wsConnectTimeoutMs: run.wsConnectTimeoutMs,
     wsChunkSize: run.wsChunkSize,
     marketFetchTimeoutMs: run.marketFetchTimeoutMs,
+    ...parsedPayload,
   };
 }
 
@@ -479,6 +715,93 @@ export async function getLatestRun(overrides?: Partial<DiscoveryServiceDeps>): P
   return getRun(latest.id, 0, 100, deps);
 }
 
+function isActiveRunStatus(status: DiscoveryRunRecord["status"]): boolean {
+  return status === "queued" || status === "running";
+}
+
+async function isRunActive(deps: DiscoveryServiceDeps, runId: string): Promise<boolean> {
+  const run = await deps.runRepository.findById(runId);
+  return !!(run && isActiveRunStatus(run.status));
+}
+
+export async function listActiveRuns(
+  limit = 50,
+  overrides?: Partial<DiscoveryServiceDeps>
+): Promise<ActiveRunsResponse> {
+  const deps = resolveDeps(overrides);
+  const rows = await deps.runRepository.findActiveRuns(limit);
+
+  const runs: ActiveRunSummary[] = rows.map((runRecord) => {
+    const readModel = rowToReadModel(runRecord);
+
+    return {
+      run: {
+        id: readModel.run.id,
+        status: runRecord.status,
+        dedupeKey: runRecord.dedupeKey,
+        requestedAt: readModel.run.requestedAt,
+        startedAt: readModel.run.startedAt,
+        completedAt: readModel.run.completedAt,
+        source: readModel.run.source,
+        marketCount: readModel.run.marketCount,
+        marketChannelCount: readModel.run.marketChannelCount,
+        errorCode: readModel.run.errorCode,
+        errorMessage: readModel.run.errorMessage,
+        errorRetryable: readModel.run.errorRetryable,
+        requestId: readModel.run.requestId,
+      },
+      pollUrl: toActiveRunSummary(runRecord).pollUrl,
+    };
+  });
+
+  return {
+    runs,
+    total: runs.length,
+  };
+}
+
+export async function cancelRun(
+  runId: string,
+  requestId?: string,
+  overrides?: Partial<DiscoveryServiceDeps>
+): Promise<DiscoveryRunSummary> {
+  const deps = resolveDeps(overrides);
+  const requestIdSafe = requestId || randomUUID();
+
+  const run = await deps.runRepository.findById(runId);
+  if (!run) {
+    throw mapRunNotFound(`Run ${runId} was not found`);
+  }
+
+  if (!isActiveRunStatus(run.status)) {
+    return toShell(run);
+  }
+
+  await deps.runRepository.updateRun(run.id, {
+    status: "failed",
+    completedAt: new Date(),
+    errorCode: "cancelled_by_user",
+    errorMessage: "Run cancelled by user",
+    errorRetryable: false,
+    errorDetails: {
+      requestId: requestIdSafe,
+      cancelledBy: "user",
+    },
+  });
+
+  await deps.cache.deleteActiveRunIdByDedupeKey(run.dedupeKey);
+  await deps.cache.clearCachedRun(run.id);
+  await deps.retryQueueRepository.markDead(run.id);
+
+  await emitRunEvent(deps.eventRepository, run.id, "run_cancelled", "run cancelled by user", {
+    requestId: requestIdSafe,
+    dedupeKey: run.dedupeKey,
+  });
+
+  const updatedRun = await deps.runRepository.findById(run.id);
+  return toShell(updatedRun ?? run);
+}
+
 export interface WaitResult {
   status: "running" | "queued" | "succeeded" | "failed" | "partial";
   runId: string;
@@ -488,6 +811,74 @@ export interface WaitResult {
   errorCode?: string | null;
   errorMessage?: string | null;
   errorRetryable?: boolean | null;
+}
+
+export interface ActiveRunSummary {
+  run: {
+    id: string;
+    status: "queued" | "running" | "partial" | "succeeded" | "failed";
+    dedupeKey: string;
+    requestedAt: string;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    source: {
+      clobApiUrl: string;
+      chainId: number;
+      wsUrl?: string;
+      wsConnectTimeoutMs: number;
+      wsChunkSize: number;
+      marketFetchTimeoutMs: number;
+      enableOrderBook?: boolean;
+      minimumTickSizeMin?: number;
+      minimumTickSizeMax?: number;
+      makerBaseFeeMin?: number;
+      makerBaseFeeMax?: number;
+      takerBaseFeeMin?: number;
+      takerBaseFeeMax?: number;
+      notificationsEnabled?: boolean;
+      negRisk?: boolean;
+      fpmm?: string;
+      secondsDelayMin?: number;
+      secondsDelayMax?: number;
+      acceptingOrderTimestampMin?: number;
+      acceptingOrderTimestampMax?: number;
+      questionIdContains?: string;
+      rewardsHasRates?: boolean;
+      rewardsMinSizeMin?: number;
+      rewardsMinSizeMax?: number;
+      rewardsMaxSpreadMin?: number;
+      rewardsMaxSpreadMax?: number;
+      iconContains?: string;
+      imageContains?: string;
+      descriptionContains?: string;
+      conditionIdContains?: string;
+      negRiskMarketIdContains?: string;
+      negRiskRequestIdContains?: string;
+      endDateIsoMin?: string;
+      endDateIsoMax?: string;
+      gameStartTimeMin?: string;
+      gameStartTimeMax?: string;
+      active?: boolean;
+      closed?: boolean;
+      archived?: boolean;
+      isFiftyFiftyOutcome?: boolean;
+      tags?: string[];
+      questionContains?: string;
+      marketSlugContains?: string;
+    };
+    marketCount: number;
+    marketChannelCount: number;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+    errorRetryable?: boolean | null;
+    requestId: string;
+  };
+  pollUrl: string;
+}
+
+export interface ActiveRunsResponse {
+  runs: ActiveRunSummary[];
+  total: number;
 }
 
 export async function waitForRunIfAllowed(
@@ -708,6 +1099,20 @@ async function runDiscoveryInBackground(
   const deps = resolveDeps(overrides);
 
   try {
+    if (!(await isRunActive(deps, runId))) {
+      return;
+    }
+
+    const publishProgress = async (
+      marketCount: number,
+      marketChannelCount: number
+    ): Promise<void> => {
+      await deps.runRepository.updateRun(runId, {
+        marketCount,
+        marketChannelCount,
+      });
+    };
+
     await deps.runRepository.updateRun(runId, {
       status: "running",
       startedAt: new Date(),
@@ -722,7 +1127,24 @@ async function runDiscoveryInBackground(
       dedupeKey,
     });
 
-    const result = await discoverMarketChannels(config);
+    const result = await discoverMarketChannels(config, (progress) =>
+      publishProgress(progress.marketCount, progress.marketChannelCount)
+    );
+
+    if (!(await isRunActive(deps, runId))) {
+      await emitRunEvent(
+        deps.eventRepository,
+        runId,
+        "run_cancelled",
+        "run was cancelled while processing discovery results",
+        {
+          dedupeKey,
+          requestId,
+        }
+      );
+
+      return;
+    }
 
     await deps.channelRepository.replaceChannels(runId, result.channels);
 
@@ -764,6 +1186,14 @@ async function runDiscoveryInBackground(
     const read = await getRun(runId, 0, 100, deps);
     await refreshRunCache(deps, runId, read);
   } catch (error) {
+    if (!(await isRunActive(deps, runId))) {
+      await emitRunEvent(deps.eventRepository, runId, "run_cancelled", "run cancelled during execution", {
+        dedupeKey,
+        requestId,
+      });
+      return;
+    }
+
     const converted = toHttpErrorResponse(error, requestId).body;
 
     logDiscoveryEvent("run_status", {
@@ -820,6 +1250,8 @@ export const discoveryRunService = {
   createOrAttachRun,
   getRun,
   getLatestRun,
+  listActiveRuns,
+  cancelRun,
   waitForRunIfAllowed,
   pruneExpiredRuns,
   startDiscoveryRunPruner,

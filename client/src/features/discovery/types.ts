@@ -12,10 +12,51 @@ export interface DiscoveryRunShell {
 export interface DiscoverySource {
   clobApiUrl: string;
   chainId: number;
+  maxMarkets?: number;
   wsUrl?: string;
   wsConnectTimeoutMs: number;
   wsChunkSize: number;
   marketFetchTimeoutMs: number;
+  acceptingOrders?: boolean;
+  enableOrderBook?: boolean;
+  minimumOrderSizeMin?: number;
+  minimumOrderSizeMax?: number;
+  minimumTickSizeMin?: number;
+  minimumTickSizeMax?: number;
+  makerBaseFeeMin?: number;
+  makerBaseFeeMax?: number;
+  takerBaseFeeMin?: number;
+  takerBaseFeeMax?: number;
+  notificationsEnabled?: boolean;
+  negRisk?: boolean;
+  fpmm?: string;
+  secondsDelayMin?: number;
+  secondsDelayMax?: number;
+  acceptingOrderTimestampMin?: number;
+  acceptingOrderTimestampMax?: number;
+  questionIdContains?: string;
+  rewardsHasRates?: boolean;
+  rewardsMinSizeMin?: number;
+  rewardsMinSizeMax?: number;
+  rewardsMaxSpreadMin?: number;
+  rewardsMaxSpreadMax?: number;
+  iconContains?: string;
+  imageContains?: string;
+  descriptionContains?: string;
+  conditionIdContains?: string;
+  negRiskMarketIdContains?: string;
+  negRiskRequestIdContains?: string;
+  endDateIsoMin?: string;
+  endDateIsoMax?: string;
+  gameStartTimeMin?: string;
+  gameStartTimeMax?: string;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  isFiftyFiftyOutcome?: boolean;
+  tags?: string[];
+  questionContains?: string;
+  marketSlugContains?: string;
 }
 
 export interface MarketChannelRecord {
@@ -37,6 +78,16 @@ export interface DiscoveryRun {
   marketCount: number;
   marketChannelCount: number;
   requestId: string;
+}
+
+export interface DiscoveryActiveRun {
+  run: DiscoveryRun;
+  pollUrl: string;
+}
+
+export interface DiscoveryActiveRunsResponse {
+  runs: DiscoveryActiveRun[];
+  total: number;
 }
 
 export interface DiscoveryChannelsPage {
@@ -76,10 +127,74 @@ export interface DiscoveryApiError {
 export interface StartDiscoveryRequest {
   clobApiUrl?: string;
   chainId: number;
+  maxMarkets?: number;
   wsUrl?: string;
   wsConnectTimeoutMs?: number;
   wsChunkSize?: number;
   marketFetchTimeoutMs?: number;
+  acceptingOrders?: boolean;
+  enableOrderBook?: boolean;
+  minimumOrderSizeMin?: number;
+  minimumOrderSizeMax?: number;
+  minimumTickSizeMin?: number;
+  minimumTickSizeMax?: number;
+  makerBaseFeeMin?: number;
+  makerBaseFeeMax?: number;
+  takerBaseFeeMin?: number;
+  takerBaseFeeMax?: number;
+  notificationsEnabled?: boolean;
+  negRisk?: boolean;
+  fpmm?: string;
+  secondsDelayMin?: number;
+  secondsDelayMax?: number;
+  acceptingOrderTimestampMin?: number;
+  acceptingOrderTimestampMax?: number;
+  questionIdContains?: string;
+  rewardsHasRates?: boolean;
+  rewardsMinSizeMin?: number;
+  rewardsMinSizeMax?: number;
+  rewardsMaxSpreadMin?: number;
+  rewardsMaxSpreadMax?: number;
+  iconContains?: string;
+  imageContains?: string;
+  descriptionContains?: string;
+  conditionIdContains?: string;
+  negRiskMarketIdContains?: string;
+  negRiskRequestIdContains?: string;
+  endDateIsoMin?: string;
+  endDateIsoMax?: string;
+  gameStartTimeMin?: string;
+  gameStartTimeMax?: string;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  isFiftyFiftyOutcome?: boolean;
+  tags?: string[];
+  questionContains?: string;
+  marketSlugContains?: string;
+}
+
+export interface StartDiscoveryEstimateRequest extends StartDiscoveryRequest {
+  sampleLimit?: number;
+}
+
+export interface DiscoveryEstimateResult {
+  requestId: string;
+  sampleLimit: number;
+  pagesScanned: number;
+  stoppedByLimit: boolean;
+  hasMore: boolean;
+  source: {
+    clobApiUrl: string;
+    chainId: number;
+    marketCount: number;
+    marketChannelCount: number;
+    sampleLimit: number;
+    pagesScanned: number;
+    stoppedByLimit: boolean;
+    hasMore: boolean;
+  };
+  channels: MarketChannelRecord[];
 }
 
 export interface DiscoveryPollResultShell {

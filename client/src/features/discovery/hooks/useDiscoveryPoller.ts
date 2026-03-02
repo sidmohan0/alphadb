@@ -75,12 +75,12 @@ function readStoredShell(storageKey: string): DiscoveryPersistedShell | null {
     return null;
   }
 
-  const raw = window.localStorage.getItem(storageKey);
-  if (!raw) {
-    return null;
-  }
-
   try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) {
+      return null;
+    }
+
     const parsed = JSON.parse(raw);
 
     if (
@@ -109,19 +109,23 @@ function writeStoredShell(storageKey: string, shell: DiscoveryRunShell | null): 
     return;
   }
 
-  if (!shell) {
-    window.localStorage.removeItem(storageKey);
-    return;
+  try {
+    if (!shell) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+
+    const payload: DiscoveryPersistedShell = {
+      pollUrl: shell.pollUrl,
+      runId: shell.runId,
+      requestId: shell.requestId,
+      createdAt: new Date().toISOString(),
+    };
+
+    window.localStorage.setItem(storageKey, JSON.stringify(payload));
+  } catch {
+    // Incognito/private mode or storage restrictions should not hard-fail discovery.
   }
-
-  const payload: DiscoveryPersistedShell = {
-    pollUrl: shell.pollUrl,
-    runId: shell.runId,
-    requestId: shell.requestId,
-    createdAt: new Date().toISOString(),
-  };
-
-  window.localStorage.setItem(storageKey, JSON.stringify(payload));
 }
 
 export function useDiscoveryPoller(userOptions: DiscoveryHookConfig = {}): {

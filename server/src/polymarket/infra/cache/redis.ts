@@ -45,7 +45,7 @@ export function getRedisClient(): Redis {
         const capped = Math.min(times * retryBaseMs, retryMaxMs);
         return capped;
       },
-      enableOfflineQueue: false,
+      enableOfflineQueue: true,
       lazyConnect: false,
       reconnectOnError: (error: Error) => {
         const shouldReconnect = parseBooleanEnv("REDIS_RECONNECT_ON_ERROR", true);
