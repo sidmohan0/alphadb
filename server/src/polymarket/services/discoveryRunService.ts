@@ -20,6 +20,10 @@ import {
 } from "../repositories/discoveryRun.repository";
 import { createDiscoveryRunWsScanRepository, DiscoveryRunWsScanRepository } from "../repositories/discoveryWsScan.repository";
 import { DiscoveryRunCache, createDiscoveryRunCache } from "../infra/cache/run-cache";
+import {
+  createDiscoveryRunEventRepository,
+  DiscoveryRunEventRepository,
+} from "../repositories/discoveryRunEvent.repository";
 
 const DEFAULT_SCOPE = "default";
 
@@ -29,6 +33,7 @@ interface DiscoveryServiceDeps {
   runRepository: DiscoveryRunRepository;
   channelRepository: DiscoveryChannelRepository;
   wsScanRepository: DiscoveryRunWsScanRepository;
+  eventRepository: DiscoveryRunEventRepository;
   cache: DiscoveryRunCache;
   runTtlSec: number;
   cacheTtlSec: number;
@@ -52,6 +57,7 @@ function resolveDeps(overrides?: Partial<DiscoveryServiceDeps>): DiscoveryServic
     runRepository: overrides?.runRepository ?? createDiscoveryRunRepository(),
     channelRepository: overrides?.channelRepository ?? createDiscoveryChannelRepository(),
     wsScanRepository: overrides?.wsScanRepository ?? createDiscoveryRunWsScanRepository(),
+    eventRepository: overrides?.eventRepository ?? createDiscoveryRunEventRepository(),
     cache: overrides?.cache ?? createDiscoveryRunCache(process.env.DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE === "1"),
     runTtlSec: overrides?.runTtlSec ?? parseIntEnv("DISCOVERY_RUN_TTL_SECONDS", 60 * 60 * 24),
     cacheTtlSec: overrides?.cacheTtlSec ?? parseIntEnv("DISCOVERY_RUN_CACHE_TTL_SECONDS", 10 * 60),
@@ -87,6 +93,25 @@ function logDiscoveryEvent(message: string, context: LogContext): void {
   }
 
   console.log(`[discovery-run] ${message}`, JSON.stringify(context));
+}
+
+async function emitRunEvent(
+  eventRepository: DiscoveryRunEventRepository,
+  runId: string,
+  eventType: string,
+  message: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
+  try {
+    await eventRepository.appendRunEvent(runId, eventType, message, metadata);
+  } catch (error) {
+    logDiscoveryEvent("run_event_failed", {
+      runId,
+      eventType,
+      message,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function toRunModel(
@@ -242,6 +267,17 @@ export async function createOrAttachRun(
       requestId: requestIdSafe,
     });
 
+    await emitRunEvent(
+      deps.eventRepository,
+      createdRunId,
+      "run_created",
+      "queued run created",
+      {
+        requestId: requestIdSafe,
+        dedupeKey,
+      }
+    );
+
     void runDiscoveryInBackground(createdRunId, config, requestIdSafe, dedupeKey, deps);
 
     return {
@@ -390,17 +426,30 @@ export async function waitForRunIfAllowed(
 
 export async function pruneExpiredRuns(overrides?: Partial<DiscoveryServiceDeps>): Promise<number> {
   const deps = resolveDeps(overrides);
-  const deleted = await deps.runRepository.pruneExpired(new Date());
+  const pruneResult = await deps.runRepository.pruneExpired(new Date());
 
-  if (deleted > 0) {
+  if (pruneResult.deleted > 0) {
     await deps.cache.clearLatestRunId(deps.scope);
+    await Promise.all(
+      pruneResult.runs.map(async (run) => {
+        await Promise.all([
+          deps.cache.clearCachedRun(run.runId),
+          deps.cache.deleteActiveRunIdByDedupeKey(run.dedupeKey),
+          emitRunEvent(deps.eventRepository, run.runId, "run_pruned", "run expired and removed", {
+            dedupeKey: run.dedupeKey,
+          }),
+        ]);
+      })
+    );
+
     logDiscoveryEvent("runs_pruned", {
-      deleted,
+      deleted: pruneResult.deleted,
       scope: deps.scope,
+      runs: pruneResult.runs.map((run) => run.runId),
     });
   }
 
-  return deleted;
+  return pruneResult.deleted;
 }
 
 export interface DiscoveryRunPrunerHandle {
@@ -464,6 +513,10 @@ async function runDiscoveryInBackground(
       runId,
     });
 
+    await emitRunEvent(deps.eventRepository, runId, "run_started", "run transitioned to running", {
+      dedupeKey,
+    });
+
     const result = await discoverMarketChannels(config);
 
     await deps.channelRepository.replaceChannels(runId, result.channels);
@@ -490,6 +543,17 @@ async function runDiscoveryInBackground(
       marketChannelCount: result.source.marketChannelCount,
     });
 
+    await emitRunEvent(
+      deps.eventRepository,
+      runId,
+      "run_succeeded",
+      "run completed successfully",
+      {
+        marketCount: result.source.marketCount,
+        marketChannelCount: result.source.marketChannelCount,
+      }
+    );
+
     const read = await getRun(runId, 0, 100, deps);
     await refreshRunCache(deps, runId, read);
   } catch (error) {
@@ -512,6 +576,18 @@ async function runDiscoveryInBackground(
       marketCount: 0,
       marketChannelCount: 0,
     });
+
+    await emitRunEvent(
+      deps.eventRepository,
+      runId,
+      "run_failed",
+      "run failed",
+      {
+        errorCode: converted.code,
+        errorMessage: converted.message,
+        retryable: converted.retryable,
+      }
+    );
   } finally {
     await deps.cache.deleteActiveRunIdByDedupeKey(dedupeKey);
     await deps.cache.releaseSlot("global");
@@ -527,6 +603,11 @@ export const discoveryRunService = {
   startDiscoveryRunPruner,
 };
 
-export { createDiscoveryRunRepository, createDiscoveryChannelRepository, createDiscoveryRunWsScanRepository };
+export {
+  createDiscoveryRunRepository,
+  createDiscoveryChannelRepository,
+  createDiscoveryRunWsScanRepository,
+  createDiscoveryRunEventRepository,
+};
 
 export type { DiscoveryServiceDeps };

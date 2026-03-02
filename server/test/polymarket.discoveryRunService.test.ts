@@ -9,9 +9,12 @@ import {
 import {
   createOrAttachRun,
   getRun,
+  getLatestRun,
+  pruneExpiredRuns,
 } from "../src/polymarket/services/discoveryRunService";
 import { DiscoveryRunCache } from "../src/polymarket/infra/cache/run-cache";
 import { DiscoveryRunRepository } from "../src/polymarket/repositories/discoveryRun.repository";
+import { DiscoveryRunEventRepository } from "../src/polymarket/repositories/discoveryRunEvent.repository";
 import { DiscoveryChannelRepository } from "../src/polymarket/repositories/discoveryChannel.repository";
 import { DiscoveryRunWsScanRepository } from "../src/polymarket/repositories/discoveryWsScan.repository";
 
@@ -118,7 +121,10 @@ function makeRepositoryMocks() {
         completedAt: patch.completedAt ? patch.completedAt.toISOString() : existing.completedAt,
       });
     }),
-    pruneExpired: vi.fn(async () => 0),
+    pruneExpired: vi.fn(async () => ({
+      deleted: 0,
+      runs: [],
+    })),
   };
 
   const channelRepository: DiscoveryChannelRepository = {
@@ -139,7 +145,17 @@ function makeRepositoryMocks() {
     getScan: vi.fn(async () => null),
   };
 
-  return { runRepository, channelRepository, wsScanRepository };
+  const eventRepository: DiscoveryRunEventRepository = {
+    appendRunEvent: vi.fn(async () => `event-${runs.size + 1}`),
+    listRunEvents: vi.fn(async () => []),
+  };
+
+  return {
+    runRepository,
+    channelRepository,
+    wsScanRepository,
+    eventRepository,
+  };
 }
 
 function makeCache(activeRunId?: string, slot = true): DiscoveryRunCache {
@@ -151,6 +167,9 @@ function makeCache(activeRunId?: string, slot = true): DiscoveryRunCache {
     getLatestRunId: vi.fn(async () => latestId || null),
     setLatestRunId: vi.fn(async (scope, runId) => {
       latestId = runId;
+    }),
+    clearLatestRunId: vi.fn(async () => {
+      latestId = "";
     }),
 
     getCachedRun: vi.fn(async () => null),
@@ -181,7 +200,7 @@ function makeCache(activeRunId?: string, slot = true): DiscoveryRunCache {
 describe("discovery run service", () => {
   it("returns active run for identical in-flight dedupe key", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
 
     const existing: DiscoveryRunSummary = {
       runId: "active-1",
@@ -225,6 +244,7 @@ describe("discovery run service", () => {
       runRepository,
       channelRepository,
       wsScanRepository,
+      eventRepository,
       cache: makeCache("active-1"),
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -239,13 +259,14 @@ describe("discovery run service", () => {
 
   it("returns explicit concurrency limit when slot is unavailable", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
 
     await expect(
       createOrAttachRun(config, "req-1", {
         runRepository,
         channelRepository,
         wsScanRepository,
+        eventRepository,
         cache: makeCache(undefined, false),
         runTtlSec: 3600,
         cacheTtlSec: 600,
@@ -263,7 +284,7 @@ describe("discovery run service", () => {
 
   it("returns paged run data", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
 
     const run: DiscoveryRunReadModel = {
       run: {
@@ -335,6 +356,7 @@ describe("discovery run service", () => {
       runRepository,
       channelRepository,
       wsScanRepository,
+      eventRepository,
       cache: makeCache("run-1"),
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -362,7 +384,7 @@ describe("discovery run service", () => {
 
   it("attaches to an active DB row when the in-memory/redis lock is absent", async () => {
     const config = makeConfig();
-    const { runRepository, channelRepository, wsScanRepository } = makeRepositoryMocks();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
 
     (runRepository.findActiveByDedupeKey as any).mockResolvedValue({
       id: "active-db",
@@ -398,6 +420,7 @@ describe("discovery run service", () => {
       runRepository,
       channelRepository,
       wsScanRepository,
+      eventRepository,
       cache: makeCache(undefined),
       runTtlSec: 3600,
       cacheTtlSec: 600,
@@ -408,5 +431,102 @@ describe("discovery run service", () => {
 
     expect(result.runId).toBe("active-db");
     expect(runRepository.createRun).not.toHaveBeenCalled();
+  });
+
+  it("falls back to DB latest when cached latest run id is missing", async () => {
+    const config = makeConfig();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const cache = makeCache("stale-latest-id");
+
+    const latestRow = {
+      id: "run-latest",
+      dedupeKey: JSON.stringify({
+        clobApiUrl: config.clobApiUrl,
+        chainId: config.chainId,
+        wsUrl: null,
+        wsConnectTimeoutMs: config.wsConnectTimeoutMs,
+        wsChunkSize: config.wsChunkSize,
+        marketFetchTimeoutMs: config.marketFetchTimeoutMs,
+      }),
+      status: "succeeded",
+      clobApiUrl: config.clobApiUrl,
+      chainId: config.chainId,
+      wsUrl: null,
+      wsConnectTimeoutMs: config.wsConnectTimeoutMs,
+      wsChunkSize: config.wsChunkSize,
+      marketFetchTimeoutMs: config.marketFetchTimeoutMs,
+      requestedAt: new Date(),
+      startedAt: new Date(),
+      completedAt: new Date(),
+      marketCount: 10,
+      marketChannelCount: 10,
+      errorCode: null,
+      errorMessage: null,
+      errorRetryable: null,
+      errorDetails: null,
+      requestId: "req-latest",
+      expiresAt: new Date(),
+    };
+
+    (runRepository.findById as any).mockImplementation(async (runId: string) => {
+      if (runId === "stale-latest-id") {
+        return null;
+      }
+
+      if (runId === "run-latest") {
+        return latestRow;
+      }
+
+      return null;
+    });
+
+    (runRepository.findLatest as any).mockResolvedValue(latestRow);
+
+    const read = await getLatestRun({
+      runRepository,
+      channelRepository,
+      wsScanRepository,
+      eventRepository,
+      cache,
+      runTtlSec: 3600,
+      cacheTtlSec: 600,
+      concurrencyLimit: 1,
+      semaphoreTtlSec: 30,
+      scope: "default",
+    });
+
+    expect(read.run.id).toBe("run-latest");
+    expect(read.run.marketCount).toBe(10);
+    expect(runRepository.findLatest).toHaveBeenCalledTimes(1);
+    expect((cache.setLatestRunId as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("default", "run-latest", 600);
+  });
+
+  it("cleans stale cache and dedupe state when pruning expired runs", async () => {
+    const config = makeConfig();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository } = makeRepositoryMocks();
+    const cache = makeCache();
+    const pruneSpy = runRepository.pruneExpired as unknown as ReturnType<typeof vi.fn>;
+
+    (runRepository.pruneExpired as any).mockResolvedValue({
+      deleted: 1,
+      runs: [{ runId: "run-1", dedupeKey: "dedupe-1" }],
+    });
+
+    const deleted = await pruneExpiredRuns({
+      runRepository,
+      channelRepository,
+      wsScanRepository,
+      eventRepository,
+      cache,
+      runTtlSec: 3600,
+      cacheTtlSec: 600,
+      concurrencyLimit: 1,
+      semaphoreTtlSec: 30,
+      scope: "default",
+    });
+
+    expect(deleted).toBe(1);
+    expect((cache.clearCachedRun as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("run-1");
+    expect((cache.deleteActiveRunIdByDedupeKey as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("dedupe-1");
   });
 });

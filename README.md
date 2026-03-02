@@ -75,13 +75,20 @@ set -a
 set +a
 ```
 
-Set `DISCOVERY_RUN_PRUNER_ENABLED=1` in `.env` if you want background cleanup enabled.
+For fresh environments, you can run schema bootstrapping automatically by setting:
 
-Alternatively, export inline for ad-hoc runs:
+```bash
+export DISCOVERY_REQUIRE_SCHEMA=1
+```
+
+This is useful in ephemeral infra (CI, ephemeral VMs). In long-lived environments, apply migrations explicitly as part of deployment.
+
+If you prefer ad-hoc env-only setup, export directly:
 
 ```bash
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/alphadb"
 export REDIS_URL="redis://localhost:6379"
+export DISCOVERY_REQUIRE_SCHEMA=1  # optional
 ```
 
 ### 4) Apply DB schema
@@ -142,12 +149,14 @@ curl "http://localhost:4000/api/polymarket/market-channels?chainId=137&waitMs=0"
 - `npm run test` — run unit/service tests
 - `npm run polymarket:market-channels` — run Polymarket discovery CLI
 - `npm run polymarket:discovery-migrate` — apply discovery run schema in Postgres
+- `npm run polymarket:discovery-schema` — run idempotent discovery schema bootstrapping/version check (without applying runtime-specific defaults)
 
 ### Server scripts
 
 - `npm run --workspace server test` — run server tests only
 - `npm run --workspace server test:integration` — optional integration run against real Postgres/Redis
 - `npm run --workspace server build` — compile server
+- `npm run --workspace server discovery:ensure-schema` — bootstrap/ensure schema version table and current DDL via ts-node
 - `npm run --workspace server discovery:migrate-runs` — apply schema via ts-node
 
 ## Build
@@ -285,13 +294,22 @@ npm run polymarket:market-channels -- --json
 - Run orchestration:
   - `DATABASE_URL` (**required**)
   - `REDIS_URL` (**required**)
-  - `DISCOVERY_SCOPE` (default: `default`)
+  - `DISCOVERY_REQUIRE_SCHEMA` (`1` to validate/apply migration on startup)
+  - `DISCOVERY_SCHEMA_TARGET_VERSION` (optional override, default: `1`)  - `DISCOVERY_SCOPE` (default: `default`)
   - `DISCOVERY_RUN_TTL_SECONDS` (default: `86400`)
   - `DISCOVERY_RUN_CACHE_TTL_SECONDS` (default: `600`)
   - `DISCOVERY_SEMAPHORE_TTL_SECONDS` (default: `60`)
-  - `DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE` (`1` to allow local fallback)
+  - `DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE` (`1` to allow local fallback; single-process only)
   - `DISCOVERY_RUN_PRUNER_ENABLED` (`1` to enable automatic stale-run pruning)
   - `DISCOVERY_PRUNE_INTERVAL_SECONDS` (default: `300`)
+
+- Redis client tuning:
+  - `REDIS_CONNECT_TIMEOUT_MS` (default: `2000`)
+  - `REDIS_COMMAND_TIMEOUT_MS` (default: `5000`)
+  - `REDIS_MAX_RETRIES_PER_REQUEST` (default: `3`)
+  - `REDIS_RETRY_BASE_MS` (default: `100`)
+  - `REDIS_RETRY_MAX_MS` (default: `2000`)
+  - `REDIS_RECONNECT_ON_ERROR` (`1`/`0`, default `1`)
 
 - Postgres pool tuning:
   - `PG_POOL_MAX` (default: `5`)

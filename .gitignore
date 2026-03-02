@@ -5,6 +5,10 @@ node_modules/
 server/dist/
 client/dist/
 
+# generated JS artifacts in TS source folders
+client/src/App.js
+client/src/main.js
+
 # logs
 npm-debug.log*
 yarn-debug.log*

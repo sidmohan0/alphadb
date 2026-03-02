@@ -1,6 +1,12 @@
 -- Polymarket discovery run schemas
 -- Run this in Postgres manually during deployment/migration setup.
 
+CREATE TABLE IF NOT EXISTS discovery_schema_migrations (
+  schema_name TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS discovery_runs (
   id TEXT PRIMARY KEY,
   dedupe_key TEXT NOT NULL,
@@ -30,11 +36,21 @@ CREATE TABLE IF NOT EXISTS discovery_runs (
 CREATE INDEX IF NOT EXISTS idx_discovery_runs_status_requested_at
   ON discovery_runs (status, requested_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_requested_at_desc
+  ON discovery_runs (requested_at DESC, id DESC);
+
 CREATE INDEX IF NOT EXISTS idx_discovery_runs_dedupe_status
   ON discovery_runs (dedupe_key, status);
 
 CREATE INDEX IF NOT EXISTS idx_discovery_runs_expires_at
   ON discovery_runs (expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_status_expires_at
+  ON discovery_runs (status, expires_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_discovery_runs_dedupe_active
+  ON discovery_runs (dedupe_key)
+  WHERE status IN ('queued', 'running');
 
 CREATE TABLE IF NOT EXISTS discovery_run_channels (
   id TEXT PRIMARY KEY,

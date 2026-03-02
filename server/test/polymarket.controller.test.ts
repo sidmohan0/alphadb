@@ -146,7 +146,7 @@ describe("Polymarket discovery controller", () => {
     expect(response.body).toMatchObject(runResult);
   });
 
-  it("returns 400 for invalid input", async () => {
+  it("returns 400 for invalid offset", async () => {
     const response = await request(app)
       .get("/api/polymarket/market-channels/runs/run-1?offset=abc")
       .expect(400)
@@ -158,6 +158,22 @@ describe("Polymarket discovery controller", () => {
       details: {
         component: "controller",
         field: "offset",
+      },
+    });
+  });
+
+  it("returns 400 for non-positive limit", async () => {
+    const response = await request(app)
+      .get("/api/polymarket/market-channels/runs/run-1?limit=0")
+      .expect(400)
+      .expect("Content-Type", /json/);
+
+    expect(response.body).toMatchObject({
+      error: "Failed to discover market channels",
+      code: "invalid_input",
+      details: {
+        component: "controller",
+        field: "limit",
       },
     });
   });

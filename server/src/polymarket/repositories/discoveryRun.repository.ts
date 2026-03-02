@@ -19,7 +19,7 @@ export interface DiscoveryRunRepository {
   findActiveByDedupeKey(dedupeKey: string): Promise<DiscoveryRunRecord | null>;
   findLatest(): Promise<DiscoveryRunRecord | null>;
   updateRun(runId: string, patch: DiscoveryRunPatch): Promise<void>;
-  pruneExpired(before: Date): Promise<number>;
+  pruneExpired(before: Date): Promise<{ deleted: number; runs: { runId: string; dedupeKey: string }[] }>;
 }
 
 export interface DiscoveryRunRecord {
@@ -216,9 +216,18 @@ export class DbDiscoveryRunRepository implements DiscoveryRunRepository {
     await this.pool.query(`UPDATE discovery_runs SET ${fields.join(", ")} WHERE id=$${index}`, values);
   }
 
-  async pruneExpired(before: Date): Promise<number> {
-    const result = await this.pool.query("DELETE FROM discovery_runs WHERE expires_at < $1", [before]);
-    return result.rowCount ?? 0;
+  async pruneExpired(before: Date): Promise<{ deleted: number; runs: { runId: string; dedupeKey: string }[] }> {
+    const result = await this.pool.query(
+      "DELETE FROM discovery_runs WHERE expires_at < $1 RETURNING id, dedupe_key",
+      [before]
+    );
+
+    const rows = result.rows.map((row) => ({
+      runId: String(row.id),
+      dedupeKey: String(row.dedupe_key),
+    }));
+
+    return { deleted: result.rowCount ?? 0, runs: rows };
   }
 }
 

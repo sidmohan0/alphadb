@@ -80,6 +80,16 @@ This applies:
   - `discovery_run_channels`
   - `discovery_run_ws_scans`
   - `discovery_run_events`
+  - `discovery_schema_migrations`
+
+You can also let the app enforce schema state on startup with:
+
+```bash
+export DISCOVERY_REQUIRE_SCHEMA=1
+npm run dev
+```
+
+The startup check writes `discovery_schema_migrations.schema_name='discovery_runs_schema'` with version 1 when up-to-date.
 
 ### Local operator runbook (single command path)
 
@@ -93,7 +103,10 @@ set -a
 . ./.env
 set +a
 
-# 3) apply schema
+# 3) run the stack (migration can be automatic with DISCOVERY_REQUIRE_SCHEMA=1)
+DISCOVERY_REQUIRE_SCHEMA=1 DISCOVERY_SCHEMA_TARGET_VERSION=1 npm run dev
+
+# or run explicit migration beforehand if you prefer manual control
 npm run polymarket:discovery-migrate
 
 # 4) run the stack with optional pruning
@@ -122,9 +135,11 @@ DISCOVERY_RUN_PRUNER_ENABLED=1 npm run start
 - ✅ Run pruning job:
   - `startDiscoveryRunPruner` + `DISCOVERY_RUN_PRUNER_ENABLED`
 - ✅ Cache invalidation on prune:
-  - Latest-run cache key is refreshed when stale
-- ✅ Structured run lifecycle logs:
-  - State transitions logged (`queued`, `running`, `succeeded`, `failed`).
+  - Pruned run IDs now clear cached run payloads and dedupe keys to avoid stale attachments.
+- ✅ Structured run lifecycle logs/events:
+  - State transitions logged in `discovery_run_events` for audit and troubleshooting.
+- ✅ Startup migration handling:
+  - `DISCOVERY_REQUIRE_SCHEMA=1` gates schema bootstrap/update at boot.
 - ✅ Integration verification path:
   - `npm run --workspace server test:integration`
 

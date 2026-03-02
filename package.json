@@ -9,6 +9,7 @@
     "start": "npm run start --workspace server",
     "test": "npm run test --workspace server",
     "polymarket:market-channels": "ts-node --transpile-only server/src/polymarketMarketChannels.ts",
+    "polymarket:discovery-schema": "npm run discovery:ensure-schema --workspace server",
     "polymarket:discovery-migrate": "npm run discovery:migrate-runs --workspace server"
   },
   "workspaces": [

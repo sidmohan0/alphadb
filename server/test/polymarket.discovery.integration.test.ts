@@ -1,13 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "fs";
-import { resolve } from "path";
 
 import { createDiscoveryRunRepository } from "../src/polymarket/repositories/discoveryRun.repository";
 import { createDiscoveryChannelRepository } from "../src/polymarket/repositories/discoveryChannel.repository";
 import { createDiscoveryRunWsScanRepository } from "../src/polymarket/repositories/discoveryWsScan.repository";
 import { createDiscoveryRunCache } from "../src/polymarket/infra/cache/run-cache";
 import { closeRedisClient } from "../src/polymarket/infra/cache/redis";
-import { closePgPool, getPgPool } from "../src/polymarket/infra/db/postgres";
+import { closePgPool } from "../src/polymarket/infra/db/postgres";
+import { ensureDiscoverySchema } from "../src/polymarket/maintenance/discoverySchema";
 import { getRun, pruneExpiredRuns } from "../src/polymarket/services/discoveryRunService";
 
 const hasIntegrationConfig = Boolean(process.env.DISCOVERY_INTEGRATION_TESTS && process.env.DATABASE_URL && process.env.REDIS_URL);
@@ -30,12 +29,7 @@ if (hasIntegrationConfig) {
     };
 
     beforeAll(async () => {
-      const pool = getPgPool();
-      const localSchemaPath = resolve(process.cwd(), "src/polymarket/infra/db/schemas.sql");
-      const fallbackSchemaPath = resolve(process.cwd(), "server/src/polymarket/infra/db/schemas.sql");
-      const schemaPath = existsSync(localSchemaPath) ? localSchemaPath : fallbackSchemaPath;
-      const schema = readFileSync(schemaPath, "utf8");
-      await pool.query(schema);
+      await ensureDiscoverySchema({ closePoolAfter: false });
     });
 
     afterEach(async () => {

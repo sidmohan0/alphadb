@@ -13,6 +13,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
@@ -25,6 +27,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    volumes:
+      - redisdata:/data
 
 volumes:
   pgdata:
+  redisdata:

@@ -1,18 +1,12 @@
-import { readFileSync } from "fs";
-import { resolve } from "path";
-
-import { closePgPool, getPgPool } from "../infra/db/postgres";
+import { ensureDiscoverySchema } from "./discoverySchema";
 
 async function applySqlMigration(): Promise<void> {
-  const pool = getPgPool();
-  const sqlPath = resolve(__dirname, "../infra/db/schemas.sql");
-  const sql = readFileSync(sqlPath, "utf8");
+  const result = await ensureDiscoverySchema({ closePoolAfter: true });
 
-  try {
-    await pool.query(sql);
-    console.log("Discovery run schema applied successfully.");
-  } finally {
-    await closePgPool();
+  if (result.applied) {
+    console.log(`Discovery run schema upgraded from v${result.from} to v${result.to}.`);
+  } else {
+    console.log(`Discovery run schema already at v${result.to}; no migration needed.`);
   }
 }
 

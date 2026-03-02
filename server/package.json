@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "polymarket:market-channels": "ts-node --transpile-only src/polymarketMarketChannels.ts",
+    "discovery:ensure-schema": "ts-node --transpile-only src/polymarket/maintenance/discoverySchema.ts",
     "discovery:migrate-runs": "ts-node --transpile-only src/polymarket/maintenance/migrateDiscoveryRuns.ts",
     "test": "vitest run",
     "test:integration": "DISCOVERY_INTEGRATION_TESTS=1 vitest run test/polymarket.discovery.integration.test.ts"
