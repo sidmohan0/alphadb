@@ -11,6 +11,7 @@ import {
   getRun,
   getLatestRun,
   pruneExpiredRuns,
+  startDiscoveryRunRetryWorker,
 } from "../src/polymarket/services/discoveryRunService";
 import { DiscoveryRunCache } from "../src/polymarket/infra/cache/run-cache";
 import { DiscoveryRunRepository } from "../src/polymarket/repositories/discoveryRun.repository";
@@ -568,6 +569,151 @@ describe("discovery run service", () => {
         errorRetryable: true,
       })
     );
+  });
+
+  it("retries a claimed queued/failed run via background retry worker", async () => {
+    const config = makeConfig();
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
+    const cache = makeCache();
+
+    await runRepository.createRun({
+      dedupeKey: JSON.stringify({
+        clobApiUrl: config.clobApiUrl,
+        chainId: config.chainId,
+        wsUrl: null,
+        wsConnectTimeoutMs: config.wsConnectTimeoutMs,
+        wsChunkSize: config.wsChunkSize,
+        marketFetchTimeoutMs: config.marketFetchTimeoutMs,
+      }),
+      status: "failed",
+      config,
+      requestId: "req-worker",
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    vi.spyOn(marketChannelDiscoveryService, "discoverMarketChannels").mockResolvedValue({
+      source: {
+        clobApiUrl: config.clobApiUrl,
+        chainId: config.chainId,
+        marketCount: 2,
+        marketChannelCount: 2,
+      },
+      channels: [
+        {
+          assetId: "asset-1",
+          conditionId: "cond",
+          question: "Q1",
+          outcome: "YES",
+          marketSlug: "slug",
+        },
+      ],
+      wsScan: null,
+    });
+
+    (retryQueueRepository.claimDue as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: "retry-item-1",
+        runId: "run-1",
+        attempt: 1,
+        maxAttempts: 3,
+        nextAttemptAt: new Date(),
+        status: "queued",
+        lastErrorCode: "clob_request_timeout",
+        lastErrorMessage: "timeout",
+        lastErrorRetryable: true,
+        lastErrorDetails: null,
+      },
+    ]);
+
+    const worker = startDiscoveryRunRetryWorker({
+      runRepository,
+      channelRepository,
+      wsScanRepository,
+      eventRepository,
+      retryQueueRepository,
+      cache,
+      runTtlSec: 3600,
+      cacheTtlSec: 600,
+      concurrencyLimit: 1,
+      semaphoreTtlSec: 30,
+      retryWorkerBatchSize: 10,
+      retryWorkerIntervalSeconds: 1_000,
+      scope: "default",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect((retryQueueRepository.claimDue as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(expect.any(Date), 10);
+    expect(runRepository.findById).toHaveBeenCalledWith("run-1");
+    expect(channelRepository.replaceChannels).toHaveBeenCalledWith("run-1", [
+      {
+        assetId: "asset-1",
+        conditionId: "cond",
+        question: "Q1",
+        outcome: "YES",
+        marketSlug: "slug",
+      },
+    ]);
+    expect(runRepository.updateRun).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({ status: "running" })
+    );
+    expect(runRepository.updateRun).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({
+        status: "succeeded",
+        marketCount: 2,
+        marketChannelCount: 2,
+      })
+    );
+    expect((retryQueueRepository.markDone as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("run-1");
+
+    worker.stop();
+  });
+
+  it("marks retry queue entries dead when claimed run is missing", async () => {
+    const { runRepository, channelRepository, wsScanRepository, eventRepository, retryQueueRepository } = makeRepositoryMocks();
+
+    (retryQueueRepository.claimDue as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: "retry-item-2",
+        runId: "missing-run",
+        attempt: 1,
+        maxAttempts: 3,
+        nextAttemptAt: new Date(),
+        status: "queued",
+        lastErrorCode: "clob_request_timeout",
+        lastErrorMessage: "timeout",
+        lastErrorRetryable: true,
+        lastErrorDetails: null,
+      },
+    ]);
+
+    const worker = startDiscoveryRunRetryWorker({
+      runRepository,
+      channelRepository,
+      wsScanRepository,
+      eventRepository,
+      retryQueueRepository,
+      cache: makeCache(),
+      runTtlSec: 3600,
+      cacheTtlSec: 600,
+      concurrencyLimit: 1,
+      semaphoreTtlSec: 30,
+      retryWorkerBatchSize: 10,
+      retryWorkerIntervalSeconds: 1_000,
+      scope: "default",
+    });
+
+    (runRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect((retryQueueRepository.claimDue as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(expect.any(Date), 10);
+    expect((retryQueueRepository.markDead as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith("missing-run");
+    expect((runRepository.updateRun as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+
+    worker.stop();
   });
 
   it("cleans stale cache and dedupe state when pruning expired runs", async () => {
