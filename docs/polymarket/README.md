@@ -81,15 +81,34 @@ This applies:
   - `discovery_run_ws_scans`
   - `discovery_run_events`
 
-### Local operator runbook
-
-- Spin up dependencies:
+### Local operator runbook (single command path)
 
 ```bash
+# 1) start infra
 docker-compose -f docker-compose.discovery-stack.yml up -d
+
+# 2) configure required env
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/alphadb"
+export REDIS_URL="redis://localhost:6379"
+
+# 3) apply schema
+npm run polymarket:discovery-migrate
+
+# 4) run the stack with optional pruning
+DISCOVERY_RUN_PRUNER_ENABLED=1 npm run dev
 ```
 
-- Start API and verify run creation + polling works.
+### Smoke checks after startup
+
+```bash
+# should return "run_not_found" until at least one run exists
+curl -i http://localhost:4000/api/polymarket/market-channels/runs/latest
+
+# start + poll a run
+RUN_ID=$(curl -s -X POST http://localhost:4000/api/polymarket/market-channels/runs -H 'Content-Type: application/json' -d '{"chainId":137}' | jq -r '.runId')
+curl "http://localhost:4000/api/polymarket/market-channels/runs/$RUN_ID"
+```
+
 - Enable pruner in non-idle environments:
 
 ```bash
@@ -106,20 +125,6 @@ DISCOVERY_RUN_PRUNER_ENABLED=1 npm run start
   - State transitions logged (`queued`, `running`, `succeeded`, `failed`).
 - ✅ Integration verification path:
   - `npm run --workspace server test:integration`
-
-## Suggested manual checks
-
-- Query a run:
-
-```bash
-curl http://localhost:4000/api/polymarket/market-channels/runs/<runId>
-```
-
-- Poll via compatibility wrapper:
-
-```bash
-curl "http://localhost:4000/api/polymarket/market-channels?chainId=137&waitMs=250"
-```
 
 ## Notes
 
