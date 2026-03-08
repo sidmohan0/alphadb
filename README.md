@@ -1,0 +1,116 @@
+# AlphaDB Polymarket ANSI TUI
+
+Terminal-first Polymarket browser built for fast market discovery, quick search, and readable price action without leaving the shell.
+
+## What It Does
+
+- Renders live Polymarket outcome history as ANSI candlesticks
+- Shows trending markets ranked by 24h volume
+- Supports fuzzy market search with local ranking bonuses
+- Persists saved markets and recent views between runs
+- Keeps navigation keyboard-first with immediate chart preview on selection
+
+## Getting Started
+
+### Requirements
+
+- Node.js 18+
+- npm 9+
+
+### Install
+
+```bash
+npm install
+```
+
+### Run In Development
+
+```bash
+npm run dev
+```
+
+### Build And Run
+
+```bash
+npm run build
+npm start
+```
+
+## Keyboard Controls
+
+### Navigation
+
+- `j` / `k` or arrow keys: move selection
+- `t`: show trending markets
+- `v`: show saved markets
+- `u`: show recent markets
+- `/`: focus search
+- `Tab`: move focus between list and search
+- `Esc`: leave search and clear transient errors
+
+### Market Actions
+
+- `f`: save or unsave the selected market
+- `o`: cycle market outcome
+- `[` / `]`: change chart range
+- `r`: refresh data
+- `Enter`: run search or reload chart
+
+### App
+
+- `?`: toggle help
+- `q`: quit
+
+## Search Ranking
+
+Search combines live Gamma `public-search` results with local candidates from:
+
+- trending markets
+- saved markets
+- recent markets
+
+Ranking favors:
+
+- strong question/title matches
+- prefix and substring matches
+- subsequence-style fuzzy matches
+- markets already returned by Gamma
+- saved and recent markets
+- higher-volume and higher-liquidity markets
+
+## Persistence
+
+The app stores saved markets and recents at:
+
+```bash
+~/.config/alphadb-tui/state.json
+```
+
+Override the location with:
+
+```bash
+ALPHADB_TUI_STATE_PATH=/custom/path/state.json
+```
+
+## Data Sources
+
+- Gamma API: trending markets, market metadata, search
+- CLOB API: outcome price history
+
+## Project Layout
+
+```text
+src/index.ts              App state, input loop, list mode switching
+src/api/polymarket.ts     Gamma and CLOB adapters
+src/render/renderer.ts    ANSI layout and chart rendering
+src/lib/fuzzy.ts          Local fuzzy ranking
+src/lib/storage.ts        Persistent saved/recent state
+docs/                     Plans and working notes
+```
+
+## Verification
+
+```bash
+npm run typecheck
+npm run build
+```
