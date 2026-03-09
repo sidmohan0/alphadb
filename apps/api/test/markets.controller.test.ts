@@ -4,6 +4,7 @@ import request from "supertest";
 import { createApp } from "../src/app";
 import { MarketSummary, PricePoint } from "../src/markets/types";
 import { marketDataService } from "../src/markets/services/marketDataService";
+import { clearMarketCache } from "../src/markets/services/marketCache";
 
 describe("Markets controller", () => {
   const app = createApp();
@@ -36,6 +37,7 @@ describe("Markets controller", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    clearMarketCache();
   });
 
   it("returns provider trending markets", async () => {
@@ -63,6 +65,24 @@ describe("Markets controller", () => {
       provider: "polymarket",
       query: "fed",
       markets: [market],
+    });
+  });
+
+  it("returns unified trending markets", async () => {
+    vi.spyOn(marketDataService, "getUnifiedTrendingMarkets").mockResolvedValue({
+      polymarket: [market],
+      kalshi: [{ ...market, id: "kalshi:abc", provider: "kalshi", symbol: "KXABC" }],
+    });
+
+    const response = await request(app)
+      .get("/api/markets/unified/trending?limit=5")
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      markets: {
+        polymarket: [market],
+        kalshi: [{ id: "kalshi:abc", provider: "kalshi" }],
+      },
     });
   });
 

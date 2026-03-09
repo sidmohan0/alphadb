@@ -67,6 +67,19 @@ router.get("/trending", async (req, res) => {
   }
 });
 
+router.get("/unified/trending", async (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+
+  try {
+    const limit = parsePositiveInt(req.query.limit, "limit", 16);
+    const markets = await marketDataService.getUnifiedTrendingMarkets(limit);
+    res.json({ markets, requestId });
+  } catch (error) {
+    const { status, body } = toHttpErrorResponse(error, requestId);
+    res.status(status).json(body);
+  }
+});
+
 router.get("/search", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 

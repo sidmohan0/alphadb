@@ -1,6 +1,13 @@
 import process from "node:process";
 
-import { applyProviderTickerUpdate, buildCandlesForMarket, fetchHistoryForMarket, fetchTrendingMarketsForProvider, searchMarketsForProvider } from "./api/provider.js";
+import {
+  applyProviderTickerUpdate,
+  buildCandlesForMarket,
+  fetchHistoryForMarket,
+  fetchTrendingMarketsForProvider,
+  fetchUnifiedTrendingMarkets,
+  searchMarketsForProvider,
+} from "./api/provider.js";
 import { ansi } from "./lib/ansi.js";
 import { KalshiTickerStream } from "./lib/kalshiLive.js";
 import {
@@ -494,10 +501,7 @@ async function loadUnifiedTrending(): Promise<void> {
   draw();
 
   try {
-    const [polymarketMarkets, kalshiMarkets] = await Promise.all([
-      fetchTrendingMarketsForProvider("polymarket", 16),
-      fetchTrendingMarketsForProvider("kalshi", 16),
-    ]);
+    const { polymarket: polymarketMarkets, kalshi: kalshiMarkets } = await fetchUnifiedTrendingMarkets(16);
 
     state.unifiedPanels.polymarket.markets = polymarketMarkets;
     state.unifiedPanels.kalshi.markets = kalshiMarkets;

@@ -22,6 +22,16 @@ export function hasBackendMarketApi(): boolean {
   return Boolean(BACKEND_BASE_URL);
 }
 
+export async function fetchBackendUnifiedTrendingMarkets(limit: number): Promise<Record<ProviderId, MarketSummary[]>> {
+  const url = new URL(`${BACKEND_BASE_URL}/markets/unified/trending`);
+  url.searchParams.set("limit", String(limit));
+  const payload = await fetchJson<{ markets?: Partial<Record<ProviderId, MarketSummary[]>> }>(url.toString());
+  return {
+    polymarket: payload.markets?.polymarket ?? [],
+    kalshi: payload.markets?.kalshi ?? [],
+  };
+}
+
 export async function fetchBackendTrendingMarkets(provider: ProviderId, limit: number): Promise<MarketSummary[]> {
   const url = new URL(`${BACKEND_BASE_URL}/markets/trending`);
   url.searchParams.set("provider", provider);

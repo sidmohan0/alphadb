@@ -1,4 +1,10 @@
-import { fetchBackendMarketHistory, fetchBackendSearchCandidates, fetchBackendTrendingMarkets, hasBackendMarketApi } from "./backend.js";
+import {
+  fetchBackendMarketHistory,
+  fetchBackendSearchCandidates,
+  fetchBackendTrendingMarkets,
+  fetchBackendUnifiedTrendingMarkets,
+  hasBackendMarketApi,
+} from "./backend.js";
 import { buildCandles, fetchMarketHistory, fetchTrendingMarkets, searchMarkets } from "./polymarket.js";
 import {
   applyKalshiTickerUpdate,
@@ -31,6 +37,25 @@ export async function fetchTrendingMarketsForProvider(
   return provider === "kalshi"
     ? fetchKalshiTrendingMarkets(limit)
     : fetchTrendingMarkets(limit);
+}
+
+export async function fetchUnifiedTrendingMarkets(
+  limitPerProvider: number,
+): Promise<Record<ProviderId, MarketSummary[]>> {
+  if (hasBackendMarketApi()) {
+    try {
+      return await fetchBackendUnifiedTrendingMarkets(limitPerProvider);
+    } catch {
+      // Fall back to direct-provider mode if the backend is unavailable.
+    }
+  }
+
+  const [polymarket, kalshi] = await Promise.all([
+    fetchTrendingMarketsForProvider("polymarket", limitPerProvider),
+    fetchTrendingMarketsForProvider("kalshi", limitPerProvider),
+  ]);
+
+  return { polymarket, kalshi };
 }
 
 export async function searchMarketsForProvider(
