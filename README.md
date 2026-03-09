@@ -1,40 +1,48 @@
-# Polymarket Discovery Service (TypeScript Monorepo)
+# AlphaDB
 
 ![Homepage screenshot](docs/screenshots/homepage.png)
 
-A production-oriented TypeScript starter that focuses on **Polymarket market-channel discovery** with:
+AlphaDB is a prediction-market platform monorepo. It currently contains:
 
-- a layered backend architecture (controller / service / infra)
-- REST + websocket discovery orchestration
-- explicit empty-state handling
-- structured error contracts and retry hints
-- distributed dedupe/concurrency protections
-- Postgres + Redis-backed async run persistence and polling
+- `apps/api` - the production-oriented backend for market ingestion, discovery runs, persistence, and future shared APIs
+- `apps/web` - the browser client for the backend-backed discovery workflows
+- `apps/tui` - the terminal-first market workspace for Polymarket and Kalshi with search, split view, saved markets, and ANSI charts
 
-The repo also includes a lightweight full-stack shell (Express + React/Vite) so the service can be consumed locally from a frontend with minimal extra wiring.
+The repo is in a Phase 1 convergence step: the legacy Polymarket discovery service and the newer TUI now live in one codebase so the TUI can progressively move onto backend APIs without a rewrite.
 
-## Highlights
+## Direction
 
-- **Modular backend** in `server/` with a dedicated `polymarket` domain module
-- **Async run lifecycle** with polling and latest-run bootstrap APIs
-- **Query parsing + validation** in controller layer
-- **Typed error mapping** with stable response codes
-- **Distributed in-flight dedupe** for identical request configs
-- **Concurrency ceiling** for unique discovery runs (default `4`)
-- **Postgres connection pooling** via `PG_POOL_MAX`, etc.
-- **Run-pruning scheduler** for stale run cleanup
-- **Optional integration tests** using real Postgres + Redis
+The target shape is:
 
----
+- one monorepo
+- one canonical market model
+- one backend service layer for search, trending, history, realtime delivery, and user state
+- multiple clients, starting with web and TUI
 
-## Local setup (recommended)
+Architecture notes and accepted decisions live in:
 
-### 0) Prereqs
+- `docs/README.md`
+- `docs/adrs/README.md`
+- `docs/checklists/001-backend-convergence-decision-checklist.md`
+- `docs/plans/002-phase-1-backend-convergence.md`
 
-- Node.js 18+
-- npm 9+
+## Workspace Layout
 
-### 1) Clone and install
+```text
+apps/
+  api/   Express + TypeScript backend
+  web/   React + Vite web client
+  tui/   ANSI terminal client
+docs/
+  adrs/
+  checklists/
+  plans/
+  polymarket/
+```
+
+## Local Setup
+
+### 1. Install
 
 ```bash
 git clone https://github.com/sidmohan0/alphadb.git
@@ -42,371 +50,120 @@ cd alphadb
 npm install
 ```
 
-### 2) Start local dependencies
+### 2. Start local infra for backend work
 
-Start the included stack (Postgres + Redis):
-
-```bash
-docker-compose -f docker-compose.discovery-stack.yml up -d
-```
-
-This starts:
-
-- Postgres on `localhost:5432`
-- Redis on `localhost:6379`
-
-Verify they are healthy before continuing:
+The backend discovery stack uses Postgres and Redis:
 
 ```bash
-docker compose -f docker-compose.discovery-stack.yml ps
+docker compose -f docker-compose.discovery-stack.yml up -d
 ```
 
-### 3) Configure environment
+Expected ports:
 
-A starter `.env.example` is included:
+- Postgres: `localhost:5432`
+- Redis: `localhost:6379`
+- API: `http://localhost:4000`
+- Web: `http://localhost:5173`
+
+### 3. Configure environment
 
 ```bash
 cp .env.example .env
-```
-
-Load it in your shell for local sessions:
-
-```bash
 set -a
 . ./.env
 set +a
 ```
 
-For fresh environments, you can run schema bootstrapping automatically by setting:
-
-```bash
-export DISCOVERY_REQUIRE_SCHEMA=1
-```
-
-This is useful in ephemeral infra (CI, ephemeral VMs). In long-lived environments, apply migrations explicitly as part of deployment.
-
-If you prefer ad-hoc env-only setup, export directly:
+For ad hoc local sessions, the backend mainly needs:
 
 ```bash
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/alphadb"
 export REDIS_URL="redis://localhost:6379"
-export DISCOVERY_REQUIRE_SCHEMA=1  # optional
+export DISCOVERY_REQUIRE_SCHEMA=1
 ```
 
-### 4) Apply DB schema
+### 4. Apply backend schema
 
 ```bash
 npm run polymarket:discovery-migrate
 ```
 
-This runs the SQL migration at:
-`server/src/polymarket/infra/db/schemas.sql`
+This applies:
 
-### 5) Run the app
+- `apps/api/src/polymarket/infra/db/schemas.sql`
+
+## Development
+
+Run the backend and web app together:
 
 ```bash
-# same terminal, with DATABASE_URL + REDIS_URL set
 npm run dev
 ```
 
-If you want cleanup of stale runs in local dev too, enable pruner:
+Run the TUI separately:
 
 ```bash
-DISCOVERY_RUN_PRUNER_ENABLED=1 npm run dev
+npm run dev:tui
 ```
 
-Expected services:
+Useful workspace-scoped commands:
 
-- Frontend: `http://localhost:5173`
-- API: `http://localhost:4000`
+- `npm run build` - build api, web, and tui
+- `npm run test` - run backend tests
+- `npm run typecheck:tui` - typecheck the TUI only
+- `npm run polymarket:market-channels` - run the backend Polymarket CLI
+- `npm run polymarket:discovery-schema` - ensure discovery schema version state
+- `npm run polymarket:discovery-migrate` - apply discovery schema
 
----
+## Current Product Surfaces
 
-## Useful API smoke checks
+### API
 
-After startup:
+`apps/api` owns the durable backend primitives:
 
-```bash
-# should return a structured run-not-found error (DB is empty initially)
-curl -i http://localhost:4000/api/polymarket/market-channels/runs/latest
+- Polymarket discovery runs
+- async orchestration and dedupe
+- Postgres persistence
+- Redis-backed coordination
+- migration and maintenance scripts
 
-# start a discovery run (returns shell immediately)
-curl -X POST http://localhost:4000/api/polymarket/market-channels/runs \
-  -H "Content-Type: application/json" \
-  -d '{"chainId":137}'
+The immediate next step is exposing broader backend-backed market APIs so the TUI can consume shared trending, search, history, and realtime surfaces.
 
-# or compatibility endpoint (default is compatibility shell + polling)
-curl "http://localhost:4000/api/polymarket/market-channels?chainId=137&waitMs=0"
-```
+### Web
 
----
+`apps/web` is the browser client around the backend discovery workflows. It remains useful as an operational and product shell while AlphaDB expands beyond the original Polymarket-only flow.
 
-## Scripts
+### TUI
 
-### Top-level
+`apps/tui` is the terminal-native market workspace:
 
-- `npm run dev` — run API and client in development mode
-- `npm run build` — build both server and client
-- `npm run start` — run API server only
-- `npm run test` — run unit/service tests
-- `npm run polymarket:market-channels` — run Polymarket discovery CLI
-- `npm run polymarket:discovery-migrate` — apply discovery run schema in Postgres
-- `npm run polymarket:discovery-schema` — run idempotent discovery schema bootstrapping/version check (without applying runtime-specific defaults)
+- Polymarket and Kalshi providers
+- unified split mode
+- fuzzy search
+- saved and recent markets
+- ANSI candlestick rendering
 
-### Server scripts
+Today it still reads mostly from provider APIs directly. That is intentional during migration; the accepted direction is to move it behind the backend incrementally.
 
-- `npm run --workspace server test` — run server tests only
-- `npm run --workspace server test:integration` — optional integration run against real Postgres/Redis
-- `npm run --workspace server build` — compile server
-- `npm run --workspace server discovery:ensure-schema` — bootstrap/ensure schema version table and current DDL via ts-node
-- `npm run --workspace server discovery:migrate-runs` — apply schema via ts-node
+## Docs
 
-## Build
+- `docs/adrs/` - production architecture decisions for backend convergence
+- `docs/checklists/` - ordered decision checklist and accepted answers
+- `docs/plans/` - implementation plans
+- `docs/polymarket/` - legacy Polymarket discovery implementation notes and generated artifacts
 
-```bash
-npm run build
-```
+## Repo Metadata Follow-Up
 
-Build output:
-- `server/dist`
-- `client/dist`
+Tracked as a near-term repo task in `docs/plans/002-phase-1-backend-convergence.md`:
 
-## Test
+- update the GitHub repository description
+- update GitHub repository topics/tags
+- refresh repo-wide marketing copy once Phase 1 stabilizes
 
-```bash
-npm run test
-```
+## Status
 
-Run unit/service tests only:
+Phase 1 is in progress. The repo has been restructured into the target app layout, but backend and TUI are not fully integrated yet. The practical goal of this phase is:
 
-```bash
-npm run --workspace server test
-```
-
-Run integration tests (requires `DATABASE_URL`, `REDIS_URL`, and `DISCOVERY_INTEGRATION_TESTS=1`):
-
-```bash
-DISCOVERY_INTEGRATION_TESTS=1 \
-  DATABASE_URL=postgres://postgres:postgres@localhost:5432/alphadb \
-  REDIS_URL=redis://localhost:6379 \
-  npm run --workspace server test:integration
-```
-
----
-
-## Polymarket discovery API
-
-Discovery uses async run orchestration with compatibility wrapper.
-
-### Primary async endpoints
-
-- `POST /api/polymarket/market-channels/runs`
-  - Creates or attaches to a run.
-  - Returns shell payload with `runId` and `pollUrl`.
-
-```bash
-curl -X POST http://localhost:4000/api/polymarket/market-channels/runs \
-  -H "Content-Type: application/json" \
-  -d '{"chainId":137}'
-```
-
-- `POST /api/polymarket/market-channels/runs/estimate`
-  - Fast preview endpoint for quickly sampling and tuning discovery filters.
-  - Accepts the same discovery filters as the full-run endpoint and a `sampleLimit` (or `maxMarkets`) cap.
-  - Returns sample channels plus metadata (`marketCount`, `marketChannelCount`, `pagesScanned`, `stoppedByLimit`, `hasMore`).
-
-```bash
-curl -X POST http://localhost:4000/api/polymarket/market-channels/runs/estimate \
-  -H "Content-Type: application/json" \
-  -d '{"chainId":137,"questionContains":"president","maxMarkets":10}'
-```
-
-- `GET /api/polymarket/market-channels/runs/{runId}?offset=0&limit=200`
-  - Returns full run payload + paginated channels.
-
-- `GET /api/polymarket/market-channels/runs/latest`
-  - Returns latest run for configured scope.
-
-- `GET /api/polymarket/market-channels/runs/active`
-  - Returns currently running jobs for UI monitoring and cancellation.
-
-- `POST /api/polymarket/market-channels/runs/{runId}/cancel`
-  - Cancels an in-flight run.
-
-### Compatibility wrapper
-
-- `GET /api/polymarket/market-channels`
-  - preserves legacy shape.
-  - `waitMs=0` returns a shell (`202` if active).
-  - `waitMs>0` waits briefly and returns terminal payload when ready.
-
-### Query params
-
-- `clobApiUrl` (optional, default `https://clob.polymarket.com`)
-- `chainId` (optional, default `137`)
-- `maxMarkets` (optional, for full run cap; use `sampleLimit` on estimate endpoint for preview)
-- `wsUrl` (optional): enables websocket probing when present
-- `wsConnectTimeoutMs` (optional, default `12000`)
-- `wsChunkSize` (optional, default `500`)
-- `marketFetchTimeoutMs` (optional, default `15000`)
-- Discovery filters: status/flag fields (`active`, `closed`, `archived`, `acceptingOrders`, etc.), numeric ranges (`minimumOrderSize*`, `makerBaseFee*`, etc.), timestamps, and text contains fields (`questionContains`, `marketSlugContains`, `conditionIdContains`, etc.).
-
-Example status polling flow:
-
-```bash
-# create
-RUN_ID=$(curl -s -X POST http://localhost:4000/api/polymarket/market-channels/runs \
-  -H 'Content-Type: application/json' -d '{"chainId":137}' | jq -r '.runId')
-
-# poll
-curl http://localhost:4000/api/polymarket/market-channels/runs/$RUN_ID
-```
-
-Example response shape:
-
-```json
-{
-  "run": {
-    "id": "run_...",
-    "status": "succeeded",
-    "source": {
-      "clobApiUrl": "https://clob.polymarket.com",
-      "chainId": 137
-    },
-    "marketCount": 0,
-    "marketChannelCount": 0
-  },
-  "channels": {
-    "items": [],
-    "page": {
-      "offset": 0,
-      "limit": 200,
-      "total": 0,
-      "hasMore": false
-    }
-  },
-  "wsScan": null
-}
-```
-
----
-
-## CLI usage
-
-```bash
-# REST-only run
-npm run polymarket:market-channels
-
-# REST + JSON output for scripting
-npm run polymarket:market-channels -- --json
-```
-
-## Environment variables
-
-- Core discovery config:
-  - `CLOB_API_URL` (default: `https://clob.polymarket.com`)
-  - `CHAIN_ID` (default: `137`)
-  - `WS_URL` (optional)
-  - `WS_CONNECT_TIMEOUT_MS` (default: `12000`)
-  - `WS_CHUNK_SIZE` (default: `500`)
-  - `MARKET_FETCH_TIMEOUT_MS` (default: `15_000`)
-  - `MARKET_DISCOVERY_CONCURRENCY_LIMIT` (default: `4`)
-
-- Run orchestration:
-  - `DATABASE_URL` (**required**)
-  - `REDIS_URL` (**required**)
-  - `DISCOVERY_REQUIRE_SCHEMA` (`1` to validate/apply migration on startup)
-  - `DISCOVERY_SCHEMA_TARGET_VERSION` (optional override, default: `1`)  - `DISCOVERY_SCOPE` (default: `default`)
-  - `DISCOVERY_RUN_TTL_SECONDS` (default: `86400`)
-  - `DISCOVERY_RUN_CACHE_TTL_SECONDS` (default: `600`)
-  - `DISCOVERY_SEMAPHORE_TTL_SECONDS` (default: `60`)
-  - `DISCOVERY_RUN_ALLOW_IN_MEMORY_CACHE` (`1` to allow local fallback; single-process only)
-  - `DISCOVERY_RUN_PRUNER_ENABLED` (`1` to enable automatic stale-run pruning)
-  - `DISCOVERY_PRUNE_INTERVAL_SECONDS` (default: `300`)
-  - `DISCOVERY_RETRY_ENABLED` (`1` to enable retry scheduling)
-  - `DISCOVERY_RETRY_MAX_ATTEMPTS` (default: `3`)
-  - `DISCOVERY_RETRY_BASE_DELAY_MS` (default: `1000`)
-  - `DISCOVERY_RETRY_MAX_DELAY_MS` (default: `30000`)
-  - `DISCOVERY_RETRY_WORKER_ENABLED` (`1` to enable background retry worker)
-  - `DISCOVERY_RETRY_WORKER_INTERVAL_SECONDS` (default: `30`)
-  - `DISCOVERY_RETRY_WORKER_BATCH_SIZE` (default: `10`)
-
-- Redis client tuning:
-  - `REDIS_CONNECT_TIMEOUT_MS` (default: `2000`)
-  - `REDIS_COMMAND_TIMEOUT_MS` (default: `5000`)
-  - `REDIS_MAX_RETRIES_PER_REQUEST` (default: `3`)
-  - `REDIS_RETRY_BASE_MS` (default: `100`)
-  - `REDIS_RETRY_MAX_MS` (default: `2000`)
-  - `REDIS_RECONNECT_ON_ERROR` (`1`/`0`, default `1`)
-
-- Postgres pool tuning:
-  - `PG_POOL_MAX` (default: `5`)
-  - `PG_POOL_IDLE_TIMEOUT_MS` (default: `30000`)
-  - `PG_POOL_CONNECT_TIMEOUT_MS` (default: `2000`)
-
-- Integration check toggle:
-  - `DISCOVERY_INTEGRATION_TESTS=1`
-
-## Error contract
-
-Discovery errors return JSON with:
-
-- `error`
-- `code`
-- `message`
-- `retryable`
-- `details`
-- `requestId`
-
-Common codes:
-
-- `invalid_input` (`400`)
-- `clob_request_timeout` (`504`)
-- `clob_request_network` (`502`)
-- `clob_request_failure` (`502`)
-- `discovery_concurrency_limit` (`429`, retryable)
-- `websocket_invalid_url` (`400`)
-- `websocket_request_error` (`502`)
-- `run_not_found` (`404`)
-- `unexpected_error` (`500`)
-
----
-
-## Architecture reference
-
-- `server/src/polymarket/services/` — orchestration and run lifecycle
-- `server/src/polymarket/controllers/` — HTTP endpoint surface
-- `server/src/polymarket/repositories/` — DB persistence adapters
-- `server/src/polymarket/infra/` — DB/cache/queue wiring
-- `server/src/polymarket/maintenance/` — migration + ops scripts
-- `server/src/polymarket/cli/` — CLI entrypoint and rendering
-- `server/src/polymarket/utils.ts` — parsing and traversal helpers
-- `server/src/polymarket/errors.ts` — centralized error mapping
-- `docs/polymarket/` — implementation notes and diagrams
-
-## Frontend path (discovery page now implemented)
-
-A Vite React frontend is scaffolded and wired against the `/api/*` proxy.
-
-The first-pass discovery consumer UI is now implemented at:
-
-- `client/src/features/discovery/DiscoveryPage.tsx`
-- `client/src/features/discovery/api/discoveryApi.ts`
-- `client/src/features/discovery/hooks/useDiscoveryPoller.ts`
-- `client/src/features/discovery/components/*`
-
-It currently supports:
-
-- start discovery runs with rich filter controls (status, fees, volume thresholds, text contains, timestamps, tags, chain/API URL overrides)
-- 202 polling lifecycle and terminal payload handling
-- resilient polling with backoff and abort-on-stop
-- local resumable poll shell (restores in-flight run on refresh)
-- paginated channel table (`offset`, `limit`, `total`, `hasMore`)
-- normalized error contract rendering
-- "Preview sample" flow to run a capped sample before launching full discovery
-
-Run the app and open `http://localhost:5173` to exercise it.
-
-Related docs:
-
-- [Polymarket run + discovery docs](./docs/polymarket/README.md)
+1. preserve current behavior in all three apps
+2. establish one shared repo and documentation surface
+3. make the backend the future source of truth for richer TUI features

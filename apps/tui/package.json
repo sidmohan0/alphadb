@@ -1,0 +1,22 @@
+{
+  "name": "@alphadb/tui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Terminal-first Polymarket and Kalshi market browser with split view, search, and ANSI candlestick charts.",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

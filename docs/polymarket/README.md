@@ -2,6 +2,8 @@
 
 ## What this report covers
 
+Note: these are legacy Polymarket discovery notes preserved during the Phase 1 AlphaDB monorepo convergence. Paths below have been updated to the current `apps/api` and `apps/web` layout where applicable.
+
 This folder contains implementation notes and runbook artifacts for the discovery work and async run architecture:
 
 - `polymarket-market-channels-visual-plan-diagram.html`
@@ -17,23 +19,23 @@ Open these files in a browser for rendered visuals.
 
 The discovery feature now follows a distributed async model:
 
-- `server/src/polymarket/types.ts`
+- `apps/api/src/polymarket/types.ts`
   - Run lifecycle contracts, config defaults, paging contracts.
-- `server/src/polymarket/utils.ts`
+- `apps/api/src/polymarket/utils.ts`
   - Parsing and extraction helpers.
-- `server/src/polymarket/services/marketChannelDiscoveryService.ts`
+- `apps/api/src/polymarket/services/marketChannelDiscoveryService.ts`
   - Discovery orchestration and websocket probing.
-- `server/src/polymarket/services/discoveryRunService.ts`
+- `apps/api/src/polymarket/services/discoveryRunService.ts`
   - Async run orchestration (`queued/running/succeeded/partial/failed`), dedupe, concurrency and pruning.
-- `server/src/polymarket/controllers/polymarket.controller.ts`
+- `apps/api/src/polymarket/controllers/polymarket.controller.ts`
   - HTTP controller for async endpoints + compatibility wrapper.
-- `server/src/polymarket/infra/db/*`
+- `apps/api/src/polymarket/infra/db/*`
   - Postgres pool + schema scripts.
-- `server/src/polymarket/infra/cache/*`
+- `apps/api/src/polymarket/infra/cache/*`
   - Redis-backed lock/semaphore/cache layer.
-- `server/src/polymarket/repositories/*`
+- `apps/api/src/polymarket/repositories/*`
   - Persistence adapters for runs/channels/ws scan.
-- `server/src/polymarket/maintenance/migrateDiscoveryRuns.ts`
+- `apps/api/src/polymarket/maintenance/migrateDiscoveryRuns.ts`
   - Schema bootstrap helper.
 
 ## API behavior
@@ -95,10 +97,10 @@ while (true) {
 
 The client app now includes a discover-orchestrating page under:
 
-- `client/src/features/discovery/DiscoveryPage.tsx`
-- `client/src/features/discovery/api/discoveryApi.ts`
-- `client/src/features/discovery/hooks/useDiscoveryPoller.ts`
-- `client/src/features/discovery/components/*`
+- `apps/web/src/features/discovery/DiscoveryPage.tsx`
+- `apps/web/src/features/discovery/api/discoveryApi.ts`
+- `apps/web/src/features/discovery/hooks/useDiscoveryPoller.ts`
+- `apps/web/src/features/discovery/components/*`
 
 ### Component structure
 
@@ -146,7 +148,7 @@ npm run polymarket:discovery-migrate
 
 This applies:
 
-- `server/src/polymarket/infra/db/schemas.sql`
+- `apps/api/src/polymarket/infra/db/schemas.sql`
   - `discovery_runs`
   - `discovery_run_channels`
   - `discovery_run_ws_scans`
@@ -212,7 +214,7 @@ DISCOVERY_RUN_PRUNER_ENABLED=1 npm run start
 - ✅ Startup migration handling:
   - `DISCOVERY_REQUIRE_SCHEMA=1` gates schema bootstrap/update at boot.
 - ✅ Integration verification path:
-  - `npm run --workspace server test:integration`
+- `npm run --workspace @alphadb/api test:integration`
 
 ## Notes
 

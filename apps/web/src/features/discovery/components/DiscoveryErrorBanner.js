@@ -1,0 +1,4 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function DiscoveryErrorBanner({ error }) {
+    return (_jsxs("section", { className: "card error-card", children: [_jsx("h3", { children: "Discovery failed" }), _jsx("p", { children: _jsx("strong", { children: error.error }) }), _jsxs("ul", { children: [_jsxs("li", { children: [_jsx("strong", { children: "Code:" }), " ", error.code] }), _jsxs("li", { children: [_jsx("strong", { children: "Message:" }), " ", error.message] }), _jsxs("li", { children: [_jsx("strong", { children: "Retryable:" }), " ", error.retryable ? "Yes" : "No"] }), _jsxs("li", { children: [_jsx("strong", { children: "Request ID:" }), " ", error.requestId] })] }), error.details ? _jsx("pre", { children: JSON.stringify(error.details, null, 2) }) : null] }));
+}

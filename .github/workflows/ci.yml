@@ -52,7 +52,7 @@ jobs:
         run: npm run polymarket:discovery-migrate
 
       - name: Build server artifacts
-        run: npm run build --workspace server
+        run: npm run build --workspace @alphadb/api
 
       - name: Startup resilience and restart smoke
         env:
@@ -66,7 +66,7 @@ jobs:
             local log_file="/tmp/discovery-${label}.log"
             local pid_file="/tmp/discovery-${label}.pid"
 
-            DISCOVERY_REQUIRE_SCHEMA=1 npm run start --workspace server > "$log_file" 2>&1 &
+            DISCOVERY_REQUIRE_SCHEMA=1 npm run start --workspace @alphadb/api > "$log_file" 2>&1 &
             local pid=$!
             echo "$pid" > "$pid_file"
 

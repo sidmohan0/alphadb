@@ -50,7 +50,7 @@ This folder defines the backend execution model for async discovery runs backed 
 
 7. **Tests + docs** ✅
    - Existing service/controller tests continue to validate async contract and dedupe/concurrency paths.
-   - Integration test scaffold (`server/test/polymarket.discovery.integration.test.ts`) retained for real Postgres + Redis.
+   - Integration test scaffold (`apps/api/test/polymarket.discovery.integration.test.ts`) retained for real Postgres + Redis.
    - Docs and operational notes updated in root README and polymarket docs.
 
 ## Remaining Optional Enhancements

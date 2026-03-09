@@ -1,23 +1,29 @@
 # Project Documentation
 
-## Polymarket
+This repository is now tracking the unified AlphaDB direction: backend service, web UI, and ANSI TUI in one monorepo.
+
+## Start Here
+
+- `docs/checklists/001-backend-convergence-decision-checklist.md`
+- `docs/adrs/README.md`
+- `docs/plans/002-phase-1-backend-convergence.md`
+
+## Architecture
+
+- `docs/adrs/0001-monorepo-and-app-topology.md`
+- `docs/adrs/0002-client-backend-contract.md`
+- `docs/adrs/0003-canonical-market-domain-model.md`
+- `docs/adrs/0004-storage-caching-and-retention.md`
+- `docs/adrs/0005-search-discovery-and-ranking.md`
+- `docs/adrs/0006-realtime-ingestion-and-delivery.md`
+- `docs/adrs/0007-auth-tenancy-and-user-state.md`
+- `docs/adrs/0008-observability-sre-and-release.md`
+- `docs/adrs/0009-migration-from-branches.md`
+
+## Existing Polymarket Discovery Notes
 
 - `docs/polymarket/README.md`
-  - Implementation notes for discovery architecture, async run APIs, and operations rollout.
 - `docs/polymarket/polymarket-market-channels-visual-plan-diagram.html`
-  - Call graph / flow-style visual report for `server/src/polymarketMarketChannels.ts`.
 - `docs/polymarket/polymarket-market-channels-call-graph.html`
-  - A call hierarchy/call graph representation for the same file structure.
 - `docs/polymarket/polymarket-discovery-runs-visual-plan.html`
-  - Architecture and endpoint model for async `discovery_runs` + Postgres/Redis orchestration.
 - `docs/polymarket/discovery-run-implementation-checklist.md`
-  - Backend implementation checklist and commit plan used during rollout.
-
-## Discovery run rollout updates now included
-
-- Postgres schema bootstrap: `server/src/polymarket/infra/db/schemas.sql`
-- Redis + cache layer: `server/src/polymarket/infra/cache`
-- Repositories: `server/src/polymarket/repositories`
-- Run orchestration + pruning: `server/src/polymarket/services/discoveryRunService.ts`
-- Migration helper: `server/src/polymarket/maintenance/migrateDiscoveryRuns.ts`
-- Integration test path: `server/test/polymarket.discovery.integration.test.ts`

@@ -2,12 +2,11 @@
 node_modules/
 
 # build output
-server/dist/
-client/dist/
+apps/*/dist/
 
 # generated JS artifacts in TS source folders
-client/src/App.js
-client/src/main.js
+apps/web/src/App.js
+apps/web/src/main.js
 
 # logs
 npm-debug.log*
