@@ -1,14 +1,24 @@
 import process from "node:process";
 
 import {
+  backendApiBaseUrl,
+  fetchBackendPersistentState,
+  hasBackendMarketApi,
+  removeBackendSavedMarket,
+  saveBackendMarket,
+  touchBackendRecentMarket,
+} from "./api/backend.js";
+import {
   applyProviderTickerUpdate,
   buildCandlesForMarket,
   fetchHistoryForMarket,
   fetchTrendingMarketsForProvider,
+  searchUnifiedMarkets,
   fetchUnifiedTrendingMarkets,
   searchMarketsForProvider,
 } from "./api/provider.js";
 import { ansi } from "./lib/ansi.js";
+import { BackendMarketStream } from "./lib/backendLive.js";
 import { KalshiTickerStream } from "./lib/kalshiLive.js";
 import {
   loadPersistentState,
@@ -82,7 +92,14 @@ let persistentState: PersistentState = {
   savedMarkets: [],
   recentMarkets: [],
 };
-let kalshiTickerStream: KalshiTickerStream | null = null;
+type MarketTickerStream = {
+  replaceMarkets(nextTickers: string[]): void;
+  close(): void;
+  getStatusReason(): string | null;
+};
+
+let kalshiTickerStream: MarketTickerStream | null = null;
+let backendStateEnabled = false;
 
 function activeSingleProvider(): ProviderId {
   return state.provider;
@@ -200,6 +217,9 @@ function setStatus(message: string): void {
 }
 
 function persistStateToDisk(): void {
+  if (backendStateEnabled) {
+    return;
+  }
   queuePersistentStateWrite(persistentState, state.storagePath);
 }
 
@@ -225,6 +245,10 @@ function mergeLiveMarkets(markets: MarketSummary[]): void {
     syncPersistentLists();
   }
   persistStateToDisk();
+}
+
+function handleBackgroundSyncError(error: unknown, fallbackMessage: string): void {
+  setError(error instanceof Error ? error.message : fallbackMessage);
 }
 
 function updateMarketEverywhere(marketId: string, updater: (market: MarketSummary) => MarketSummary): void {
@@ -287,7 +311,19 @@ function syncKalshiTickerSubscription(): void {
   }
 
   if (!kalshiTickerStream) {
-    kalshiTickerStream = new KalshiTickerStream({
+    kalshiTickerStream = hasBackendMarketApi()
+      ? new BackendMarketStream({
+          onStatus: (message) => {
+            if (state.layoutMode === "unified") {
+              state.unifiedPanels.kalshi.liveStatusMessage = message;
+            } else {
+              state.liveStatusMessage = message;
+            }
+            draw();
+          },
+          onTicker: applyKalshiTickerMessage,
+        })
+      : new KalshiTickerStream({
       onStatus: (message) => {
         if (state.layoutMode === "unified") {
           state.unifiedPanels.kalshi.liveStatusMessage = message;
@@ -348,6 +384,19 @@ function rememberRecent(market: MarketSummary): void {
     syncPersistentLists();
   }
   persistStateToDisk();
+
+  if (backendStateEnabled) {
+    void touchBackendRecentMarket(market)
+      .then((nextState) => {
+        persistentState = nextState;
+        if (state.layoutMode === "single") {
+          syncPersistentLists(state.mode === "recent" ? market.id : undefined);
+        } else {
+          syncPersistentLists();
+        }
+      })
+      .catch((error) => handleBackgroundSyncError(error, "Failed to sync recent markets."));
+  }
 }
 
 function toggleSaveSelectedMarket(): void {
@@ -366,6 +415,21 @@ function toggleSaveSelectedMarket(): void {
   persistStateToDisk();
   state.statusMessage = result.saved ? `Saved market: ${market.question}` : `Removed market: ${market.question}`;
   draw();
+
+  if (backendStateEnabled) {
+    const sync = result.saved ? saveBackendMarket(market) : removeBackendSavedMarket(market.id);
+    void sync
+      .then((nextState) => {
+        persistentState = nextState;
+        if (state.layoutMode === "single") {
+          syncPersistentLists(state.mode === "saved" ? market.id : undefined);
+        } else {
+          syncPersistentLists();
+        }
+        draw();
+      })
+      .catch((error) => handleBackgroundSyncError(error, "Failed to sync saved markets."));
+  }
 }
 
 async function loadChart(): Promise<void> {
@@ -533,8 +597,52 @@ async function loadUnifiedTrending(): Promise<void> {
 
 async function runSearch(): Promise<void> {
   if (state.layoutMode === "unified") {
-    state.statusMessage = "Search is available in single-provider mode. Press 1 or 2 to exit unified view.";
+    if (!hasBackendMarketApi()) {
+      state.statusMessage = "Unified search needs ALPHADB_API_BASE_URL. Press 1 or 2 for provider-local search.";
+      draw();
+      return;
+    }
+
+    const query = state.query.trim();
+    if (!query) {
+      clearError();
+      await loadUnifiedTrending();
+      return;
+    }
+
+    state.statusMessage = `Searching "${query}" across providers…`;
+    state.unifiedPanels.polymarket.loadingMarkets = true;
+    state.unifiedPanels.kalshi.loadingMarkets = true;
     draw();
+
+    try {
+      const { polymarket, kalshi } = await searchUnifiedMarkets(query, 16);
+      state.unifiedPanels.polymarket.markets = polymarket;
+      state.unifiedPanels.kalshi.markets = kalshi;
+      state.unifiedPanels.polymarket.loadingMarkets = false;
+      state.unifiedPanels.kalshi.loadingMarkets = false;
+      state.unifiedPanels.polymarket.lastMarketRefreshAt = Date.now();
+      state.unifiedPanels.kalshi.lastMarketRefreshAt = Date.now();
+      mergeLiveMarkets([...polymarket, ...kalshi]);
+
+      for (const provider of ["polymarket", "kalshi"] as const) {
+        const panel = state.unifiedPanels[provider];
+        panel.selectedIndex = Math.min(panel.selectedIndex, Math.max(0, panel.markets.length - 1));
+        panel.selectedOutcomeIndex = 0;
+      }
+
+      state.statusMessage = `Unified search loaded for "${query}".`;
+      draw();
+      syncKalshiTickerSubscription();
+      await Promise.all([
+        loadUnifiedChart("polymarket"),
+        loadUnifiedChart("kalshi"),
+      ]);
+    } catch (error) {
+      state.unifiedPanels.polymarket.loadingMarkets = false;
+      state.unifiedPanels.kalshi.loadingMarkets = false;
+      setError(error instanceof Error ? error.message : "Unified search failed.");
+    }
     return;
   }
 
@@ -779,8 +887,8 @@ function handleListInput(sequence: string): void {
       draw();
       return;
     case "/":
-      if (state.layoutMode === "unified") {
-        state.statusMessage = "Search is disabled in unified mode. Press 1 or 2 for single-provider mode.";
+      if (state.layoutMode === "unified" && !hasBackendMarketApi()) {
+        state.statusMessage = "Unified search needs ALPHADB_API_BASE_URL. Press 1 or 2 for single-provider mode.";
         draw();
         return;
       }
@@ -879,9 +987,24 @@ function handleListInput(sequence: string): void {
 }
 
 async function boot(): Promise<void> {
-  const loaded = await loadPersistentState();
-  persistentState = loaded.state;
-  state.storagePath = loaded.path;
+  if (hasBackendMarketApi()) {
+    try {
+      persistentState = await fetchBackendPersistentState();
+      state.storagePath = `${backendApiBaseUrl()}/markets/state`;
+      backendStateEnabled = true;
+    } catch {
+      const loaded = await loadPersistentState();
+      persistentState = loaded.state;
+      state.storagePath = loaded.path;
+      backendStateEnabled = false;
+    }
+  } else {
+    const loaded = await loadPersistentState();
+    persistentState = loaded.state;
+    state.storagePath = loaded.path;
+    backendStateEnabled = false;
+  }
+
   syncPersistentLists();
   process.stdout.write(`${ansi.altScreen}${ansi.hideCursor}`);
   if (process.stdin.isTTY) {

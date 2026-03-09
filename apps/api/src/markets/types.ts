@@ -32,3 +32,14 @@ export interface PricePoint {
   timestamp: number;
   price: number;
 }
+
+export interface PersistedMarketSnapshot {
+  market: MarketSummary;
+  savedAt?: number;
+  viewedAt: number;
+}
+
+export interface PersistentState {
+  savedMarkets: PersistedMarketSnapshot[];
+  recentMarkets: PersistedMarketSnapshot[];
+}

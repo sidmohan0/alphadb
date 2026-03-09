@@ -2,7 +2,16 @@ import { randomUUID } from "crypto";
 import { Router } from "express";
 
 import { mapInvalidInput, toHttpErrorResponse } from "../errors";
+import { kalshiRealtimeHub } from "../services/kalshiRealtimeHub";
 import { marketDataService } from "../services/marketDataService";
+import {
+  getUserMarketState,
+  normalizeMarketSummary,
+  removeSavedMarketForUser,
+  resolveUserId,
+  saveMarketForUser,
+  touchRecentMarketForUser,
+} from "../services/userStateStore";
 import { ProviderId, RangeKey } from "../types";
 
 const router = Router();
@@ -53,6 +62,19 @@ function parsePositiveInt(value: unknown, field: string, fallback: number): numb
   return parsed;
 }
 
+function parseUserId(value: unknown): string {
+  return resolveUserId(toSingleString(value));
+}
+
+function parseTickers(value: unknown): string[] {
+  const raw = toSingleString(value);
+  if (!raw) {
+    return [];
+  }
+
+  return [...new Set(raw.split(",").map((ticker) => ticker.trim()).filter(Boolean))];
+}
+
 router.get("/trending", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 
@@ -85,14 +107,34 @@ router.get("/search", async (req, res) => {
 
   try {
     const provider = parseProvider(req.query.provider);
+    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
     const query = toSingleString(req.query.q);
     if (!query) {
       throw mapInvalidInput("q is required", "q");
     }
 
     const limit = parsePositiveInt(req.query.limit, "limit", 24);
-    const markets = await marketDataService.searchMarkets(provider, query, limit);
-    res.json({ provider, query, markets, requestId });
+    const markets = await marketDataService.searchMarketsForUser(provider, query, limit, userId);
+    res.json({ provider, userId, query, markets, requestId });
+  } catch (error) {
+    const { status, body } = toHttpErrorResponse(error, requestId);
+    res.status(status).json(body);
+  }
+});
+
+router.get("/unified/search", async (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+
+  try {
+    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const query = toSingleString(req.query.q);
+    if (!query) {
+      throw mapInvalidInput("q is required", "q");
+    }
+
+    const limit = parsePositiveInt(req.query.limit, "limit", 16);
+    const markets = await marketDataService.getUnifiedSearchMarkets(query, limit, userId);
+    res.json({ userId, query, markets, requestId });
   } catch (error) {
     const { status, body } = toHttpErrorResponse(error, requestId);
     res.status(status).json(body);
@@ -117,6 +159,106 @@ router.get("/history", async (req, res) => {
     const { status, body } = toHttpErrorResponse(error, requestId);
     res.status(status).json(body);
   }
+});
+
+router.get("/state", async (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+
+  try {
+    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const state = await getUserMarketState(userId);
+    res.json({ userId, state, requestId });
+  } catch (error) {
+    const { status, body } = toHttpErrorResponse(error, requestId);
+    res.status(status).json(body);
+  }
+});
+
+router.put("/state/saved", async (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+
+  try {
+    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const market = normalizeMarketSummary((req.body as { market?: unknown }).market);
+    if (!market) {
+      throw mapInvalidInput("market is required", "market");
+    }
+
+    const result = await saveMarketForUser(userId, market);
+    res.json({ userId, state: result.state, saved: result.saved, requestId });
+  } catch (error) {
+    const { status, body } = toHttpErrorResponse(error, requestId);
+    res.status(status).json(body);
+  }
+});
+
+router.delete("/state/saved", async (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+
+  try {
+    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const marketId = toSingleString(req.query.marketId);
+    if (!marketId) {
+      throw mapInvalidInput("marketId is required", "marketId");
+    }
+
+    const result = await removeSavedMarketForUser(userId, marketId);
+    res.json({ userId, state: result.state, saved: result.saved, requestId });
+  } catch (error) {
+    const { status, body } = toHttpErrorResponse(error, requestId);
+    res.status(status).json(body);
+  }
+});
+
+router.post("/state/recent", async (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+
+  try {
+    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const market = normalizeMarketSummary((req.body as { market?: unknown }).market);
+    if (!market) {
+      throw mapInvalidInput("market is required", "market");
+    }
+
+    const state = await touchRecentMarketForUser(userId, market);
+    res.json({ userId, state, requestId });
+  } catch (error) {
+    const { status, body } = toHttpErrorResponse(error, requestId);
+    res.status(status).json(body);
+  }
+});
+
+router.get("/stream", (req, res) => {
+  const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
+  const tickers = parseTickers(req.query.tickers);
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const writeEvent = (event: string, data: unknown) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  writeEvent("ready", { requestId, tickers });
+
+  const subscription = kalshiRealtimeHub.subscribe(
+    tickers,
+    (message) => writeEvent("status", { message }),
+    (payload) => writeEvent("ticker", payload),
+  );
+
+  const heartbeat = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 15_000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    subscription.close();
+    res.end();
+  });
 });
 
 export const marketsRouter = router;

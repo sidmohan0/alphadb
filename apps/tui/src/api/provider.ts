@@ -1,6 +1,7 @@
 import {
   fetchBackendMarketHistory,
   fetchBackendSearchCandidates,
+  fetchBackendUnifiedSearchMarkets,
   fetchBackendTrendingMarkets,
   fetchBackendUnifiedTrendingMarkets,
   hasBackendMarketApi,
@@ -13,7 +14,6 @@ import {
   fetchKalshiTrendingMarkets,
   searchKalshiMarkets,
 } from "./kalshi.js";
-import { rankMarkets } from "../lib/fuzzy.js";
 import { Candle, MarketSummary, PricePoint, ProviderId, RangeKey } from "../types.js";
 
 interface SearchOptions {
@@ -66,25 +66,7 @@ export async function searchMarketsForProvider(
 ): Promise<MarketSummary[]> {
   if (hasBackendMarketApi()) {
     try {
-      const remoteMarkets = await fetchBackendSearchCandidates(provider, query, Math.max(limit * 3, 24));
-      const markets = new Map<string, MarketSummary>();
-
-      for (const market of remoteMarkets) {
-        markets.set(market.id, market);
-      }
-
-      for (const market of options.localCandidates ?? []) {
-        if (!markets.has(market.id)) {
-          markets.set(market.id, market);
-        }
-      }
-
-      return rankMarkets(query, [...markets.values()], {
-        limit,
-        remoteIds: new Set(remoteMarkets.map((market) => market.id)),
-        savedIds: options.savedIds,
-        recentIds: options.recentIds,
-      });
+      return await fetchBackendSearchCandidates(provider, query, limit);
     } catch {
       // Fall back to direct-provider mode if the backend is unavailable.
     }
@@ -93,6 +75,34 @@ export async function searchMarketsForProvider(
   return provider === "kalshi"
     ? searchKalshiMarkets(query, limit, options)
     : searchMarkets(query, limit, options);
+}
+
+export async function searchUnifiedMarkets(
+  query: string,
+  limitPerProvider: number,
+): Promise<Record<ProviderId, MarketSummary[]>> {
+  if (hasBackendMarketApi()) {
+    try {
+      return await fetchBackendUnifiedSearchMarkets(query, limitPerProvider);
+    } catch {
+      // Fall back to provider-direct mode if the backend is unavailable.
+    }
+  }
+
+  const [polymarket, kalshi] = await Promise.all([
+    searchMarkets(query, limitPerProvider, {
+      localCandidates: [],
+      savedIds: new Set(),
+      recentIds: new Set(),
+    }),
+    searchKalshiMarkets(query, limitPerProvider, {
+      localCandidates: [],
+      savedIds: new Set(),
+      recentIds: new Set(),
+    }),
+  ]);
+
+  return { polymarket, kalshi };
 }
 
 export async function fetchHistoryForMarket(

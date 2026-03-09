@@ -5,6 +5,7 @@ import { createApp } from "../src/app";
 import { MarketSummary, PricePoint } from "../src/markets/types";
 import { marketDataService } from "../src/markets/services/marketDataService";
 import { clearMarketCache } from "../src/markets/services/marketCache";
+import * as userStateStore from "../src/markets/services/userStateStore";
 
 describe("Markets controller", () => {
   const app = createApp();
@@ -55,7 +56,7 @@ describe("Markets controller", () => {
   });
 
   it("returns search results", async () => {
-    vi.spyOn(marketDataService, "searchMarkets").mockResolvedValue([market]);
+    vi.spyOn(marketDataService, "searchMarketsForUser").mockResolvedValue([market]);
 
     const response = await request(app)
       .get("/api/markets/search?provider=polymarket&q=fed&limit=5")
@@ -65,6 +66,25 @@ describe("Markets controller", () => {
       provider: "polymarket",
       query: "fed",
       markets: [market],
+    });
+  });
+
+  it("returns unified search results", async () => {
+    vi.spyOn(marketDataService, "getUnifiedSearchMarkets").mockResolvedValue({
+      polymarket: [market],
+      kalshi: [{ ...market, id: "kalshi:abc", provider: "kalshi", symbol: "KXABC" }],
+    });
+
+    const response = await request(app)
+      .get("/api/markets/unified/search?q=fed&limit=5")
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      query: "fed",
+      markets: {
+        polymarket: [market],
+        kalshi: [{ id: "kalshi:abc", provider: "kalshi" }],
+      },
     });
   });
 
@@ -99,6 +119,64 @@ describe("Markets controller", () => {
       outcomeTokenId: "token-1",
       range: "24h",
       points,
+    });
+  });
+
+  it("returns backend user state", async () => {
+    vi.spyOn(userStateStore, "getUserMarketState").mockResolvedValue({
+      savedMarkets: [{ market, savedAt: 1, viewedAt: 1 }],
+      recentMarkets: [],
+    });
+
+    const response = await request(app)
+      .get("/api/markets/state")
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      userId: "local-user",
+      state: {
+        savedMarkets: [{ market: { id: "polymarket:123" } }],
+      },
+    });
+  });
+
+  it("saves a market in backend state", async () => {
+    vi.spyOn(userStateStore, "saveMarketForUser").mockResolvedValue({
+      saved: true,
+      state: {
+        savedMarkets: [{ market, savedAt: 1, viewedAt: 1 }],
+        recentMarkets: [],
+      },
+    });
+
+    const response = await request(app)
+      .put("/api/markets/state/saved")
+      .send({ market })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      saved: true,
+      state: {
+        savedMarkets: [{ market: { id: "polymarket:123" } }],
+      },
+    });
+  });
+
+  it("touches a recent market in backend state", async () => {
+    vi.spyOn(userStateStore, "touchRecentMarketForUser").mockResolvedValue({
+      savedMarkets: [],
+      recentMarkets: [{ market, viewedAt: 1 }],
+    });
+
+    const response = await request(app)
+      .post("/api/markets/state/recent")
+      .send({ market })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      state: {
+        recentMarkets: [{ market: { id: "polymarket:123" } }],
+      },
     });
   });
 
