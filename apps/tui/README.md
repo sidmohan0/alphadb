@@ -33,6 +33,12 @@ npm install
 npm run dev --workspace @alphadb/tui
 ```
 
+To route market reads through the AlphaDB backend instead of hitting providers directly:
+
+```bash
+ALPHADB_API_BASE_URL=http://localhost:4000/api npm run dev --workspace @alphadb/tui
+```
+
 ### Build And Run
 
 ```bash
@@ -121,6 +127,7 @@ KALSHI_PRIVATE_KEY_PEM='-----BEGIN PRIVATE KEY-----...'
 
 - Gamma API: trending markets, market metadata, search
 - CLOB API: outcome price history
+- AlphaDB backend API: optional normalized market reads via `ALPHADB_API_BASE_URL`
 
 ## Project Layout
 

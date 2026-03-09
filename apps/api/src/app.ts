@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 
+import { marketsRouter } from "./markets/controllers/markets.controller";
 import { polymarketRouter } from "./polymarket/controllers/polymarket.controller";
 
 export type Message = { id: number; message: string };
@@ -42,6 +43,7 @@ export function createApp(): express.Express {
     res.status(201).json(next);
   });
 
+  app.use("/api/markets", marketsRouter);
   app.use("/api/polymarket", polymarketRouter);
 
   return app;
