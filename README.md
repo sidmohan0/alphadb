@@ -2,7 +2,7 @@
 
 ![Homepage screenshot](docs/screenshots/homepage.png)
 
-AlphaDB is a prediction-market platform monorepo. It currently contains:
+AlphaDB is a prediction-market platform monorepo for backend services, operator tooling, and fast market clients. It currently contains:
 
 - `apps/api` - the production-oriented backend for market ingestion, discovery runs, persistence, and future shared APIs
 - `apps/web` - the browser client for the backend-backed discovery workflows
@@ -10,9 +10,9 @@ AlphaDB is a prediction-market platform monorepo. It currently contains:
 - `packages/market-core` - shared provider-neutral market contracts used by the API and TUI
 - `packages/sdk` - shared backend client SDK for market reads, user state, and streaming
 
-The repo is in a Phase 1 convergence step: the legacy Polymarket discovery service and the newer TUI now live in one codebase so the TUI can progressively move onto backend APIs without a rewrite.
+The repository now combines the legacy Polymarket discovery system and the newer multi-provider market workspace in one codebase, so the TUI and future clients can progressively move onto shared backend APIs without a rewrite.
 
-## Direction
+## Platform Direction
 
 The target shape is:
 
@@ -20,6 +20,7 @@ The target shape is:
 - one canonical market model
 - one backend service layer for search, trending, history, realtime delivery, and user state
 - multiple clients, starting with web and TUI
+- shared workspace packages for contracts and client access
 
 Architecture notes and accepted decisions live in:
 
@@ -114,6 +115,12 @@ Run the TUI separately:
 npm run dev:tui
 ```
 
+Run the TUI against the backend API:
+
+```bash
+ALPHADB_API_BASE_URL=http://localhost:4000/api npm run dev:tui
+```
+
 Useful workspace-scoped commands:
 
 - `npm run build` - build api, web, and tui
@@ -140,6 +147,14 @@ Useful workspace-scoped commands:
 - backend SSE delivery for live market updates
 - migration and maintenance scripts
 
+### Shared Packages
+
+`packages/market-core` and `packages/sdk` define the shared boundary between apps:
+
+- canonical market contracts shared by the API and TUI
+- a reusable backend client for market reads, user state, and streaming
+- a cleaner path for the web client to adopt the same backend contract next
+
 ### Web
 
 `apps/web` is the browser client around the backend discovery workflows. It remains useful as an operational and product shell while AlphaDB expands beyond the original Polymarket-only flow.
@@ -154,7 +169,7 @@ Useful workspace-scoped commands:
 - saved and recent markets
 - ANSI candlestick rendering
 
-Today it still reads mostly from provider APIs directly. That is intentional during migration; the accepted direction is to move it behind the backend incrementally.
+Today it can run in either direct-provider mode or backend-backed mode. That is intentional during migration; the accepted direction is to move it behind the backend incrementally until the backend is the default source of truth.
 
 When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads and backend-owned saved/recent state. Direct-provider mode remains available as a local fallback.
 
@@ -165,18 +180,10 @@ When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads 
 - `docs/plans/` - implementation plans
 - `docs/polymarket/` - legacy Polymarket discovery implementation notes and generated artifacts
 
-## Repo Metadata Follow-Up
-
-Tracked as a near-term repo task in `docs/plans/002-phase-1-backend-convergence.md`:
-
-- update the GitHub repository description
-- update GitHub repository topics/tags
-- refresh repo-wide marketing copy once Phase 1 stabilizes
-
 ## Status
 
-Phase 1 is in progress. The repo has been restructured into the target app layout, but backend and TUI are not fully integrated yet. The practical goal of this phase is:
+Phase 1 is in progress. The repo has been restructured into the target app layout and now includes shared contracts, a shared backend SDK, backend market reads, backend-backed user state, and initial streaming support. The practical goal of the remaining phase is:
 
 1. preserve current behavior in all three apps
 2. establish one shared repo and documentation surface
-3. make the backend the future source of truth for richer TUI features
+3. make the backend the default source of truth for richer TUI features

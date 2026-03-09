@@ -110,19 +110,13 @@ Deliverables:
 
 - update root README for the unified AlphaDB direction
 - update repo-wide docs entry points
-- add a follow-up task to refresh the GitHub repository description and topics
+- update the GitHub repository description and topics to match the unified direction
 
 Acceptance criteria:
 
 - the repository no longer reads like a single-purpose Polymarket discovery starter
 - the next person landing in the repo can understand `api`, `web`, and `tui` without branch archaeology
-- GitHub metadata refresh is explicitly tracked as pending
-
-Follow-up TODO:
-
-- update the GitHub repository description
-- update GitHub repository topics/tags
-- refresh any social preview or repo-wide marketing copy after Phase 1 stabilizes
+- GitHub metadata matches the current platform direction
 
 ## Recommended Sequence
 
@@ -142,11 +136,11 @@ Follow-up TODO:
 - backend cached reads and initial SSE streaming
 - backend-owned saved/recent user state with Postgres-backed persistence when `DATABASE_URL` is configured
 - TUI support for backend market reads, backend unified search, backend state sync, and backend live stream consumption
+- refreshed root README plus GitHub description/topics for the unified platform narrative
 
 ## Remaining Work After This Slice
 
 - extract provider runtime adapters into a shared package when the boundaries settle
-- create a typed SDK package instead of app-local backend client glue
 - add backend Polymarket realtime
 - move backend user state from JSONB row storage toward fully relational ownership if product scope demands it
 - add auth, tenancy, and observability hardening
