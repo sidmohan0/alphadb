@@ -9,7 +9,7 @@ import {
   touchBackendRecentMarket,
 } from "./api/backend.js";
 import {
-  applyProviderTickerUpdate,
+  applyMarketStreamUpdate,
   buildCandlesForMarket,
   fetchHistoryForMarket,
   fetchTrendingMarketsForProvider,
@@ -28,7 +28,18 @@ import {
   touchRecentMarket,
 } from "./lib/storage.js";
 import { render } from "./render/renderer.js";
-import { AppState, ListMode, MarketSummary, PersistentState, ProviderId, ProviderPanelState, RangeKey } from "./types.js";
+import {
+  AppState,
+  ListMode,
+  MarketStreamStatus,
+  MarketStreamSubscription,
+  MarketStreamUpdate,
+  MarketSummary,
+  PersistentState,
+  ProviderId,
+  ProviderPanelState,
+  RangeKey,
+} from "./types.js";
 
 const ranges: RangeKey[] = ["6h", "24h", "7d", "30d", "max"];
 const defaultStoragePath = "loading...";
@@ -93,12 +104,12 @@ let persistentState: PersistentState = {
   recentMarkets: [],
 };
 type MarketTickerStream = {
-  replaceMarkets(nextTickers: string[]): void;
+  replaceSubscriptions(nextSubscriptions: MarketStreamSubscription[]): void;
   close(): void;
   getStatusReason(): string | null;
 };
 
-let kalshiTickerStream: MarketTickerStream | null = null;
+let liveMarketStream: MarketTickerStream | null = null;
 let backendStateEnabled = false;
 
 function activeSingleProvider(): ProviderId {
@@ -278,82 +289,146 @@ function updateMarketEverywhere(marketId: string, updater: (market: MarketSummar
   persistStateToDisk();
 }
 
-function applyKalshiTickerMessage(payload: Record<string, unknown>): void {
-  const ticker = typeof payload.market_ticker === "string" ? payload.market_ticker : null;
-  if (!ticker) {
-    return;
-  }
-
-  const marketId = `kalshi:${ticker}`;
-  updateMarketEverywhere(marketId, (market) => applyProviderTickerUpdate(market, payload));
+function applyMarketUpdate(update: MarketStreamUpdate): void {
+  updateMarketEverywhere(update.marketId, (market) => applyMarketStreamUpdate(market, update));
   draw();
 }
 
-function syncKalshiTickerSubscription(): void {
-  const kalshiTickers =
-    state.layoutMode === "unified"
-      ? state.unifiedPanels.kalshi.markets.slice(0, 75).map((market) => market.symbol)
-      : state.provider === "kalshi"
-        ? currentMarkets().slice(0, 75).map((market) => market.symbol)
-        : [];
-
-  if (kalshiTickers.length === 0) {
-    if (kalshiTickerStream) {
-      kalshiTickerStream.close();
-      kalshiTickerStream = null;
-    }
-    if (state.layoutMode === "single") {
-      state.liveStatusMessage = "Polymarket live ticker not enabled";
-    } else {
-      state.unifiedPanels.kalshi.liveStatusMessage = "Kalshi live idle";
+function setProviderLiveStatus(provider: ProviderId, message: string): void {
+  if (state.layoutMode === "unified") {
+    state.unifiedPanels[provider].liveStatusMessage = message;
+    if (state.unifiedFocus === provider) {
+      state.liveStatusMessage = message;
     }
     return;
   }
 
-  if (!kalshiTickerStream) {
-    kalshiTickerStream = hasBackendMarketApi()
-      ? new BackendMarketStream({
-          onStatus: (message) => {
-            if (state.layoutMode === "unified") {
-              state.unifiedPanels.kalshi.liveStatusMessage = message;
-            } else {
-              state.liveStatusMessage = message;
-            }
-            draw();
-          },
-          onTicker: applyKalshiTickerMessage,
-        })
-      : new KalshiTickerStream({
+  if (state.provider === provider) {
+    state.liveStatusMessage = message;
+  }
+}
+
+function buildBackendStreamSubscriptions(): MarketStreamSubscription[] {
+  if (state.layoutMode === "unified") {
+    return [
+      ...state.unifiedPanels.polymarket.markets.slice(0, 20).map((market) => ({
+        provider: "polymarket" as const,
+        marketId: market.id,
+        symbol: market.symbol,
+        outcomeTokenIds: market.outcomes.map((outcome) => outcome.tokenId),
+      })),
+      ...state.unifiedPanels.kalshi.markets.slice(0, 50).map((market) => ({
+        provider: "kalshi" as const,
+        marketId: market.id,
+        symbol: market.symbol,
+      })),
+    ];
+  }
+
+  return currentMarkets().slice(0, state.provider === "polymarket" ? 20 : 50).map((market) => ({
+    provider: market.provider,
+    marketId: market.id,
+    symbol: market.symbol,
+    outcomeTokenIds: market.provider === "polymarket" ? market.outcomes.map((outcome) => outcome.tokenId) : undefined,
+  }));
+}
+
+function syncLiveSubscription(): void {
+  if (hasBackendMarketApi()) {
+    const subscriptions = buildBackendStreamSubscriptions();
+    if (subscriptions.length === 0) {
+      if (liveMarketStream) {
+        liveMarketStream.close();
+        liveMarketStream = null;
+      }
+      setProviderLiveStatus("polymarket", "Polymarket live idle");
+      setProviderLiveStatus("kalshi", "Kalshi live idle");
+      draw();
+      return;
+    }
+
+    if (!liveMarketStream) {
+      liveMarketStream = new BackendMarketStream({
+        onStatus: (status: MarketStreamStatus) => {
+          setProviderLiveStatus(status.provider, status.message);
+          draw();
+        },
+        onUpdate: applyMarketUpdate,
+      });
+    }
+
+    liveMarketStream.replaceSubscriptions(subscriptions);
+    const reason = liveMarketStream.getStatusReason();
+    if (reason) {
+      setProviderLiveStatus("polymarket", reason);
+      setProviderLiveStatus("kalshi", reason);
+    }
+    return;
+  }
+
+  const kalshiSubscriptions =
+    state.layoutMode === "unified"
+      ? state.unifiedPanels.kalshi.markets.slice(0, 75).map((market) => ({
+          provider: "kalshi" as const,
+          marketId: market.id,
+          symbol: market.symbol,
+        }))
+      : state.provider === "kalshi"
+        ? currentMarkets().slice(0, 75).map((market) => ({
+            provider: "kalshi" as const,
+            marketId: market.id,
+            symbol: market.symbol,
+          }))
+        : [];
+
+  if (kalshiSubscriptions.length === 0) {
+    if (liveMarketStream) {
+      liveMarketStream.close();
+      liveMarketStream = null;
+    }
+    setProviderLiveStatus("polymarket", "Polymarket live ticker not enabled");
+    setProviderLiveStatus("kalshi", "Kalshi live idle");
+    draw();
+    return;
+  }
+
+  if (!liveMarketStream) {
+    liveMarketStream = new KalshiTickerStream({
       onStatus: (message) => {
-        if (state.layoutMode === "unified") {
-          state.unifiedPanels.kalshi.liveStatusMessage = message;
-        } else {
-          state.liveStatusMessage = message;
-        }
+        setProviderLiveStatus("kalshi", message);
         draw();
       },
-      onTicker: applyKalshiTickerMessage,
+      onTicker: (payload) => {
+        const ticker = typeof payload.market_ticker === "string" ? payload.market_ticker : null;
+        const price = Number(payload.price_dollars);
+        if (!ticker) {
+          return;
+        }
+
+        applyMarketUpdate({
+          provider: "kalshi",
+          marketId: `kalshi:${ticker}`,
+          symbol: ticker,
+          bestBid: Number.isFinite(Number(payload.yes_bid_dollars)) ? Number(payload.yes_bid_dollars) : undefined,
+          bestAsk: Number.isFinite(Number(payload.yes_ask_dollars)) ? Number(payload.yes_ask_dollars) : undefined,
+          lastTradePrice: Number.isFinite(price) ? price : undefined,
+          volumeTotal: Number.isFinite(Number(payload.dollar_volume)) ? Number(payload.dollar_volume) : undefined,
+          outcomePrices: Number.isFinite(price)
+            ? {
+                [`${ticker}:yes`]: price,
+                [`${ticker}:no`]: Math.max(0, 1 - price),
+              }
+            : undefined,
+          receivedAt: Date.now(),
+        });
+      },
     });
   }
 
-  const selected =
-    state.layoutMode === "unified"
-      ? state.unifiedPanels.kalshi.markets[state.unifiedPanels.kalshi.selectedIndex] ?? null
-      : selectedMarket();
-
-  const tickers = [...kalshiTickers];
-  if (selected?.provider === "kalshi" && !tickers.includes(selected.symbol)) {
-    tickers.push(selected.symbol);
-  }
-
-  kalshiTickerStream.replaceMarkets(tickers);
-  const reason = kalshiTickerStream.getStatusReason();
+  liveMarketStream.replaceSubscriptions(kalshiSubscriptions);
+  const reason = liveMarketStream.getStatusReason();
   if (reason) {
-    if (state.layoutMode === "unified") {
-      state.unifiedPanels.kalshi.liveStatusMessage = reason;
-    } else {
-      state.liveStatusMessage = reason;
-    }
+    setProviderLiveStatus("kalshi", reason);
   }
 }
 
@@ -372,7 +447,7 @@ function showBrowseMode(mode: Exclude<ListMode, "search">): void {
   state.statusMessage = `Showing ${mode} markets.`;
   clearError();
   draw();
-  syncKalshiTickerSubscription();
+  syncLiveSubscription();
   void loadChart();
 }
 
@@ -547,7 +622,7 @@ async function loadTrending(): Promise<void> {
     sanitizeSelection();
     state.statusMessage = `Loaded ${state.trendingMarkets.length} trending markets.`;
     draw();
-    syncKalshiTickerSubscription();
+    syncLiveSubscription();
 
     if (state.mode !== "search") {
       await loadChart();
@@ -583,7 +658,7 @@ async function loadUnifiedTrending(): Promise<void> {
 
     state.statusMessage = "Unified view loaded.";
     draw();
-    syncKalshiTickerSubscription();
+    syncLiveSubscription();
     await Promise.all([
       loadUnifiedChart("polymarket"),
       loadUnifiedChart("kalshi"),
@@ -633,7 +708,7 @@ async function runSearch(): Promise<void> {
 
       state.statusMessage = `Unified search loaded for "${query}".`;
       draw();
-      syncKalshiTickerSubscription();
+      syncLiveSubscription();
       await Promise.all([
         loadUnifiedChart("polymarket"),
         loadUnifiedChart("kalshi"),
@@ -684,7 +759,7 @@ async function runSearch(): Promise<void> {
       ? `Found ${state.searchResults.length} markets for "${query}".`
       : `No markets found for "${query}".`;
     draw();
-    syncKalshiTickerSubscription();
+    syncLiveSubscription();
     await loadChart();
   } catch (error) {
     state.loadingMarkets = false;
@@ -714,7 +789,7 @@ function moveSelection(delta: number): void {
     panel.selectedIndex = Math.min(Math.max(panel.selectedIndex + delta, 0), markets.length - 1);
     panel.selectedOutcomeIndex = 0;
     draw();
-    syncKalshiTickerSubscription();
+    syncLiveSubscription();
     void loadUnifiedChart(focusedUnifiedProvider());
     return;
   }
@@ -722,7 +797,7 @@ function moveSelection(delta: number): void {
   state.selectedIndex = Math.min(Math.max(state.selectedIndex + delta, 0), markets.length - 1);
   state.selectedOutcomeIndex = 0;
   draw();
-  syncKalshiTickerSubscription();
+  syncLiveSubscription();
   void loadChart();
 }
 
@@ -782,7 +857,9 @@ function setProvider(provider: ProviderId): void {
   syncPersistentLists();
   state.liveStatusMessage = provider === "kalshi"
     ? "Kalshi live ticker pending connection"
-    : "Polymarket live ticker not enabled";
+    : hasBackendMarketApi()
+      ? "Polymarket backend stream pending connection"
+      : "Polymarket live ticker not enabled";
   draw();
 
   if (state.query.trim()) {

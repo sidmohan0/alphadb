@@ -4,6 +4,7 @@ import { Router } from "express";
 import { mapInvalidInput, toHttpErrorResponse } from "../errors";
 import { kalshiRealtimeHub } from "../services/kalshiRealtimeHub";
 import { marketDataService } from "../services/marketDataService";
+import { polymarketRealtimeHub } from "../services/polymarketRealtimeHub";
 import {
   getUserMarketState,
   normalizeMarketSummary,
@@ -12,7 +13,7 @@ import {
   saveMarketForUser,
   touchRecentMarketForUser,
 } from "../services/userStateStore";
-import { ProviderId, RangeKey } from "../types";
+import { MarketStreamSubscription, ProviderId, RangeKey } from "../types";
 
 const router = Router();
 
@@ -73,6 +74,55 @@ function parseTickers(value: unknown): string[] {
   }
 
   return [...new Set(raw.split(",").map((ticker) => ticker.trim()).filter(Boolean))];
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseStreamSubscriptions(value: unknown): MarketStreamSubscription[] {
+  const raw = toSingleString(value);
+  if (!raw) {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw mapInvalidInput("subscriptions must be valid JSON", "subscriptions");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw mapInvalidInput("subscriptions must be an array", "subscriptions");
+  }
+
+  return parsed.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const rawEntry = entry as Partial<MarketStreamSubscription>;
+    if (
+      (rawEntry.provider !== "polymarket" && rawEntry.provider !== "kalshi") ||
+      typeof rawEntry.marketId !== "string" ||
+      !rawEntry.marketId.trim() ||
+      typeof rawEntry.symbol !== "string" ||
+      !rawEntry.symbol.trim()
+    ) {
+      return [];
+    }
+
+    return [{
+      provider: rawEntry.provider,
+      marketId: rawEntry.marketId.trim(),
+      symbol: rawEntry.symbol.trim(),
+      outcomeTokenIds: Array.isArray(rawEntry.outcomeTokenIds)
+        ? rawEntry.outcomeTokenIds.filter((tokenId): tokenId is string => typeof tokenId === "string" && tokenId.trim().length > 0)
+        : undefined,
+    }];
+  });
 }
 
 router.get("/trending", async (req, res) => {
@@ -230,7 +280,15 @@ router.post("/state/recent", async (req, res) => {
 
 router.get("/stream", (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
-  const tickers = parseTickers(req.query.tickers);
+  const subscriptions = parseStreamSubscriptions(req.query.subscriptions);
+  const legacyTickers = parseTickers(req.query.tickers);
+  const effectiveSubscriptions = subscriptions.length > 0
+    ? subscriptions
+    : legacyTickers.map((ticker) => ({
+        provider: "kalshi" as const,
+        marketId: `kalshi:${ticker}`,
+        symbol: ticker,
+      }));
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -242,12 +300,40 @@ router.get("/stream", (req, res) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  writeEvent("ready", { requestId, tickers });
+  writeEvent("ready", { requestId, subscriptions: effectiveSubscriptions });
 
-  const subscription = kalshiRealtimeHub.subscribe(
-    tickers,
-    (message) => writeEvent("status", { message }),
-    (payload) => writeEvent("ticker", payload),
+  const kalshiSubscription = kalshiRealtimeHub.subscribe(
+    effectiveSubscriptions.filter((entry) => entry.provider === "kalshi").map((entry) => entry.symbol),
+    (message) => writeEvent("status", { provider: "kalshi", message }),
+    (payload) => {
+      const marketTicker = typeof payload.market_ticker === "string" ? payload.market_ticker : null;
+      if (!marketTicker) {
+        return;
+      }
+
+      const price = toFiniteNumber(payload.price_dollars);
+
+      writeEvent("market_update", {
+        provider: "kalshi",
+        marketId: `kalshi:${marketTicker}`,
+        symbol: marketTicker,
+        bestBid: toFiniteNumber(payload.yes_bid_dollars),
+        bestAsk: toFiniteNumber(payload.yes_ask_dollars),
+        lastTradePrice: price,
+        volumeTotal: toFiniteNumber(payload.dollar_volume),
+        outcomePrices: price === undefined ? undefined : {
+          [`${marketTicker}:yes`]: price,
+          [`${marketTicker}:no`]: Math.max(0, 1 - price),
+        },
+        receivedAt: Date.now(),
+      });
+    },
+  );
+
+  const polymarketSubscription = polymarketRealtimeHub.subscribe(
+    effectiveSubscriptions.filter((entry): entry is MarketStreamSubscription & { provider: "polymarket" } => entry.provider === "polymarket"),
+    (message) => writeEvent("status", { provider: "polymarket", message }),
+    (payload) => writeEvent("market_update", payload),
   );
 
   const heartbeat = setInterval(() => {
@@ -256,7 +342,8 @@ router.get("/stream", (req, res) => {
 
   req.on("close", () => {
     clearInterval(heartbeat);
-    subscription.close();
+    kalshiSubscription.close();
+    polymarketSubscription.close();
     res.end();
   });
 });

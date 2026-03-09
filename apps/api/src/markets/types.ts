@@ -1,4 +1,7 @@
 export type {
+  MarketStreamStatus,
+  MarketStreamSubscription,
+  MarketStreamUpdate,
   MarketSummary,
   OutcomeToken,
   PersistedMarketSnapshot,

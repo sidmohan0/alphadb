@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import WS from "ws";
 
+import type { MarketStreamSubscription } from "../types.js";
+
 type StatusHandler = (message: string) => void;
 type TickerHandler = (payload: Record<string, unknown>) => void;
 
@@ -101,8 +103,13 @@ export class KalshiTickerStream {
     return this.authError;
   }
 
-  replaceMarkets(nextTickers: string[]): void {
-    const normalized = [...new Set(nextTickers.filter(Boolean))].sort();
+  replaceSubscriptions(nextSubscriptions: MarketStreamSubscription[]): void {
+    const normalized = [...new Set(
+      nextSubscriptions
+        .filter((entry) => entry.provider === "kalshi")
+        .map((entry) => entry.symbol)
+        .filter(Boolean),
+    )].sort();
     if (sameTickers(normalized, this.tickers)) {
       return;
     }

@@ -14,7 +14,7 @@ import {
   fetchKalshiTrendingMarkets,
   searchKalshiMarkets,
 } from "./kalshi.js";
-import { Candle, MarketSummary, PricePoint, ProviderId, RangeKey } from "../types.js";
+import { Candle, MarketStreamUpdate, MarketSummary, PricePoint, ProviderId, RangeKey } from "../types.js";
 
 interface SearchOptions {
   localCandidates?: MarketSummary[];
@@ -134,4 +134,27 @@ export function buildCandlesForMarket(
 
 export function applyProviderTickerUpdate(market: MarketSummary, payload: Record<string, unknown>): MarketSummary {
   return market.provider === "kalshi" ? applyKalshiTickerUpdate(market, payload) : market;
+}
+
+export function applyMarketStreamUpdate(market: MarketSummary, update: MarketStreamUpdate): MarketSummary {
+  if (market.provider !== update.provider || market.id !== update.marketId) {
+    return market;
+  }
+
+  return {
+    ...market,
+    bestBid: update.bestBid ?? market.bestBid,
+    bestAsk: update.bestAsk ?? market.bestAsk,
+    lastTradePrice: update.lastTradePrice ?? market.lastTradePrice,
+    volume24hr: update.volume24hr ?? market.volume24hr,
+    volumeTotal: update.volumeTotal ?? market.volumeTotal,
+    liquidity: update.liquidity ?? market.liquidity,
+    oneDayPriceChange: update.oneDayPriceChange ?? market.oneDayPriceChange,
+    outcomes: market.outcomes.map((outcome) => ({
+      ...outcome,
+      price: update.outcomePrices && outcome.tokenId in update.outcomePrices
+        ? update.outcomePrices[outcome.tokenId] ?? null
+        : outcome.price,
+    })),
+  };
 }

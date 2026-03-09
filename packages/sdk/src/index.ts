@@ -1,4 +1,13 @@
-import type { MarketSummary, PersistentState, PricePoint, ProviderId, RangeKey } from "@alphadb/market-core";
+import type {
+  MarketStreamStatus,
+  MarketStreamSubscription,
+  MarketStreamUpdate,
+  MarketSummary,
+  PersistentState,
+  PricePoint,
+  ProviderId,
+  RangeKey,
+} from "@alphadb/market-core";
 
 export interface AlphaDBClientOptions {
   baseUrl?: string | null;
@@ -8,8 +17,8 @@ export interface AlphaDBClientOptions {
 }
 
 export interface BackendMarketStreamOptions {
-  onStatus: (message: string) => void;
-  onTicker: (payload: Record<string, unknown>) => void;
+  onStatus: (status: MarketStreamStatus) => void;
+  onUpdate: (payload: MarketStreamUpdate) => void;
 }
 
 function normalizeBaseUrl(value: string | null | undefined): string | null {
@@ -32,8 +41,8 @@ function sameTickers(left: string[], right: string[]): boolean {
 }
 
 export class AlphaDBMarketStream {
-  private readonly onStatus: (message: string) => void;
-  private readonly onTicker: (payload: Record<string, unknown>) => void;
+  private readonly onStatus: (status: MarketStreamStatus) => void;
+  private readonly onUpdate: (payload: MarketStreamUpdate) => void;
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: string | null;
   private readonly userId: string;
@@ -41,7 +50,7 @@ export class AlphaDBMarketStream {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelayMs = 1_000;
   private closed = false;
-  private tickers: string[] = [];
+  private subscriptions: MarketStreamSubscription[] = [];
 
   constructor(
     baseUrl: string | null,
@@ -52,7 +61,7 @@ export class AlphaDBMarketStream {
     this.baseUrl = baseUrl;
     this.userId = userId;
     this.onStatus = options.onStatus;
-    this.onTicker = options.onTicker;
+    this.onUpdate = options.onUpdate;
     this.fetchImpl = fetchImpl;
   }
 
@@ -60,13 +69,25 @@ export class AlphaDBMarketStream {
     return this.baseUrl ? null : "set ALPHADB_API_BASE_URL to enable backend streaming";
   }
 
-  replaceMarkets(nextTickers: string[]): void {
-    const normalized = [...new Set(nextTickers.filter(Boolean))].sort();
-    if (sameTickers(normalized, this.tickers)) {
+  replaceSubscriptions(nextSubscriptions: MarketStreamSubscription[]): void {
+    const normalized = [...nextSubscriptions]
+      .map((entry) => ({
+        provider: entry.provider,
+        marketId: entry.marketId,
+        symbol: entry.symbol,
+        outcomeTokenIds: [...new Set(entry.outcomeTokenIds?.filter(Boolean) ?? [])].sort(),
+      }))
+      .sort((left, right) =>
+        `${left.provider}:${left.marketId}:${left.symbol}`.localeCompare(`${right.provider}:${right.marketId}:${right.symbol}`),
+      );
+
+    const serialized = normalized.map((entry) => JSON.stringify(entry));
+    const current = this.subscriptions.map((entry) => JSON.stringify(entry));
+    if (sameTickers(serialized, current)) {
       return;
     }
 
-    this.tickers = normalized;
+    this.subscriptions = normalized;
     this.restart();
   }
 
@@ -88,7 +109,7 @@ export class AlphaDBMarketStream {
     }
 
     if (!this.baseUrl) {
-      this.onStatus("backend stream unavailable");
+      this.onStatus({ provider: "polymarket", message: "backend stream unavailable" });
       return;
     }
 
@@ -100,8 +121,8 @@ export class AlphaDBMarketStream {
     this.controller?.abort();
     this.controller = null;
 
-    if (this.tickers.length === 0) {
-      this.onStatus("backend stream idle");
+    if (this.subscriptions.length === 0) {
+      this.onStatus({ provider: "polymarket", message: "backend stream idle" });
       return;
     }
 
@@ -117,7 +138,7 @@ export class AlphaDBMarketStream {
 
     try {
       const url = new URL(`${this.baseUrl}/markets/stream`);
-      url.searchParams.set("tickers", this.tickers.join(","));
+      url.searchParams.set("subscriptions", JSON.stringify(this.subscriptions));
 
       const response = await this.fetchImpl(url.toString(), {
         headers: {
@@ -131,7 +152,7 @@ export class AlphaDBMarketStream {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      this.onStatus(`backend stream connected (${this.tickers.length} markets)`);
+      this.onStatus({ provider: "polymarket", message: `backend stream connected (${this.subscriptions.length} subscriptions)` });
       this.reconnectDelayMs = 1_000;
 
       const reader = response.body.getReader();
@@ -157,9 +178,10 @@ export class AlphaDBMarketStream {
         return;
       }
 
-      this.onStatus(
-        error instanceof Error ? `backend stream reconnecting: ${error.message}` : "backend stream reconnecting",
-      );
+      this.onStatus({
+        provider: "polymarket",
+        message: error instanceof Error ? `backend stream reconnecting: ${error.message}` : "backend stream reconnecting",
+      });
     }
 
     if (this.closed || controller.signal.aborted) {
@@ -199,16 +221,26 @@ export class AlphaDBMarketStream {
 
     try {
       const payload = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
-      if (event === "status" && typeof payload.message === "string") {
-        this.onStatus(payload.message);
+      if (
+        event === "status" &&
+        (payload.provider === "polymarket" || payload.provider === "kalshi") &&
+        typeof payload.message === "string"
+      ) {
+        this.onStatus(payload as unknown as MarketStreamStatus);
         return;
       }
 
-      if (event === "ticker") {
-        this.onTicker(payload);
+      if (
+        event === "market_update" &&
+        (payload.provider === "polymarket" || payload.provider === "kalshi") &&
+        typeof payload.marketId === "string" &&
+        typeof payload.symbol === "string" &&
+        typeof payload.receivedAt === "number"
+      ) {
+        this.onUpdate(payload as unknown as MarketStreamUpdate);
       }
     } catch {
-      this.onStatus("backend stream parse error");
+      this.onStatus({ provider: "polymarket", message: "backend stream parse error" });
     }
   }
 }

@@ -133,7 +133,7 @@ Acceptance criteria:
 - shared market contracts in `packages/market-core`
 - shared backend client in `packages/sdk`
 - backend market reads for trending, unified trending, search, unified search, and history
-- backend cached reads and initial SSE streaming
+- backend cached reads and SSE streaming across Polymarket and Kalshi
 - backend-owned saved/recent user state with Postgres-backed persistence when `DATABASE_URL` is configured
 - TUI support for backend market reads, backend unified search, backend state sync, and backend live stream consumption
 - refreshed root README plus GitHub description/topics for the unified platform narrative
@@ -141,7 +141,6 @@ Acceptance criteria:
 ## Remaining Work After This Slice
 
 - extract provider runtime adapters into a shared package when the boundaries settle
-- add backend Polymarket realtime
 - move backend user state from JSONB row storage toward fully relational ownership if product scope demands it
 - add auth, tenancy, and observability hardening
 

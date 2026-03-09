@@ -15,7 +15,7 @@ function sameTickers(left, right) {
 }
 export class AlphaDBMarketStream {
     onStatus;
-    onTicker;
+    onUpdate;
     fetchImpl;
     baseUrl;
     userId;
@@ -23,23 +23,32 @@ export class AlphaDBMarketStream {
     reconnectTimer = null;
     reconnectDelayMs = 1_000;
     closed = false;
-    tickers = [];
+    subscriptions = [];
     constructor(baseUrl, userId, options, fetchImpl) {
         this.baseUrl = baseUrl;
         this.userId = userId;
         this.onStatus = options.onStatus;
-        this.onTicker = options.onTicker;
+        this.onUpdate = options.onUpdate;
         this.fetchImpl = fetchImpl;
     }
     getStatusReason() {
         return this.baseUrl ? null : "set ALPHADB_API_BASE_URL to enable backend streaming";
     }
-    replaceMarkets(nextTickers) {
-        const normalized = [...new Set(nextTickers.filter(Boolean))].sort();
-        if (sameTickers(normalized, this.tickers)) {
+    replaceSubscriptions(nextSubscriptions) {
+        const normalized = [...nextSubscriptions]
+            .map((entry) => ({
+            provider: entry.provider,
+            marketId: entry.marketId,
+            symbol: entry.symbol,
+            outcomeTokenIds: [...new Set(entry.outcomeTokenIds?.filter(Boolean) ?? [])].sort(),
+        }))
+            .sort((left, right) => `${left.provider}:${left.marketId}:${left.symbol}`.localeCompare(`${right.provider}:${right.marketId}:${right.symbol}`));
+        const serialized = normalized.map((entry) => JSON.stringify(entry));
+        const current = this.subscriptions.map((entry) => JSON.stringify(entry));
+        if (sameTickers(serialized, current)) {
             return;
         }
-        this.tickers = normalized;
+        this.subscriptions = normalized;
         this.restart();
     }
     close() {
@@ -56,7 +65,7 @@ export class AlphaDBMarketStream {
             return;
         }
         if (!this.baseUrl) {
-            this.onStatus("backend stream unavailable");
+            this.onStatus({ provider: "polymarket", message: "backend stream unavailable" });
             return;
         }
         if (this.reconnectTimer) {
@@ -65,8 +74,8 @@ export class AlphaDBMarketStream {
         }
         this.controller?.abort();
         this.controller = null;
-        if (this.tickers.length === 0) {
-            this.onStatus("backend stream idle");
+        if (this.subscriptions.length === 0) {
+            this.onStatus({ provider: "polymarket", message: "backend stream idle" });
             return;
         }
         const controller = new AbortController();
@@ -79,7 +88,7 @@ export class AlphaDBMarketStream {
         }
         try {
             const url = new URL(`${this.baseUrl}/markets/stream`);
-            url.searchParams.set("tickers", this.tickers.join(","));
+            url.searchParams.set("subscriptions", JSON.stringify(this.subscriptions));
             const response = await this.fetchImpl(url.toString(), {
                 headers: {
                     Accept: "text/event-stream",
@@ -90,7 +99,7 @@ export class AlphaDBMarketStream {
             if (!response.ok || !response.body) {
                 throw new Error(`HTTP ${response.status}`);
             }
-            this.onStatus(`backend stream connected (${this.tickers.length} markets)`);
+            this.onStatus({ provider: "polymarket", message: `backend stream connected (${this.subscriptions.length} subscriptions)` });
             this.reconnectDelayMs = 1_000;
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -112,7 +121,10 @@ export class AlphaDBMarketStream {
             if (controller.signal.aborted || this.closed) {
                 return;
             }
-            this.onStatus(error instanceof Error ? `backend stream reconnecting: ${error.message}` : "backend stream reconnecting");
+            this.onStatus({
+                provider: "polymarket",
+                message: error instanceof Error ? `backend stream reconnecting: ${error.message}` : "backend stream reconnecting",
+            });
         }
         if (this.closed || controller.signal.aborted) {
             return;
@@ -144,16 +156,22 @@ export class AlphaDBMarketStream {
         }
         try {
             const payload = JSON.parse(dataLines.join("\n"));
-            if (event === "status" && typeof payload.message === "string") {
-                this.onStatus(payload.message);
+            if (event === "status" &&
+                (payload.provider === "polymarket" || payload.provider === "kalshi") &&
+                typeof payload.message === "string") {
+                this.onStatus(payload);
                 return;
             }
-            if (event === "ticker") {
-                this.onTicker(payload);
+            if (event === "market_update" &&
+                (payload.provider === "polymarket" || payload.provider === "kalshi") &&
+                typeof payload.marketId === "string" &&
+                typeof payload.symbol === "string" &&
+                typeof payload.receivedAt === "number") {
+                this.onUpdate(payload);
             }
         }
         catch {
-            this.onStatus("backend stream parse error");
+            this.onStatus({ provider: "polymarket", message: "backend stream parse error" });
         }
     }
 }

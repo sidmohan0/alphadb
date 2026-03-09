@@ -1,4 +1,4 @@
-import type { MarketSummary, PersistentState, PricePoint, ProviderId, RangeKey } from "@alphadb/market-core";
+import type { MarketStreamStatus, MarketStreamSubscription, MarketStreamUpdate, MarketSummary, PersistentState, PricePoint, ProviderId, RangeKey } from "@alphadb/market-core";
 export interface AlphaDBClientOptions {
     baseUrl?: string | null;
     userAgent?: string;
@@ -6,12 +6,12 @@ export interface AlphaDBClientOptions {
     fetchImpl?: typeof fetch;
 }
 export interface BackendMarketStreamOptions {
-    onStatus: (message: string) => void;
-    onTicker: (payload: Record<string, unknown>) => void;
+    onStatus: (status: MarketStreamStatus) => void;
+    onUpdate: (payload: MarketStreamUpdate) => void;
 }
 export declare class AlphaDBMarketStream {
     private readonly onStatus;
-    private readonly onTicker;
+    private readonly onUpdate;
     private readonly fetchImpl;
     private readonly baseUrl;
     private readonly userId;
@@ -19,10 +19,10 @@ export declare class AlphaDBMarketStream {
     private reconnectTimer;
     private reconnectDelayMs;
     private closed;
-    private tickers;
+    private subscriptions;
     constructor(baseUrl: string | null, userId: string, options: BackendMarketStreamOptions, fetchImpl: typeof fetch);
     getStatusReason(): string | null;
-    replaceMarkets(nextTickers: string[]): void;
+    replaceSubscriptions(nextSubscriptions: MarketStreamSubscription[]): void;
     close(): void;
     private restart;
     private connect;

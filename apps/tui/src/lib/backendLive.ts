@@ -1,11 +1,15 @@
 import { AlphaDBMarketStream } from "@alphadb/sdk";
 
 import { backendClient } from "../api/backend.js";
+import { MarketStreamStatus, MarketStreamSubscription, MarketStreamUpdate } from "../types.js";
 
 export class BackendMarketStream {
   private readonly stream: AlphaDBMarketStream;
 
-  constructor(options: { onStatus: (message: string) => void; onTicker: (payload: Record<string, unknown>) => void }) {
+  constructor(options: {
+    onStatus: (status: MarketStreamStatus) => void;
+    onUpdate: (payload: MarketStreamUpdate) => void;
+  }) {
     this.stream = backendClient.createMarketStream(options);
   }
 
@@ -13,8 +17,8 @@ export class BackendMarketStream {
     return this.stream.getStatusReason();
   }
 
-  replaceMarkets(nextTickers: string[]): void {
-    this.stream.replaceMarkets(nextTickers);
+  replaceSubscriptions(nextSubscriptions: MarketStreamSubscription[]): void {
+    this.stream.replaceSubscriptions(nextSubscriptions);
   }
 
   close(): void {

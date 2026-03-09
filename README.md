@@ -144,7 +144,7 @@ Useful workspace-scoped commands:
 - Redis-backed coordination
 - normalized market read APIs for trending, search, unified views, and history
 - backend user state for saved markets and recents
-- backend SSE delivery for live market updates
+- backend SSE delivery for live market updates across Polymarket and Kalshi
 - migration and maintenance scripts
 
 ### Shared Packages
@@ -171,7 +171,7 @@ Useful workspace-scoped commands:
 
 Today it can run in either direct-provider mode or backend-backed mode. That is intentional during migration; the accepted direction is to move it behind the backend incrementally until the backend is the default source of truth.
 
-When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads and backend-owned saved/recent state. Direct-provider mode remains available as a local fallback.
+When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads, backend-owned saved/recent state, and backend live streaming for Polymarket and Kalshi. Direct-provider mode remains available as a local fallback.
 
 ## Docs
 
@@ -182,7 +182,7 @@ When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads 
 
 ## Status
 
-Phase 1 is in progress. The repo has been restructured into the target app layout and now includes shared contracts, a shared backend SDK, backend market reads, backend-backed user state, and initial streaming support. The practical goal of the remaining phase is:
+Phase 1 is in progress. The repo has been restructured into the target app layout and now includes shared contracts, a shared backend SDK, backend market reads, backend-backed user state, and backend live streaming for both supported market providers. The practical goal of the remaining phase is:
 
 1. preserve current behavior in all three apps
 2. establish one shared repo and documentation surface

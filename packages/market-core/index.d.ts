@@ -43,3 +43,30 @@ export interface PersistentState {
   savedMarkets: PersistedMarketSnapshot[];
   recentMarkets: PersistedMarketSnapshot[];
 }
+
+export interface MarketStreamSubscription {
+  provider: ProviderId;
+  marketId: string;
+  symbol: string;
+  outcomeTokenIds?: string[];
+}
+
+export interface MarketStreamUpdate {
+  provider: ProviderId;
+  marketId: string;
+  symbol: string;
+  bestBid?: number | null;
+  bestAsk?: number | null;
+  lastTradePrice?: number | null;
+  volume24hr?: number;
+  volumeTotal?: number;
+  liquidity?: number;
+  oneDayPriceChange?: number | null;
+  outcomePrices?: Record<string, number | null>;
+  receivedAt: number;
+}
+
+export interface MarketStreamStatus {
+  provider: ProviderId;
+  message: string;
+}
