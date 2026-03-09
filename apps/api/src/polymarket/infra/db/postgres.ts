@@ -15,7 +15,7 @@ function parseIntEnv(name: string, fallback: number): number {
 export function getPgConnectionString(): string {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required for discovery run persistence");
+    throw new Error("DATABASE_URL is required for Postgres-backed persistence");
   }
 
   return databaseUrl;

@@ -39,9 +39,12 @@ To route market reads through the AlphaDB backend instead of hitting providers d
 ALPHADB_API_BASE_URL=http://localhost:4000/api npm run dev --workspace @alphadb/tui
 ```
 
+When the backend is configured, saved markets and recents are read from and written to the backend user-state store. In direct mode, the TUI falls back to its local state file.
+
 To seed backend saved/recent state for the default local user before launching the TUI:
 
 ```bash
+ALPHADB_API_USER_STATE_BACKEND=postgres npm run markets:ensure-state-schema
 npm run markets:seed-state
 ```
 
@@ -100,7 +103,7 @@ Ranking favors:
 
 ## Persistence
 
-The app stores saved markets and recents at:
+Direct mode stores saved markets and recents at:
 
 ```bash
 ~/.config/alphadb-tui/state.json
@@ -110,6 +113,13 @@ Override the location with:
 
 ```bash
 ALPHADB_TUI_STATE_PATH=/custom/path/state.json
+```
+
+Backend mode stores saved markets and recents in the AlphaDB API user-state store. By default that uses Postgres whenever `DATABASE_URL` is present; you can force selection with:
+
+```bash
+ALPHADB_API_USER_STATE_BACKEND=postgres
+ALPHADB_API_USER_STATE_BACKEND=file
 ```
 
 ## Optional Kalshi Live Ticker
@@ -134,6 +144,7 @@ KALSHI_PRIVATE_KEY_PEM='-----BEGIN PRIVATE KEY-----...'
 - Gamma API: trending markets, market metadata, search
 - CLOB API: outcome price history
 - AlphaDB backend API: optional normalized market reads via `ALPHADB_API_BASE_URL`
+- AlphaDB backend user-state API: optional saved/recent persistence via `ALPHADB_API_BASE_URL`
 
 ## Project Layout
 

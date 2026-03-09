@@ -10,6 +10,7 @@
     "start": "npm run start --workspace @alphadb/api",
     "test": "npm run test --workspace @alphadb/api",
     "typecheck:tui": "npm run typecheck --workspace @alphadb/tui",
+    "markets:ensure-state-schema": "npm run markets:ensure-state-schema --workspace @alphadb/api",
     "markets:seed-state": "npm run markets:seed-state --workspace @alphadb/api",
     "polymarket:market-channels": "npm run polymarket:market-channels --workspace @alphadb/api",
     "polymarket:discovery-schema": "npm run discovery:ensure-schema --workspace @alphadb/api",

@@ -8,6 +8,10 @@ This repository is now tracking the unified AlphaDB direction: backend service, 
 - `docs/adrs/README.md`
 - `docs/plans/002-phase-1-backend-convergence.md`
 
+## Shared Packages
+
+- `packages/market-core/README.md`
+
 ## Architecture
 
 - `docs/adrs/0001-monorepo-and-app-topology.md`

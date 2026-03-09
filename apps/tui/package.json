@@ -17,6 +17,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@alphadb/market-core": "1.0.0",
     "ws": "^8.19.0"
   }
 }

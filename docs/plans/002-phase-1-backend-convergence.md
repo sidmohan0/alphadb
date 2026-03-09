@@ -1,6 +1,6 @@
 # Phase 1 Backend Convergence
 
-- Status: Draft
+- Status: In Progress
 - Date: 2026-03-09
 
 This plan assumes the accepted ADR set and accepted backend convergence checklist.
@@ -14,7 +14,7 @@ Complete the first integrated milestone:
 - prepare shared packages
 - make backend-powered TUI reads feasible without a big-bang rewrite
 
-This phase does not yet require backend-backed auth, alerts, or full discovery-run exposure in the TUI.
+This phase still does not require backend-backed auth, alerts, or full discovery-run exposure in the TUI.
 
 ## Scope
 
@@ -23,15 +23,13 @@ In scope:
 - establish merged monorepo structure
 - move the TUI into `apps/tui`
 - extract shared provider-neutral types
-- extract provider adapters where practical
-- define the typed SDK contract for trending, search, market detail, and history
-- implement initial backend read endpoints if the merge gets that far cleanly
+- implement backend market read endpoints for trending, unified trending, search, unified search, and history
+- add backend-owned saved/recent user state
+- add initial backend realtime fanout for client consumption
 
 Out of scope:
 
-- backend-backed watchlists and recents
 - TUI authentication
-- realtime backend fanout
 - alerting
 - claiming cross-provider market identity
 
@@ -55,7 +53,7 @@ Acceptance criteria:
 
 Deliverables:
 
-- create `packages/domain`
+- create `packages/market-core`
 - move canonical market/provider/range/query types there
 - remove ad hoc duplicate type definitions across apps where low-risk
 
@@ -104,7 +102,7 @@ Deliverables:
 Acceptance criteria:
 
 - endpoint contract is stable enough for TUI integration work
-- response shapes align with `packages/domain` and `packages/sdk`
+- response shapes align with `packages/market-core`
 
 ### 6. Repo Narrative And Metadata
 
@@ -134,6 +132,23 @@ Follow-up TODO:
 4. Create `packages/sdk`.
 5. Add backend read endpoints for trending, search, market detail, and chart history.
 6. Put the TUI behind a backend-read feature flag.
+
+## Completed In This Phase
+
+- monorepo baseline under `apps/api`, `apps/web`, and `apps/tui`
+- shared market contracts in `packages/market-core`
+- backend market reads for trending, unified trending, search, unified search, and history
+- backend cached reads and initial SSE streaming
+- backend-owned saved/recent user state with Postgres-backed persistence when `DATABASE_URL` is configured
+- TUI support for backend market reads, backend unified search, backend state sync, and backend live stream consumption
+
+## Remaining Work After This Slice
+
+- extract provider runtime adapters into a shared package when the boundaries settle
+- create a typed SDK package instead of app-local backend client glue
+- add backend Polymarket realtime
+- move backend user state from JSONB row storage toward fully relational ownership if product scope demands it
+- add auth, tenancy, and observability hardening
 
 ## Risks
 

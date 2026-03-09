@@ -2,15 +2,21 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
+import { PoolClient } from "pg";
+
+import { getPgPool } from "../../polymarket/infra/db/postgres";
+import { ensureMarketStateSchema } from "../maintenance/marketStateSchema";
 import { MarketSummary, PersistedMarketSnapshot, PersistentState } from "../types";
 
 const RECENT_LIMIT = 24;
+type UserStateBackend = "file" | "postgres";
 
 interface UserStateFile {
   users: Record<string, PersistentState>;
 }
 
 let writeQueue = Promise.resolve();
+let postgresReadyPromise: Promise<void> | null = null;
 
 function cloneMarket(market: MarketSummary): MarketSummary {
   return {
@@ -67,6 +73,14 @@ function defaultState(): PersistentState {
   return {
     savedMarkets: [],
     recentMarkets: [],
+  };
+}
+
+function cloneSnapshot(snapshot: PersistedMarketSnapshot): PersistedMarketSnapshot {
+  return {
+    market: cloneMarket(snapshot.market),
+    savedAt: snapshot.savedAt,
+    viewedAt: snapshot.viewedAt,
   };
 }
 
@@ -142,17 +156,119 @@ function normalizeState(value: unknown): PersistentState {
 
 function cloneState(state: PersistentState): PersistentState {
   return {
-    savedMarkets: state.savedMarkets.map((entry) => ({
-      market: cloneMarket(entry.market),
-      savedAt: entry.savedAt,
-      viewedAt: entry.viewedAt,
-    })),
-    recentMarkets: state.recentMarkets.map((entry) => ({
-      market: cloneMarket(entry.market),
-      savedAt: entry.savedAt,
-      viewedAt: entry.viewedAt,
-    })),
+    savedMarkets: state.savedMarkets.map(cloneSnapshot),
+    recentMarkets: state.recentMarkets.map(cloneSnapshot),
   };
+}
+
+export function getUserStateBackend(): UserStateBackend {
+  const configured = process.env.ALPHADB_API_USER_STATE_BACKEND?.trim().toLowerCase();
+
+  if (!configured || configured === "auto") {
+    return process.env.DATABASE_URL ? "postgres" : "file";
+  }
+
+  if (configured === "postgres" || configured === "file") {
+    return configured;
+  }
+
+  throw new Error("ALPHADB_API_USER_STATE_BACKEND must be one of auto, postgres, or file");
+}
+
+export function isPostgresUserStateEnabled(): boolean {
+  return getUserStateBackend() === "postgres";
+}
+
+async function ensurePostgresUserStateReady(): Promise<void> {
+  if (!isPostgresUserStateEnabled()) {
+    return;
+  }
+
+  if (!postgresReadyPromise) {
+    postgresReadyPromise = ensureMarketStateSchema({ closePoolAfter: false })
+      .then(() => undefined)
+      .catch((error) => {
+        postgresReadyPromise = null;
+        throw error;
+      });
+  }
+
+  await postgresReadyPromise;
+}
+
+async function readPostgresState(userId: string): Promise<PersistentState> {
+  await ensurePostgresUserStateReady();
+  const pool = getPgPool();
+
+  await pool.query(
+    "INSERT INTO market_user_states (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+    [userId],
+  );
+
+  const result = await pool.query(
+    "SELECT saved_markets, recent_markets FROM market_user_states WHERE user_id=$1",
+    [userId],
+  );
+
+  const row = result.rows[0] as { saved_markets?: unknown; recent_markets?: unknown } | undefined;
+  return normalizeState({
+    savedMarkets: row?.saved_markets,
+    recentMarkets: row?.recent_markets,
+  });
+}
+
+async function updatePostgresState(
+  userId: string,
+  updater: (state: PersistentState) => PersistentState,
+): Promise<PersistentState> {
+  await ensurePostgresUserStateReady();
+  const pool = getPgPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    await ensurePostgresUserRow(client, userId);
+
+    const current = await readPostgresStateForUpdate(client, userId);
+    const next = updater(current);
+
+    await client.query(
+      `UPDATE market_user_states
+       SET saved_markets=$2::jsonb,
+           recent_markets=$3::jsonb,
+           updated_at=NOW()
+       WHERE user_id=$1`,
+      [userId, JSON.stringify(next.savedMarkets), JSON.stringify(next.recentMarkets)],
+    );
+
+    await client.query("COMMIT");
+    return cloneState(next);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function ensurePostgresUserRow(client: PoolClient, userId: string): Promise<void> {
+  await client.query(
+    "INSERT INTO market_user_states (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+    [userId],
+  );
+}
+
+async function readPostgresStateForUpdate(client: PoolClient, userId: string): Promise<PersistentState> {
+  const result = await client.query(
+    "SELECT saved_markets, recent_markets FROM market_user_states WHERE user_id=$1 FOR UPDATE",
+    [userId],
+  );
+
+  const row = result.rows[0] as { saved_markets?: unknown; recent_markets?: unknown } | undefined;
+  return normalizeState({
+    savedMarkets: row?.saved_markets,
+    recentMarkets: row?.recent_markets,
+  });
 }
 
 export function resolveUserId(explicit?: string): string {
@@ -168,11 +284,19 @@ export function resolveUserId(explicit?: string): string {
 }
 
 export async function getUserMarketState(userId: string): Promise<PersistentState> {
+  if (isPostgresUserStateEnabled()) {
+    return readPostgresState(userId);
+  }
+
   const state = await readAllStates();
   return normalizeState(state.users[userId]);
 }
 
 async function updateState(userId: string, updater: (state: PersistentState) => PersistentState): Promise<PersistentState> {
+  if (isPostgresUserStateEnabled()) {
+    return updatePostgresState(userId, updater);
+  }
+
   const allStates = await readAllStates();
   const current = normalizeState(allStates.users[userId]);
   const next = updater(current);

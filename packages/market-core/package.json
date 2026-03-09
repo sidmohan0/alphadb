@@ -1,0 +1,8 @@
+{
+  "name": "@alphadb/market-core",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Shared AlphaDB market contracts.",
+  "main": "index.js",
+  "types": "index.d.ts"
+}

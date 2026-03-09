@@ -1,5 +1,7 @@
 import { closeRedisClient, getRedisClient } from "./polymarket/infra/cache/redis";
 import { closePgPool } from "./polymarket/infra/db/postgres";
+import { ensureMarketStateSchema } from "./markets/maintenance/marketStateSchema";
+import { isPostgresUserStateEnabled } from "./markets/services/userStateStore";
 import { ensureDiscoverySchema } from "./polymarket/maintenance/discoverySchema";
 import { createApp } from "./app";
 import {
@@ -103,6 +105,13 @@ async function shutdown(): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   await verifyRedisConnectivity();
+
+  if (isPostgresUserStateEnabled()) {
+    const result = await ensureMarketStateSchema({ closePoolAfter: false });
+    if (result.applied) {
+      console.log(`Market user state schema: updated v${result.from} -> v${result.to}`);
+    }
+  }
 
   if (parseBooleanEnv("DISCOVERY_REQUIRE_SCHEMA", false)) {
     const result = await ensureDiscoverySchema({ closePoolAfter: false });

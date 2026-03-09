@@ -7,6 +7,7 @@ AlphaDB is a prediction-market platform monorepo. It currently contains:
 - `apps/api` - the production-oriented backend for market ingestion, discovery runs, persistence, and future shared APIs
 - `apps/web` - the browser client for the backend-backed discovery workflows
 - `apps/tui` - the terminal-first market workspace for Polymarket and Kalshi with search, split view, saved markets, and ANSI charts
+- `packages/market-core` - shared provider-neutral market contracts used by the API and TUI
 
 The repo is in a Phase 1 convergence step: the legacy Polymarket discovery service and the newer TUI now live in one codebase so the TUI can progressively move onto backend APIs without a rewrite.
 
@@ -33,6 +34,8 @@ apps/
   api/   Express + TypeScript backend
   web/   React + Vite web client
   tui/   ANSI terminal client
+packages/
+  market-core/ shared market contracts
 docs/
   adrs/
   checklists/
@@ -79,17 +82,20 @@ For ad hoc local sessions, the backend mainly needs:
 ```bash
 export DATABASE_URL="postgres://postgres:postgres@localhost:5432/alphadb"
 export REDIS_URL="redis://localhost:6379"
+export ALPHADB_API_USER_STATE_BACKEND="postgres"
 export DISCOVERY_REQUIRE_SCHEMA=1
 ```
 
 ### 4. Apply backend schema
 
 ```bash
+npm run markets:ensure-state-schema
 npm run polymarket:discovery-migrate
 ```
 
 This applies:
 
+- `apps/api/src/markets/infra/db/userStateSchema.sql`
 - `apps/api/src/polymarket/infra/db/schemas.sql`
 
 ## Development
@@ -111,6 +117,8 @@ Useful workspace-scoped commands:
 - `npm run build` - build api, web, and tui
 - `npm run test` - run backend tests
 - `npm run typecheck:tui` - typecheck the TUI only
+- `npm run markets:ensure-state-schema` - ensure backend user-state schema
+- `npm run markets:seed-state` - seed backend saved/recent state
 - `npm run polymarket:market-channels` - run the backend Polymarket CLI
 - `npm run polymarket:discovery-schema` - ensure discovery schema version state
 - `npm run polymarket:discovery-migrate` - apply discovery schema
@@ -125,9 +133,10 @@ Useful workspace-scoped commands:
 - async orchestration and dedupe
 - Postgres persistence
 - Redis-backed coordination
+- normalized market read APIs for trending, search, unified views, and history
+- backend user state for saved markets and recents
+- backend SSE delivery for live market updates
 - migration and maintenance scripts
-
-The immediate next step is exposing broader backend-backed market APIs so the TUI can consume shared trending, search, history, and realtime surfaces.
 
 ### Web
 
@@ -144,6 +153,8 @@ The immediate next step is exposing broader backend-backed market APIs so the TU
 - ANSI candlestick rendering
 
 Today it still reads mostly from provider APIs directly. That is intentional during migration; the accepted direction is to move it behind the backend incrementally.
+
+When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads and backend-owned saved/recent state. Direct-provider mode remains available as a local fallback.
 
 ## Docs
 
