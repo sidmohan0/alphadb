@@ -8,6 +8,7 @@ AlphaDB is a prediction-market platform monorepo. It currently contains:
 - `apps/web` - the browser client for the backend-backed discovery workflows
 - `apps/tui` - the terminal-first market workspace for Polymarket and Kalshi with search, split view, saved markets, and ANSI charts
 - `packages/market-core` - shared provider-neutral market contracts used by the API and TUI
+- `packages/sdk` - shared backend client SDK for market reads, user state, and streaming
 
 The repo is in a Phase 1 convergence step: the legacy Polymarket discovery service and the newer TUI now live in one codebase so the TUI can progressively move onto backend APIs without a rewrite.
 
@@ -36,6 +37,7 @@ apps/
   tui/   ANSI terminal client
 packages/
   market-core/ shared market contracts
+  sdk/         shared backend client
 docs/
   adrs/
   checklists/

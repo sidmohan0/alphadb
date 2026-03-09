@@ -11,6 +11,7 @@ This repository is now tracking the unified AlphaDB direction: backend service, 
 ## Shared Packages
 
 - `packages/market-core/README.md`
+- `packages/sdk/README.md`
 
 ## Architecture
 

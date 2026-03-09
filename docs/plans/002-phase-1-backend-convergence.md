@@ -137,6 +137,7 @@ Follow-up TODO:
 
 - monorepo baseline under `apps/api`, `apps/web`, and `apps/tui`
 - shared market contracts in `packages/market-core`
+- shared backend client in `packages/sdk`
 - backend market reads for trending, unified trending, search, unified search, and history
 - backend cached reads and initial SSE streaming
 - backend-owned saved/recent user state with Postgres-backed persistence when `DATABASE_URL` is configured

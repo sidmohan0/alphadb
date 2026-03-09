@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -n api,web -c auto \"npm run dev --workspace @alphadb/api\" \"npm run dev --workspace @alphadb/web\"",
     "dev:tui": "npm run dev --workspace @alphadb/tui",
-    "build": "npm run build --workspace @alphadb/api && npm run build --workspace @alphadb/web && npm run build --workspace @alphadb/tui",
+    "build": "npm run build --workspace @alphadb/sdk && npm run build --workspace @alphadb/api && npm run build --workspace @alphadb/web && npm run build --workspace @alphadb/tui",
     "start": "npm run start --workspace @alphadb/api",
     "test": "npm run test --workspace @alphadb/api",
     "typecheck:tui": "npm run typecheck --workspace @alphadb/tui",
