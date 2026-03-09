@@ -1,10 +1,12 @@
-# AlphaDB Polymarket ANSI TUI
+# AlphaDB Markets ANSI TUI
 
-Terminal-first Polymarket browser built for fast market discovery, quick search, and readable price action without leaving the shell.
+Terminal-first Polymarket and Kalshi browser built for fast market discovery, split-screen comparison, quick search, and readable price action without leaving the shell.
 
 ## What It Does
 
 - Renders live Polymarket outcome history as ANSI candlesticks
+- Adds Kalshi market discovery with optional live ticker support
+- Boots into a unified split view with Polymarket on the left and Kalshi on the right
 - Shows trending markets ranked by 24h volume
 - Supports fuzzy market search with local ranking bonuses
 - Persists saved markets and recent views between runs
@@ -40,7 +42,11 @@ npm start
 
 ### Navigation
 
+- `1`: switch to Polymarket
+- `2`: switch to Kalshi
+- `3`: return to unified split view
 - `j` / `k` or arrow keys: move selection
+- `h` / `l` or left/right arrows: switch focus between unified panes
 - `t`: show trending markets
 - `v`: show saved markets
 - `u`: show recent markets
@@ -92,6 +98,23 @@ Override the location with:
 ALPHADB_TUI_STATE_PATH=/custom/path/state.json
 ```
 
+## Optional Kalshi Live Ticker
+
+Kalshi market browsing works without credentials.
+
+To enable authenticated Kalshi websocket ticker updates, set:
+
+```bash
+KALSHI_API_KEY_ID=...
+KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem
+```
+
+Or use:
+
+```bash
+KALSHI_PRIVATE_KEY_PEM='-----BEGIN PRIVATE KEY-----...'
+```
+
 ## Data Sources
 
 - Gamma API: trending markets, market metadata, search
@@ -100,11 +123,14 @@ ALPHADB_TUI_STATE_PATH=/custom/path/state.json
 ## Project Layout
 
 ```text
-src/index.ts              App state, input loop, list mode switching
+src/index.ts              App state, unified/single layout loop, input handling
+src/api/provider.ts       Cross-provider fetch and chart interface
 src/api/polymarket.ts     Gamma and CLOB adapters
-src/render/renderer.ts    ANSI layout and chart rendering
+src/api/kalshi.ts         Kalshi market discovery and history adapter
+src/render/renderer.ts    ANSI layout, split view, and chart rendering
 src/lib/fuzzy.ts          Local fuzzy ranking
 src/lib/storage.ts        Persistent saved/recent state
+src/lib/kalshiLive.ts     Optional authenticated Kalshi websocket ticker
 docs/                     Plans and working notes
 ```
 

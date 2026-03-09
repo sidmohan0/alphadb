@@ -1,9 +1,9 @@
 {
-  "name": "alphadb-polymarket-ansi-tui",
+  "name": "alphadb-markets-ansi-tui",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Polymarket ANSI TUI with trending markets, search, and candlestick charts.",
+  "description": "Terminal-first Polymarket and Kalshi market browser with split view, search, and ANSI candlestick charts.",
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
@@ -12,7 +12,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
   }
 }

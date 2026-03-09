@@ -15,6 +15,50 @@ function cloneMarket(market: MarketSummary): MarketSummary {
   };
 }
 
+function normalizeMarketSummary(value: unknown): MarketSummary | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const raw = value as Partial<MarketSummary>;
+  const provider = raw.provider === "kalshi" ? "kalshi" : "polymarket";
+  const rawId = typeof raw.id === "string" ? raw.id : "";
+  const id = rawId.includes(":") ? rawId : `${provider}:${rawId}`;
+  const symbol =
+    typeof raw.symbol === "string" && raw.symbol.trim()
+      ? raw.symbol
+      : provider === "kalshi"
+        ? String(raw.conditionId ?? raw.slug ?? raw.id ?? "")
+        : String(raw.slug ?? raw.id ?? "");
+
+  return {
+    provider,
+    id,
+    symbol,
+    question: String(raw.question ?? "Untitled market"),
+    conditionId: String(raw.conditionId ?? ""),
+    slug: String(raw.slug ?? ""),
+    endDate: typeof raw.endDate === "string" ? raw.endDate : null,
+    liquidity: Number(raw.liquidity ?? 0),
+    volume24hr: Number(raw.volume24hr ?? 0),
+    volumeTotal: Number(raw.volumeTotal ?? 0),
+    bestBid: raw.bestBid === null || raw.bestBid === undefined ? null : Number(raw.bestBid),
+    bestAsk: raw.bestAsk === null || raw.bestAsk === undefined ? null : Number(raw.bestAsk),
+    lastTradePrice: raw.lastTradePrice === null || raw.lastTradePrice === undefined ? null : Number(raw.lastTradePrice),
+    oneDayPriceChange: raw.oneDayPriceChange === null || raw.oneDayPriceChange === undefined ? null : Number(raw.oneDayPriceChange),
+    eventTitle: typeof raw.eventTitle === "string" ? raw.eventTitle : null,
+    seriesTitle: typeof raw.seriesTitle === "string" ? raw.seriesTitle : null,
+    image: typeof raw.image === "string" ? raw.image : null,
+    outcomes: Array.isArray(raw.outcomes)
+      ? raw.outcomes.map((outcome) => ({
+          name: String(outcome.name ?? ""),
+          tokenId: String(outcome.tokenId ?? ""),
+          price: outcome.price === null || outcome.price === undefined ? null : Number(outcome.price),
+        }))
+      : [],
+  };
+}
+
 function cloneSnapshot(snapshot: PersistedMarketSnapshot): PersistedMarketSnapshot {
   return {
     market: cloneMarket(snapshot.market),
@@ -34,12 +78,13 @@ function normalizeSnapshots(value: unknown): PersistedMarketSnapshot[] {
     }
 
     const raw = entry as Partial<PersistedMarketSnapshot>;
-    if (!raw.market || typeof raw.market !== "object") {
+    const market = normalizeMarketSummary(raw.market);
+    if (!market) {
       return [];
     }
 
     return [{
-      market: cloneMarket(raw.market as MarketSummary),
+      market,
       savedAt: typeof raw.savedAt === "number" ? raw.savedAt : undefined,
       viewedAt: typeof raw.viewedAt === "number" ? raw.viewedAt : Date.now(),
     }];

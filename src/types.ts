@@ -1,5 +1,7 @@
 export type RangeKey = "6h" | "24h" | "7d" | "30d" | "max";
 export type ListMode = "trending" | "saved" | "recent" | "search";
+export type ProviderId = "polymarket" | "kalshi";
+export type LayoutMode = "single" | "unified";
 
 export interface OutcomeToken {
   name: string;
@@ -9,6 +11,8 @@ export interface OutcomeToken {
 
 export interface MarketSummary {
   id: string;
+  provider: ProviderId;
+  symbol: string;
   question: string;
   conditionId: string;
   slug: string;
@@ -51,10 +55,28 @@ export interface Candle {
   close: number;
 }
 
+export interface ProviderPanelState {
+  provider: ProviderId;
+  markets: MarketSummary[];
+  selectedIndex: number;
+  selectedOutcomeIndex: number;
+  candles: Candle[];
+  chartPoints: PricePoint[];
+  loadingMarkets: boolean;
+  loadingChart: boolean;
+  lastMarketRefreshAt: number | null;
+  lastChartRefreshAt: number | null;
+  liveStatusMessage: string;
+}
+
 export interface AppState {
+  provider: ProviderId;
+  layoutMode: LayoutMode;
+  unifiedFocus: ProviderId;
   query: string;
   focused: "list" | "search";
   statusMessage: string;
+  liveStatusMessage: string;
   errorMessage: string;
   helpVisible: boolean;
   loadingMarkets: boolean;
@@ -63,6 +85,8 @@ export interface AppState {
   trendingMarkets: MarketSummary[];
   savedMarkets: MarketSummary[];
   recentMarkets: MarketSummary[];
+  savedMarketIds: string[];
+  recentMarketIds: string[];
   searchResults: MarketSummary[];
   selectedIndex: number;
   selectedOutcomeIndex: number;
@@ -72,4 +96,5 @@ export interface AppState {
   lastMarketRefreshAt: number | null;
   lastChartRefreshAt: number | null;
   storagePath: string;
+  unifiedPanels: Record<ProviderId, ProviderPanelState>;
 }

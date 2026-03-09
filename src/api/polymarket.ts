@@ -99,7 +99,9 @@ function normalizeMarket(record: JsonRecord): MarketSummary {
   const firstSeries = series[0];
 
   return {
-    id: String(record.id ?? ""),
+    id: `polymarket:${String(record.id ?? "")}`,
+    provider: "polymarket",
+    symbol: String(record.slug ?? record.id ?? ""),
     question: String(record.question ?? "Untitled market"),
     conditionId: String(record.conditionId ?? ""),
     slug: String(record.slug ?? ""),

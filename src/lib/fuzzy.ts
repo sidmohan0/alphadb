@@ -101,6 +101,7 @@ function marketScore(
 ): number {
   const scores = [
     scoreField(query, tokens, market.question) * 1.3,
+    scoreField(query, tokens, market.symbol) * 1.2,
     scoreField(query, tokens, market.eventTitle) * 1.05,
     scoreField(query, tokens, market.seriesTitle),
     scoreField(query, tokens, market.slug),
