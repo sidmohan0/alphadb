@@ -39,6 +39,12 @@ To route market reads through the AlphaDB backend instead of hitting providers d
 ALPHADB_API_BASE_URL=http://localhost:4000/api npm run dev --workspace @alphadb/tui
 ```
 
+To seed backend saved/recent state for the default local user before launching the TUI:
+
+```bash
+npm run markets:seed-state
+```
+
 ### Build And Run
 
 ```bash

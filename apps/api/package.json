@@ -7,6 +7,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "markets:seed-state": "ts-node --transpile-only src/markets/maintenance/seedUserState.ts",
     "polymarket:market-channels": "ts-node --transpile-only src/polymarketMarketChannels.ts",
     "discovery:ensure-schema": "ts-node --transpile-only src/polymarket/maintenance/discoverySchema.ts",
     "discovery:migrate-runs": "ts-node --transpile-only src/polymarket/maintenance/migrateDiscoveryRuns.ts",
