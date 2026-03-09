@@ -38,17 +38,17 @@ export async function searchMarketsForUser(
   provider: ProviderId,
   query: string,
   limit: number,
-  userId = "local-user",
+  userId?: string,
 ): Promise<MarketSummary[]> {
   const trimmed = query.trim().toLowerCase();
-  const [state, remoteMarkets] = await Promise.all([
-    getUserMarketState(userId),
-    getOrLoadCached(`search:${provider}:${Math.max(limit * 4, 32)}:${trimmed}`, SEARCH_TTL_MS, async () =>
-      provider === "kalshi"
-        ? searchKalshiMarkets(trimmed, Math.max(limit * 4, 32))
-        : searchPolymarketMarkets(trimmed, Math.max(limit * 4, 32)),
-    ),
-  ]);
+  const remoteMarkets = await getOrLoadCached(`search:${provider}:${Math.max(limit * 4, 32)}:${trimmed}`, SEARCH_TTL_MS, async () =>
+    provider === "kalshi"
+      ? searchKalshiMarkets(trimmed, Math.max(limit * 4, 32))
+      : searchPolymarketMarkets(trimmed, Math.max(limit * 4, 32)),
+  );
+  const state = userId
+    ? await getUserMarketState(userId)
+    : { savedMarkets: [], recentMarkets: [] };
 
   return rankMarkets(trimmed, remoteMarkets, {
     limit,
@@ -61,7 +61,7 @@ export async function searchMarketsForUser(
 export async function getUnifiedSearchMarkets(
   query: string,
   limitPerProvider: number,
-  userId = "local-user",
+  userId?: string,
 ): Promise<Record<ProviderId, MarketSummary[]>> {
   const [polymarket, kalshi] = await Promise.all([
     searchMarketsForUser("polymarket", query, limitPerProvider, userId),

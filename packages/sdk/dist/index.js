@@ -18,14 +18,16 @@ export class AlphaDBMarketStream {
     onUpdate;
     fetchImpl;
     baseUrl;
+    apiToken;
     userId;
     controller = null;
     reconnectTimer = null;
     reconnectDelayMs = 1_000;
     closed = false;
     subscriptions = [];
-    constructor(baseUrl, userId, options, fetchImpl) {
+    constructor(baseUrl, apiToken, userId, options, fetchImpl) {
         this.baseUrl = baseUrl;
+        this.apiToken = apiToken;
         this.userId = userId;
         this.onStatus = options.onStatus;
         this.onUpdate = options.onUpdate;
@@ -90,10 +92,9 @@ export class AlphaDBMarketStream {
             const url = new URL(`${this.baseUrl}/markets/stream`);
             url.searchParams.set("subscriptions", JSON.stringify(this.subscriptions));
             const response = await this.fetchImpl(url.toString(), {
-                headers: {
+                headers: this.requestHeaders({
                     Accept: "text/event-stream",
-                    "X-AlphaDB-User-Id": this.userId,
-                },
+                }),
                 signal: controller.signal,
             });
             if (!response.ok || !response.body) {
@@ -174,15 +175,24 @@ export class AlphaDBMarketStream {
             this.onStatus({ provider: "polymarket", message: "backend stream parse error" });
         }
     }
+    requestHeaders(headers) {
+        return {
+            ...headers,
+            ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
+            ...(this.userId ? { "X-AlphaDB-User-Id": this.userId } : {}),
+        };
+    }
 }
 export class AlphaDBClient {
     baseUrlValue;
+    apiTokenValue;
     userIdValue;
     userAgentValue;
     fetchImpl;
     constructor(options = {}) {
         this.baseUrlValue = normalizeBaseUrl(options.baseUrl);
-        this.userIdValue = options.userId?.trim() || "local-user";
+        this.apiTokenValue = options.apiToken?.trim() || null;
+        this.userIdValue = options.userId?.trim() || null;
         this.userAgentValue = options.userAgent?.trim() || "alphadb-sdk";
         this.fetchImpl = options.fetchImpl ?? fetch;
     }
@@ -195,8 +205,14 @@ export class AlphaDBClient {
     userId() {
         return this.userIdValue;
     }
+    apiToken() {
+        return this.apiTokenValue;
+    }
     createMarketStream(options) {
-        return new AlphaDBMarketStream(this.baseUrlValue, this.userIdValue, options, this.fetchImpl);
+        return new AlphaDBMarketStream(this.baseUrlValue, this.apiTokenValue, this.userIdValue, options, this.fetchImpl);
+    }
+    async fetchAuthStatus() {
+        return this.fetchJson(this.urlFor("/auth/me"));
     }
     async fetchUnifiedTrendingMarkets(limit) {
         const payload = await this.fetchJson(this.urlFor("/markets/unified/trending", { limit: String(limit) }));
@@ -279,7 +295,8 @@ export class AlphaDBClient {
             headers: {
                 Accept: "application/json",
                 "User-Agent": this.userAgentValue,
-                "X-AlphaDB-User-Id": this.userIdValue,
+                ...(this.apiTokenValue ? { Authorization: `Bearer ${this.apiTokenValue}` } : {}),
+                ...(this.userIdValue ? { "X-AlphaDB-User-Id": this.userIdValue } : {}),
                 ...(init?.headers ?? {}),
             },
         });

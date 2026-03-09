@@ -9,6 +9,9 @@ import * as userStateStore from "../src/markets/services/userStateStore";
 
 describe("Markets controller", () => {
   const app = createApp();
+  const originalAuthMode = process.env.ALPHADB_AUTH_MODE;
+  const originalTokens = process.env.ALPHADB_API_TOKENS_JSON;
+  const originalDefaultUser = process.env.ALPHADB_DEFAULT_USER_ID;
 
   const market: MarketSummary = {
     id: "polymarket:123",
@@ -39,6 +42,21 @@ describe("Markets controller", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     clearMarketCache();
+    if (originalAuthMode === undefined) {
+      delete process.env.ALPHADB_AUTH_MODE;
+    } else {
+      process.env.ALPHADB_AUTH_MODE = originalAuthMode;
+    }
+    if (originalTokens === undefined) {
+      delete process.env.ALPHADB_API_TOKENS_JSON;
+    } else {
+      process.env.ALPHADB_API_TOKENS_JSON = originalTokens;
+    }
+    if (originalDefaultUser === undefined) {
+      delete process.env.ALPHADB_DEFAULT_USER_ID;
+    } else {
+      process.env.ALPHADB_DEFAULT_USER_ID = originalDefaultUser;
+    }
   });
 
   it("returns provider trending markets", async () => {
@@ -134,6 +152,40 @@ describe("Markets controller", () => {
 
     expect(response.body).toMatchObject({
       userId: "local-user",
+      state: {
+        savedMarkets: [{ market: { id: "polymarket:123" } }],
+      },
+    });
+  });
+
+  it("requires auth for backend user state when pat mode is enabled", async () => {
+    process.env.ALPHADB_AUTH_MODE = "pat";
+    process.env.ALPHADB_API_TOKENS_JSON = JSON.stringify([{ token: "token-1", userId: "sid" }]);
+
+    const response = await request(app)
+      .get("/api/markets/state")
+      .expect(401);
+
+    expect(response.body).toMatchObject({
+      code: "unauthorized",
+    });
+  });
+
+  it("uses bearer auth identity for backend user state when pat mode is enabled", async () => {
+    process.env.ALPHADB_AUTH_MODE = "pat";
+    process.env.ALPHADB_API_TOKENS_JSON = JSON.stringify([{ token: "token-1", userId: "sid" }]);
+    vi.spyOn(userStateStore, "getUserMarketState").mockResolvedValue({
+      savedMarkets: [{ market, savedAt: 1, viewedAt: 1 }],
+      recentMarkets: [],
+    });
+
+    const response = await request(app)
+      .get("/api/markets/state")
+      .set("Authorization", "Bearer token-1")
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      userId: "sid",
       state: {
         savedMarkets: [{ market: { id: "polymarket:123" } }],
       },

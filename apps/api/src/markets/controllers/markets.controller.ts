@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { Router } from "express";
 
+import { resolveViewer, requireViewer } from "../../auth/authService";
 import { mapInvalidInput, toHttpErrorResponse } from "../errors";
 import { kalshiRealtimeHub } from "../services/kalshiRealtimeHub";
 import { marketDataService } from "../services/marketDataService";
@@ -61,10 +62,6 @@ function parsePositiveInt(value: unknown, field: string, fallback: number): numb
   }
 
   return parsed;
-}
-
-function parseUserId(value: unknown): string {
-  return resolveUserId(toSingleString(value));
 }
 
 function parseTickers(value: unknown): string[] {
@@ -157,7 +154,7 @@ router.get("/search", async (req, res) => {
 
   try {
     const provider = parseProvider(req.query.provider);
-    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const userId = resolveViewer(req)?.userId;
     const query = toSingleString(req.query.q);
     if (!query) {
       throw mapInvalidInput("q is required", "q");
@@ -176,7 +173,7 @@ router.get("/unified/search", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 
   try {
-    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const userId = resolveViewer(req)?.userId;
     const query = toSingleString(req.query.q);
     if (!query) {
       throw mapInvalidInput("q is required", "q");
@@ -215,7 +212,8 @@ router.get("/state", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 
   try {
-    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const viewer = requireViewer(req);
+    const userId = viewer.userId;
     const state = await getUserMarketState(userId);
     res.json({ userId, state, requestId });
   } catch (error) {
@@ -228,7 +226,8 @@ router.put("/state/saved", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 
   try {
-    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const viewer = requireViewer(req);
+    const userId = viewer.userId;
     const market = normalizeMarketSummary((req.body as { market?: unknown }).market);
     if (!market) {
       throw mapInvalidInput("market is required", "market");
@@ -246,7 +245,8 @@ router.delete("/state/saved", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 
   try {
-    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const viewer = requireViewer(req);
+    const userId = viewer.userId;
     const marketId = toSingleString(req.query.marketId);
     if (!marketId) {
       throw mapInvalidInput("marketId is required", "marketId");
@@ -264,7 +264,8 @@ router.post("/state/recent", async (req, res) => {
   const requestId = toSingleString(req.header("x-request-id")) || randomUUID();
 
   try {
-    const userId = parseUserId(req.header("x-alphadb-user-id") ?? req.query.userId);
+    const viewer = requireViewer(req);
+    const userId = viewer.userId;
     const market = normalizeMarketSummary((req.body as { market?: unknown }).market);
     if (!market) {
       throw mapInvalidInput("market is required", "market");

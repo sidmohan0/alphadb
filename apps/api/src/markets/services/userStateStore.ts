@@ -179,6 +179,18 @@ export function isPostgresUserStateEnabled(): boolean {
   return getUserStateBackend() === "postgres";
 }
 
+export function resolveUserId(explicit?: string): string {
+  if (explicit?.trim()) {
+    return explicit.trim();
+  }
+
+  if (process.env.ALPHADB_DEFAULT_USER_ID?.trim()) {
+    return process.env.ALPHADB_DEFAULT_USER_ID.trim();
+  }
+
+  return "local-user";
+}
+
 async function ensurePostgresUserStateReady(): Promise<void> {
   if (!isPostgresUserStateEnabled()) {
     return;
@@ -269,18 +281,6 @@ async function readPostgresStateForUpdate(client: PoolClient, userId: string): P
     savedMarkets: row?.saved_markets,
     recentMarkets: row?.recent_markets,
   });
-}
-
-export function resolveUserId(explicit?: string): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-
-  if (process.env.ALPHADB_DEFAULT_USER_ID?.trim()) {
-    return process.env.ALPHADB_DEFAULT_USER_ID.trim();
-  }
-
-  return "local-user";
 }
 
 export async function getUserMarketState(userId: string): Promise<PersistentState> {

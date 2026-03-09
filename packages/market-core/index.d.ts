@@ -1,5 +1,6 @@
 export type ProviderId = "polymarket" | "kalshi";
 export type RangeKey = "6h" | "24h" | "7d" | "30d" | "max";
+export type AuthMode = "disabled" | "pat";
 
 export interface OutcomeToken {
   name: string;
@@ -69,4 +70,17 @@ export interface MarketStreamUpdate {
 export interface MarketStreamStatus {
   provider: ProviderId;
   message: string;
+}
+
+export interface AuthViewer {
+  userId: string;
+  authMode: AuthMode;
+  tokenId: string | null;
+  label: string | null;
+}
+
+export interface AuthStatus {
+  enabled: boolean;
+  mode: AuthMode;
+  viewer: AuthViewer | null;
 }

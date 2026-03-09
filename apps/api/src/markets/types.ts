@@ -1,4 +1,7 @@
 export type {
+  AuthMode,
+  AuthStatus,
+  AuthViewer,
   MarketStreamStatus,
   MarketStreamSubscription,
   MarketStreamUpdate,

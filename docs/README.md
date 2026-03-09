@@ -7,6 +7,7 @@ This repository is now tracking the unified AlphaDB direction: backend service, 
 - `docs/checklists/001-backend-convergence-decision-checklist.md`
 - `docs/adrs/README.md`
 - `docs/plans/002-phase-1-backend-convergence.md`
+- `docs/plans/003-phase-2-productionization-baseline.md`
 
 ## Shared Packages
 

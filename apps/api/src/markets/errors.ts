@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-type ErrorCode = "invalid_input" | "upstream_failure" | "upstream_network" | "not_found" | "unexpected_error";
+type ErrorCode = "invalid_input" | "unauthorized" | "upstream_failure" | "upstream_network" | "not_found" | "unexpected_error";
 
 interface MarketErrorDetails {
   component?: "controller" | "service" | "provider";

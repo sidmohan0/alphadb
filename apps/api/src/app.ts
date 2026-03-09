@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 
+import { authRouter } from "./auth/auth.controller";
 import { marketsRouter } from "./markets/controllers/markets.controller";
 import { polymarketRouter } from "./polymarket/controllers/polymarket.controller";
 
@@ -43,6 +44,7 @@ export function createApp(): express.Express {
     res.status(201).json(next);
   });
 
+  app.use("/api/auth", authRouter);
   app.use("/api/markets", marketsRouter);
   app.use("/api/polymarket", polymarketRouter);
 

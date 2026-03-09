@@ -1,11 +1,12 @@
 import { AlphaDBClient } from "@alphadb/sdk";
 
-import { MarketSummary, PersistentState, PricePoint, ProviderId, RangeKey } from "../types.js";
+import { AuthStatus, MarketSummary, PersistentState, PricePoint, ProviderId, RangeKey } from "../types.js";
 
 export const backendClient = new AlphaDBClient({
   baseUrl: process.env.ALPHADB_API_BASE_URL,
   userAgent: "alphadb-markets-tui",
-  userId: process.env.ALPHADB_USER_ID?.trim() || "local-user",
+  apiToken: process.env.ALPHADB_API_TOKEN?.trim() || "",
+  userId: process.env.ALPHADB_USER_ID?.trim() || "",
 });
 
 export function hasBackendMarketApi(): boolean {
@@ -14,6 +15,10 @@ export function hasBackendMarketApi(): boolean {
 
 export function backendApiBaseUrl(): string | null {
   return backendClient.baseUrl();
+}
+
+export async function fetchBackendAuthStatus(): Promise<AuthStatus> {
+  return backendClient.fetchAuthStatus();
 }
 
 export async function fetchBackendUnifiedTrendingMarkets(limit: number): Promise<Record<ProviderId, MarketSummary[]>> {

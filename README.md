@@ -19,6 +19,7 @@ The target shape is:
 - one monorepo
 - one canonical market model
 - one backend service layer for search, trending, history, realtime delivery, and user state
+- explicit backend identity for persistent user features
 - multiple clients, starting with web and TUI
 - shared workspace packages for contracts and client access
 
@@ -171,7 +172,7 @@ Useful workspace-scoped commands:
 
 Today it can run in either direct-provider mode or backend-backed mode. That is intentional during migration; the accepted direction is to move it behind the backend incrementally until the backend is the default source of truth.
 
-When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads, backend-owned saved/recent state, and backend live streaming for Polymarket and Kalshi. Direct-provider mode remains available as a local fallback.
+When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads, backend-owned saved/recent state, backend live streaming for Polymarket and Kalshi, and can authenticate to backend user-state APIs with `ALPHADB_API_TOKEN`. Direct-provider mode remains available as a local fallback.
 
 ## Docs
 
@@ -182,8 +183,4 @@ When `ALPHADB_API_BASE_URL` is set, the TUI now uses backend-owned market reads,
 
 ## Status
 
-Phase 1 is in progress. The repo has been restructured into the target app layout and now includes shared contracts, a shared backend SDK, backend market reads, backend-backed user state, and backend live streaming for both supported market providers. The practical goal of the remaining phase is:
-
-1. preserve current behavior in all three apps
-2. establish one shared repo and documentation surface
-3. make the backend the default source of truth for richer TUI features
+Phase 1 convergence is complete. Current work has moved into the productionization baseline: explicit auth, observability, provider package extraction, and hardening backend-owned user features.

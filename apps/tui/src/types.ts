@@ -8,6 +8,8 @@ import type {
 } from "@alphadb/market-core";
 
 export type {
+  AuthStatus,
+  AuthViewer,
   MarketStreamStatus,
   MarketStreamSubscription,
   MarketStreamUpdate,

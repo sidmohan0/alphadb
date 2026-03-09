@@ -1,6 +1,6 @@
 # Phase 1 Backend Convergence
 
-- Status: In Progress
+- Status: Completed
 - Date: 2026-03-09
 
 This plan assumes the accepted ADR set and accepted backend convergence checklist.
@@ -138,11 +138,11 @@ Acceptance criteria:
 - TUI support for backend market reads, backend unified search, backend state sync, and backend live stream consumption
 - refreshed root README plus GitHub description/topics for the unified platform narrative
 
-## Remaining Work After This Slice
+## Follow-On Work
 
-- extract provider runtime adapters into a shared package when the boundaries settle
-- move backend user state from JSONB row storage toward fully relational ownership if product scope demands it
-- add auth, tenancy, and observability hardening
+This phase is complete. The next plan is:
+
+- `docs/plans/003-phase-2-productionization-baseline.md`
 
 ## Risks
 
@@ -150,13 +150,12 @@ Acceptance criteria:
 - provider abstractions can get overdesigned before the backend contract exists
 - backend read APIs can become thin proxies if canonical response design is rushed
 
-## Recommended Immediate Next Step
+## Exit Summary
 
-Start with repository merge and workspace layout.
+Phase 1 achieved the convergence target:
 
-Concrete first task:
-
-- create a merge branch from `ts-v1`
-- import the current TUI under `apps/tui`
-- preserve the current TUI boot command and tmux workflow
-- do not change user-facing TUI behavior in the same step
+- one monorepo on `main`
+- one backend-capable TUI
+- one shared market contract package
+- one shared backend SDK
+- backend-owned reads, state, and live streams for both supported providers

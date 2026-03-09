@@ -2,6 +2,7 @@ import process from "node:process";
 
 import {
   backendApiBaseUrl,
+  fetchBackendAuthStatus,
   fetchBackendPersistentState,
   hasBackendMarketApi,
   removeBackendSavedMarket,
@@ -30,6 +31,7 @@ import {
 import { render } from "./render/renderer.js";
 import {
   AppState,
+  AuthStatus,
   ListMode,
   MarketStreamStatus,
   MarketStreamSubscription,
@@ -1065,10 +1067,30 @@ function handleListInput(sequence: string): void {
 
 async function boot(): Promise<void> {
   if (hasBackendMarketApi()) {
+    let authStatus: AuthStatus | null = null;
+
     try {
-      persistentState = await fetchBackendPersistentState();
-      state.storagePath = `${backendApiBaseUrl()}/markets/state`;
-      backendStateEnabled = true;
+      authStatus = await fetchBackendAuthStatus();
+      if (authStatus.enabled) {
+        state.statusMessage = authStatus.viewer
+          ? `Signed in as ${authStatus.viewer.userId}.`
+          : "Backend auth required for saved state. Set ALPHADB_API_TOKEN.";
+      }
+    } catch (error) {
+      state.statusMessage = error instanceof Error ? error.message : "Failed to check backend auth state.";
+    }
+
+    try {
+      if (!authStatus?.enabled || authStatus.viewer) {
+        persistentState = await fetchBackendPersistentState();
+        state.storagePath = `${backendApiBaseUrl()}/markets/state`;
+        backendStateEnabled = true;
+      } else {
+        const loaded = await loadPersistentState();
+        persistentState = loaded.state;
+        state.storagePath = loaded.path;
+        backendStateEnabled = false;
+      }
     } catch {
       const loaded = await loadPersistentState();
       persistentState = loaded.state;

@@ -39,7 +39,13 @@ To route market reads through the AlphaDB backend instead of hitting providers d
 ALPHADB_API_BASE_URL=http://localhost:4000/api npm run dev --workspace @alphadb/tui
 ```
 
-When the backend is configured, saved markets and recents are read from and written to the backend user-state store, and live market updates come from the AlphaDB stream endpoint. In direct mode, the TUI falls back to its local state file and only Kalshi has optional direct websocket support.
+If backend auth is enabled, also set:
+
+```bash
+ALPHADB_API_TOKEN=your-token
+```
+
+When the backend is configured, saved markets and recents are read from and written to the backend user-state store, and live market updates come from the AlphaDB stream endpoint. If the backend requires auth and no token is configured, the TUI falls back to local saved/recent state while still using backend market reads. In direct mode, the TUI falls back to its local state file and only Kalshi has optional direct websocket support.
 
 To seed backend saved/recent state for the default local user before launching the TUI:
 
@@ -120,6 +126,13 @@ Backend mode stores saved markets and recents in the AlphaDB API user-state stor
 ```bash
 ALPHADB_API_USER_STATE_BACKEND=postgres
 ALPHADB_API_USER_STATE_BACKEND=file
+```
+
+To enable backend auth for those operations, the API can be configured with:
+
+```bash
+ALPHADB_AUTH_MODE=pat
+ALPHADB_API_TOKENS_JSON='[{"token":"dev-token","userId":"sid","tokenId":"sid-dev","label":"Sid local"}]'
 ```
 
 ## Live Updates
