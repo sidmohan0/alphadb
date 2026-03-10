@@ -134,6 +134,22 @@ Useful workspace-scoped commands:
 - `npm run polymarket:market-channels` - run the backend Polymarket CLI
 - `npm run polymarket:discovery-schema` - ensure discovery schema version state
 - `npm run polymarket:discovery-migrate` - apply discovery schema
+- `npm run fly:deploy:api` - deploy the API with `deploy/fly/api.fly.toml`
+- `npm run fly:deploy:web` - deploy the web app with `deploy/fly/web.fly.toml`
+
+## Fly Deployment
+
+Fly deployment artifacts are now checked in:
+
+- `apps/api/Dockerfile`
+- `apps/web/Dockerfile`
+- `deploy/fly/api.fly.toml`
+- `deploy/fly/web.fly.toml`
+- `deploy/fly/release-api.sh`
+
+The web app reads its production API base URL from `ALPHADB_WEB_API_BASE_URL` at runtime, so you do not need to rebuild the web image just to repoint it at a different API hostname.
+
+Use the runbook in `docs/plans/004-fly-deployment-plan.md` for the full sequence.
 
 ## Current Product Surfaces
 

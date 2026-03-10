@@ -128,7 +128,12 @@ export function persistToken(token: string): void {
 }
 
 export function createClient(apiToken: string): AlphaDBClient {
-  const configuredBaseUrl = import.meta.env.VITE_ALPHADB_API_BASE_URL?.trim();
+  const runtimeConfiguredBaseUrl =
+    typeof window !== "undefined" &&
+    typeof (window as Window & { __ALPHADB_CONFIG__?: { apiBaseUrl?: string } }).__ALPHADB_CONFIG__?.apiBaseUrl === "string"
+      ? (window as Window & { __ALPHADB_CONFIG__?: { apiBaseUrl?: string } }).__ALPHADB_CONFIG__?.apiBaseUrl?.trim()
+      : "";
+  const configuredBaseUrl = runtimeConfiguredBaseUrl || import.meta.env.VITE_ALPHADB_API_BASE_URL?.trim();
   const originBaseUrl =
     typeof window !== "undefined" ? `${window.location.origin.replace(/\/+$/, "")}/api` : null;
 

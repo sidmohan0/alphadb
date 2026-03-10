@@ -83,7 +83,11 @@ export function persistToken(token) {
     window.localStorage.removeItem(WEB_TOKEN_KEY);
 }
 export function createClient(apiToken) {
-    const configuredBaseUrl = import.meta.env.VITE_ALPHADB_API_BASE_URL?.trim();
+    const runtimeConfiguredBaseUrl = typeof window !== "undefined" &&
+        typeof window.__ALPHADB_CONFIG__?.apiBaseUrl === "string"
+        ? window.__ALPHADB_CONFIG__?.apiBaseUrl?.trim()
+        : "";
+    const configuredBaseUrl = runtimeConfiguredBaseUrl || import.meta.env.VITE_ALPHADB_API_BASE_URL?.trim();
     const originBaseUrl = typeof window !== "undefined" ? `${window.location.origin.replace(/\/+$/, "")}/api` : null;
     return new AlphaDBClient({
         baseUrl: configuredBaseUrl || originBaseUrl,

@@ -14,7 +14,9 @@
     "markets:seed-state": "npm run markets:seed-state --workspace @alphadb/api",
     "polymarket:market-channels": "npm run polymarket:market-channels --workspace @alphadb/api",
     "polymarket:discovery-schema": "npm run discovery:ensure-schema --workspace @alphadb/api",
-    "polymarket:discovery-migrate": "npm run discovery:migrate-runs --workspace @alphadb/api"
+    "polymarket:discovery-migrate": "npm run discovery:migrate-runs --workspace @alphadb/api",
+    "fly:deploy:api": "fly deploy -c deploy/fly/api.fly.toml",
+    "fly:deploy:web": "fly deploy -c deploy/fly/web.fly.toml"
   },
   "workspaces": [
     "apps/*",

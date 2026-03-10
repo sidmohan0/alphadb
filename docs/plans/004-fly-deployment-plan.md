@@ -60,29 +60,34 @@ Reason:
 
 If you prefer Los Angeles over San Jose for business or networking reasons, `lax` is also a reasonable primary region. Do not split the API, Postgres, and Redis across regions for the first deploy.
 
-## What Must Be Built Before Deploy
+## Implemented In Repo
 
-### 1. API deployment files
-
-Add:
+The deployment artifact layer is now checked in:
 
 - `apps/api/Dockerfile`
+- `apps/web/Dockerfile`
+- `apps/web/server.mjs`
+- `apps/web/public/runtime-config.js`
 - `deploy/fly/api.fly.toml`
+- `deploy/fly/web.fly.toml`
+- `deploy/fly/release-api.sh`
+- root `.dockerignore`
 
-The API image should:
+The web app now reads `ALPHADB_WEB_API_BASE_URL` from runtime config, so the deployed web app can be repointed at a different API origin without rebuilding the image.
+
+## What Must Be Provisioned Before Deploy
+
+### 1. API Fly app
+
+The API image now:
 
 - install workspace dependencies
 - build `packages/sdk`, `packages/market-core`, and `apps/api`
 - run `node apps/api/dist/index.js`
 
-### 2. Web deployment files
+### 2. Web Fly app
 
-Add:
-
-- `apps/web/Dockerfile`
-- `deploy/fly/web.fly.toml`
-
-The web image should:
+The web image now:
 
 - install workspace dependencies
 - build `apps/web`
@@ -221,18 +226,16 @@ apps/
 4. Provision Upstash Redis in `sjc`.
 5. Capture the resulting `DATABASE_URL` and `REDIS_URL`.
 
-### Phase 2. Add deployment artifacts
+### Phase 2. Configure runtime
 
-1. Add API Dockerfile.
-2. Add web Dockerfile.
-3. Add `api.fly.toml`.
-4. Add `web.fly.toml`.
-5. Add a small release script for schema work.
+1. Set API secrets.
+2. Confirm `ALPHADB_WEB_API_BASE_URL`.
+3. Review any auth bootstrap tokens.
+4. Confirm desired Fly regions and app names.
 
 ### Phase 3. First API deploy
 
-1. Set API secrets.
-2. Deploy `alphadb-api`.
+1. Deploy `alphadb-api`.
 3. Verify:
    - `/api/health`
    - `/api/markets/unified/trending`
@@ -241,7 +244,7 @@ apps/
 
 ### Phase 4. First web deploy
 
-1. Set `VITE_ALPHADB_API_BASE_URL` for `alphadb-web`.
+1. Set `ALPHADB_WEB_API_BASE_URL` for `alphadb-web`.
 2. Deploy `alphadb-web`.
 3. Verify:
    - page load
@@ -333,13 +336,15 @@ The Fly deployment is ready when all of the following are true:
 
 ## Immediate Next Step
 
-Implement the deployment artifacts:
+Provision Fly resources and perform the first deploy:
 
-1. `apps/api/Dockerfile`
-2. `apps/web/Dockerfile`
-3. `deploy/fly/api.fly.toml`
-4. `deploy/fly/web.fly.toml`
-5. API release script for schema setup
+1. create `alphadb-api`
+2. create `alphadb-web`
+3. provision Fly Managed Postgres
+4. provision Upstash Redis on Fly
+5. set API and web secrets/env
+6. run `npm run fly:deploy:api`
+7. run `npm run fly:deploy:web`
 
 ## References
 

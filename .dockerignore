@@ -1,0 +1,13 @@
+.git
+.github
+.DS_Store
+node_modules
+tmp
+.env
+.env.*
+docs
+apps/*/dist
+apps/web/src/*.js
+apps/web/src/features/workspace/*.js
+apps/web/src/features/workspace/components/*.js
+npm-debug.log*

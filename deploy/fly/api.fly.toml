@@ -1,0 +1,49 @@
+app = "alphadb-api"
+primary_region = "sjc"
+kill_signal = "SIGINT"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "4000"
+  PRIMARY_REGION = "sjc"
+  ALPHADB_API_USER_STATE_BACKEND = "postgres"
+  DISCOVERY_REQUIRE_SCHEMA = "1"
+  DISCOVERY_RUN_PRUNER_ENABLED = "0"
+  DISCOVERY_RETRY_WORKER_ENABLED = "0"
+
+[deploy]
+  release_command = "/bin/sh /app/deploy/fly/release-api.sh"
+  strategy = "rolling"
+
+  [deploy.release_command_vm]
+    size = "shared-cpu-1x"
+    memory = "256mb"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/api/health"
+
+    [http_service.checks.headers]
+      X-Forwarded-Proto = "https"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "512mb"
