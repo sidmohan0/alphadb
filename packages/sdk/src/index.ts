@@ -28,6 +28,18 @@ function normalizeBaseUrl(value: string | null | undefined): string | null {
   return trimmed ? trimmed.replace(/\/+$/, "") : null;
 }
 
+function resolveFetchImpl(fetchImpl?: typeof fetch): typeof fetch {
+  if (fetchImpl) {
+    return fetchImpl;
+  }
+
+  return globalThis.fetch.bind(globalThis);
+}
+
+function canSetUserAgentHeader(): boolean {
+  return typeof window === "undefined";
+}
+
 function sameTickers(left: string[], right: string[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -269,7 +281,7 @@ export class AlphaDBClient {
     this.apiTokenValue = options.apiToken?.trim() || null;
     this.userIdValue = options.userId?.trim() || null;
     this.userAgentValue = options.userAgent?.trim() || "alphadb-sdk";
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = resolveFetchImpl(options.fetchImpl);
   }
 
   hasBaseUrl(): boolean {
@@ -414,7 +426,8 @@ export class AlphaDBClient {
       ...init,
       headers: {
         Accept: "application/json",
-        "User-Agent": this.userAgentValue,
+        ...(canSetUserAgentHeader() ? { "User-Agent": this.userAgentValue } : {}),
+        "X-AlphaDB-Client": this.userAgentValue,
         ...(this.apiTokenValue ? { Authorization: `Bearer ${this.apiTokenValue}` } : {}),
         ...(this.userIdValue ? { "X-AlphaDB-User-Id": this.userIdValue } : {}),
         ...(init?.headers ?? {}),

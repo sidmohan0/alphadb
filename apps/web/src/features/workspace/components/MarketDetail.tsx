@@ -1,0 +1,46 @@
+import type { MarketSummary, ProviderId } from "@alphadb/market-core";
+
+import { formatCompactMoney, formatEndDate, formatPrice, providerThemes } from "../shared";
+
+export function MarketDetail({
+  provider,
+  market,
+  liveStatus,
+  saved,
+}: {
+  provider: ProviderId;
+  market: MarketSummary | null;
+  liveStatus: string;
+  saved: boolean;
+}) {
+  if (!market) {
+    return (
+      <section className="panel">
+        <div className="panel-title">Market Detail</div>
+        <div className="detail-card">No market selected.</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-title">Market Detail</div>
+      <div className="detail-card">
+        <div className="detail-title">{market.question}</div>
+        <div>{market.eventTitle ?? market.seriesTitle ?? "Market detail unavailable"}</div>
+        <div className="detail-grid">
+          <span>Ends {formatEndDate(market.endDate)}</span>
+          <span>Vol24 {formatCompactMoney(market.volume24hr)}</span>
+          <span>Liquidity {formatCompactMoney(market.liquidity)}</span>
+          <span>Bid {formatPrice(market.bestBid)}</span>
+          <span>Ask {formatPrice(market.bestAsk)}</span>
+          <span>Last {formatPrice(market.lastTradePrice)}</span>
+          <span>Symbol {market.symbol}</span>
+          <span>{providerThemes[provider].label} feed</span>
+          <span>Saved {saved ? "yes" : "no"}</span>
+        </div>
+        <div className="live-line">{liveStatus}</div>
+      </div>
+    </section>
+  );
+}

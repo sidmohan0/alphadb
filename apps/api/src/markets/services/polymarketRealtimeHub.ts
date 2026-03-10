@@ -426,10 +426,31 @@ class PolymarketRealtimeHub {
     const socket = this.socket;
     this.socket = null;
     socket.removeAllListeners();
+    socket.on("error", () => {
+      // Prevent late teardown events from crashing the process after listeners are detached.
+    });
+    socket.on("close", () => {
+      // Ignore close events from sockets being torn down during reconnect/cleanup.
+    });
 
     try {
+      if (socket.readyState === WS.CONNECTING) {
+        socket.once("open", () => {
+          try {
+            socket.close();
+          } catch {
+            // Ignore races when the socket state changes during teardown.
+          }
+        });
+        return;
+      }
+
       if (socket.readyState === WS.OPEN) {
         socket.close();
+        return;
+      }
+
+      if (socket.readyState === WS.CLOSING || socket.readyState === WS.CLOSED) {
         return;
       }
 

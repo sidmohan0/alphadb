@@ -1,0 +1,8 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { formatCompactMoney, formatEndDate, formatPrice, providerThemes } from "../shared";
+export function MarketDetail({ provider, market, liveStatus, saved, }) {
+    if (!market) {
+        return (_jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-title", children: "Market Detail" }), _jsx("div", { className: "detail-card", children: "No market selected." })] }));
+    }
+    return (_jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-title", children: "Market Detail" }), _jsxs("div", { className: "detail-card", children: [_jsx("div", { className: "detail-title", children: market.question }), _jsx("div", { children: market.eventTitle ?? market.seriesTitle ?? "Market detail unavailable" }), _jsxs("div", { className: "detail-grid", children: [_jsxs("span", { children: ["Ends ", formatEndDate(market.endDate)] }), _jsxs("span", { children: ["Vol24 ", formatCompactMoney(market.volume24hr)] }), _jsxs("span", { children: ["Liquidity ", formatCompactMoney(market.liquidity)] }), _jsxs("span", { children: ["Bid ", formatPrice(market.bestBid)] }), _jsxs("span", { children: ["Ask ", formatPrice(market.bestAsk)] }), _jsxs("span", { children: ["Last ", formatPrice(market.lastTradePrice)] }), _jsxs("span", { children: ["Symbol ", market.symbol] }), _jsxs("span", { children: [providerThemes[provider].label, " feed"] }), _jsxs("span", { children: ["Saved ", saved ? "yes" : "no"] })] }), _jsx("div", { className: "live-line", children: liveStatus })] })] }));
+}

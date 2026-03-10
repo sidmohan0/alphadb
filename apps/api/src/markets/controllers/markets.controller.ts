@@ -296,9 +296,29 @@ router.get("/stream", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
+  let streamOpen = true;
+  let writable = true;
+
+  const writeChunk = (chunk: string): boolean => {
+    if (!streamOpen || res.destroyed || res.writableEnded) {
+      return false;
+    }
+
+    try {
+      writable = res.write(chunk);
+      return writable;
+    } catch {
+      streamOpen = false;
+      return false;
+    }
+  };
+
   const writeEvent = (event: string, data: unknown) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (!writable) {
+      return;
+    }
+
+    writeChunk(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
   writeEvent("ready", { requestId, subscriptions: effectiveSubscriptions });
@@ -338,15 +358,35 @@ router.get("/stream", (req, res) => {
   );
 
   const heartbeat = setInterval(() => {
-    res.write(": ping\n\n");
+    if (!writable) {
+      return;
+    }
+
+    writeChunk(": ping\n\n");
   }, 15_000);
 
-  req.on("close", () => {
+  res.on("drain", () => {
+    writable = true;
+  });
+
+  const closeStream = () => {
+    if (!streamOpen) {
+      return;
+    }
+
+    streamOpen = false;
     clearInterval(heartbeat);
     kalshiSubscription.close();
     polymarketSubscription.close();
-    res.end();
-  });
+    if (!res.writableEnded && !res.destroyed) {
+      res.end();
+    }
+  };
+
+  req.on("aborted", closeStream);
+  req.on("close", closeStream);
+  res.on("close", closeStream);
+  res.on("error", closeStream);
 });
 
 export const marketsRouter = router;

@@ -1,7 +1,7 @@
-import { DiscoveryPage } from "./features/discovery/DiscoveryPage";
+import { MarketWorkspacePage } from "./features/workspace/MarketWorkspacePage";
 
 function App(): JSX.Element {
-  return <DiscoveryPage />;
+  return <MarketWorkspacePage />;
 }
 
 export default App;

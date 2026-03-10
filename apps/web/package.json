@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@alphadb/market-core": "^1.0.0",
+    "@alphadb/sdk": "^1.0.0",
+    "lightweight-charts": "^5.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
