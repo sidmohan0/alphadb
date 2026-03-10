@@ -29,6 +29,8 @@ Architecture notes and accepted decisions live in:
 - `docs/adrs/README.md`
 - `docs/checklists/001-backend-convergence-decision-checklist.md`
 - `docs/plans/002-phase-1-backend-convergence.md`
+- `docs/plans/003-phase-2-productionization-baseline.md`
+- `docs/plans/004-fly-deployment-plan.md`
 
 ## Workspace Layout
 
