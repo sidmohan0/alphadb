@@ -4,7 +4,7 @@ kill_signal = "SIGINT"
 kill_timeout = "30s"
 
 [build]
-  dockerfile = "apps/web/Dockerfile"
+  dockerfile = "../../apps/web/Dockerfile"
 
 [env]
   NODE_ENV = "production"

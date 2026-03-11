@@ -1,5 +1,5 @@
 #!/bin/sh
 set -eu
 
-npm run markets:ensure-state-schema --workspace @alphadb/api
-npm run polymarket:discovery-migrate --workspace @alphadb/api
+node /app/apps/api/dist/markets/maintenance/marketStateSchema.js
+node /app/apps/api/dist/polymarket/maintenance/migrateDiscoveryRuns.js
