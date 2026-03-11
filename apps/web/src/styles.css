@@ -413,6 +413,16 @@ button:focus {
   background: rgba(5, 10, 7, 0.82);
 }
 
+.chart-stats {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0 0.55rem 0.45rem;
+  border-top: 1px solid var(--provider-border);
+  color: var(--term-muted);
+  font-size: 0.62rem;
+}
+
 .detail-card {
   display: grid;
   gap: 0.45rem;
