@@ -24,10 +24,13 @@ export function MarketDetail({
 
   return (
     <section className="panel">
-      <div className="panel-title">Market Detail</div>
+      <div className="panel-header">
+        <div className="panel-title">Market Detail</div>
+        <div className="panel-meta">{providerThemes[provider].label}</div>
+      </div>
       <div className="detail-card">
         <div className="detail-title">{market.question}</div>
-        <div>{market.eventTitle ?? market.seriesTitle ?? "Market detail unavailable"}</div>
+        <div className="detail-subtitle">{market.eventTitle ?? market.seriesTitle ?? "Market detail unavailable"}</div>
         <div className="detail-grid">
           <span>Ends {formatEndDate(market.endDate)}</span>
           <span>Vol24 {formatCompactMoney(market.volume24hr)}</span>

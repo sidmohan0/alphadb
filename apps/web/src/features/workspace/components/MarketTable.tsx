@@ -23,7 +23,10 @@ export function MarketTable({
 
   return (
     <section className="panel">
-      <div className={`panel-title provider-title ${focused ? "focused" : ""}`}>{theme.label}{focused ? " • focus" : ""}</div>
+      <div className="panel-header">
+        <div className={`panel-title provider-title ${focused ? "focused" : ""}`}>{theme.label}{focused ? " focus" : ""}</div>
+        <div className="panel-meta">{markets.length} mkts</div>
+      </div>
       <div className="market-table-head">
         <span>Question</span>
         <span>Flg</span>
@@ -45,10 +48,10 @@ export function MarketTable({
               onClick={() => onSelect(index)}
             >
               <span className="market-question">{market.question}</span>
-              <span>{flags}</span>
-              <span>{formatPrice(market.lastTradePrice ?? market.outcomes[0]?.price ?? null)}</span>
-              <span>{formatCompactMoney(market.volume24hr)}</span>
-              <span>{formatEndDate(market.endDate)}</span>
+              <span className="market-flag">{flags}</span>
+              <span className="market-number">{formatPrice(market.lastTradePrice ?? market.outcomes[0]?.price ?? null)}</span>
+              <span className="market-number">{formatCompactMoney(market.volume24hr)}</span>
+              <span className="market-end">{formatEndDate(market.endDate)}</span>
             </button>
           );
         })}

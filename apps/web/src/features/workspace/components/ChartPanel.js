@@ -37,11 +37,11 @@ function useChart(provider, points, loading) {
             layout: {
                 background: { type: ColorType.Solid, color: theme.panel },
                 textColor: theme.text,
-                fontFamily: '"IBM Plex Mono", "JetBrains Mono", monospace',
+                fontFamily: '"Space Mono", monospace',
             },
             grid: {
-                vertLines: { color: "rgba(17, 192, 255, 0.14)", style: LineStyle.Dotted },
-                horzLines: { color: "rgba(17, 192, 255, 0.26)", style: LineStyle.Dotted },
+                vertLines: { color: theme.borderSoft, style: LineStyle.Dotted },
+                horzLines: { color: theme.border, style: LineStyle.Dotted },
             },
             rightPriceScale: {
                 borderColor: theme.borderSoft,
@@ -99,5 +99,5 @@ function useChart(provider, points, loading) {
 }
 export function ChartPanel({ provider, points, loading, }) {
     const containerRef = useChart(provider, points, loading);
-    return (_jsxs("section", { className: "panel", children: [_jsx("div", { className: "panel-title", children: "Chart" }), _jsxs("div", { className: "chart-shell", children: [_jsx("div", { ref: containerRef, className: "chart-canvas" }), !loading && points.length === 0 ? (_jsx("div", { className: "chart-empty", children: "No chart data available for this selection." })) : null, loading ? _jsx("div", { className: "chart-empty", children: "Loading chart\u2026" }) : null] })] }));
+    return (_jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-header", children: [_jsx("div", { className: "panel-title", children: "Chart" }), _jsx("div", { className: "panel-meta", children: loading ? "syncing" : `${points.length} pts` })] }), _jsxs("div", { className: "chart-shell", children: [_jsx("div", { ref: containerRef, className: "chart-canvas" }), !loading && points.length === 0 ? (_jsx("div", { className: "chart-empty", children: "No chart data available for this selection." })) : null, loading ? _jsx("div", { className: "chart-empty", children: "Loading chart\u2026" }) : null] })] }));
 }

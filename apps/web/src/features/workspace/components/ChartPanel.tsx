@@ -47,11 +47,11 @@ function useChart(provider: ProviderId, points: PricePoint[], loading: boolean):
       layout: {
         background: { type: ColorType.Solid, color: theme.panel },
         textColor: theme.text,
-        fontFamily: '"IBM Plex Mono", "JetBrains Mono", monospace',
+        fontFamily: '"Space Mono", monospace',
       },
       grid: {
-        vertLines: { color: "rgba(17, 192, 255, 0.14)", style: LineStyle.Dotted },
-        horzLines: { color: "rgba(17, 192, 255, 0.26)", style: LineStyle.Dotted },
+        vertLines: { color: theme.borderSoft, style: LineStyle.Dotted },
+        horzLines: { color: theme.border, style: LineStyle.Dotted },
       },
       rightPriceScale: {
         borderColor: theme.borderSoft,
@@ -129,7 +129,10 @@ export function ChartPanel({
 
   return (
     <section className="panel">
-      <div className="panel-title">Chart</div>
+      <div className="panel-header">
+        <div className="panel-title">Chart</div>
+        <div className="panel-meta">{loading ? "syncing" : `${points.length} pts`}</div>
+      </div>
       <div className="chart-shell">
         <div ref={containerRef} className="chart-canvas" />
         {!loading && points.length === 0 ? (

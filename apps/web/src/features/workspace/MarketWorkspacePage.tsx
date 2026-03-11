@@ -9,52 +9,63 @@ import { useMarketWorkspace } from "./useMarketWorkspace";
 export function MarketWorkspacePage() {
   const workspace = useMarketWorkspace();
   const focusedMarket = workspace.selectedMarkets[workspace.focusedProvider];
+  const nowLabel = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date());
 
   return (
     <main className="workspace-shell">
       <header className="top-bar">
         <div className="top-title">
           <span className="brand-block">AlphaDB</span>
-          <span className="brand-subtitle">Markets Web</span>
-          <span className="mode-pill">Unified Mode · Focus {providerThemes[workspace.focusedProvider].label}</span>
+          <span className="brand-subtitle">Prediction Market Terminal</span>
         </div>
+        <div className="mode-pill">Unified Mode · Focus {providerThemes[workspace.focusedProvider].label}</div>
         <div className="top-meta">
+          <span className="top-help">/ search • h/l focus • f save</span>
           <span>markets {formatAge(workspace.lastMarketRefreshAt)}</span>
           <span>chart {formatAge(workspace.providerState[workspace.focusedProvider].lastChartRefreshAt)}</span>
+          <span className="time-pill">{nowLabel}</span>
         </div>
       </header>
 
-      <div className="headline">
-        {focusedMarket?.question ?? "Prediction-market workspace"}
-      </div>
+      <div className="headline">{focusedMarket?.question ?? "Prediction-market workspace"}</div>
 
       <section className="command-row">
-        <div className="provider-switches">
-          {PROVIDERS.map((provider) => (
-            <button
-              key={provider}
-              type="button"
-              className={`command-button ${workspace.focusedProvider === provider ? "active" : ""}`}
-              onClick={() => workspace.setFocusedProvider(provider)}
-            >
-              {providerThemes[provider].label}
-            </button>
-          ))}
+        <div className="command-card">
+          <div className="command-label">Provider Focus</div>
+          <div className="provider-switches">
+            {PROVIDERS.map((provider) => (
+              <button
+                key={provider}
+                type="button"
+                className={`command-button ${workspace.focusedProvider === provider ? "active" : ""}`}
+                onClick={() => workspace.setFocusedProvider(provider)}
+              >
+                {providerThemes[provider].label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="view-switches">
-          {(["trending", "saved", "recent"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`command-button ${workspace.viewMode === mode ? "active" : ""}`}
-              onClick={() => workspace.setViewMode(mode)}
-            >
-              {mode}
-            </button>
-          ))}
+        <div className="command-card">
+          <div className="command-label">Workspace View</div>
+          <div className="view-switches">
+            {(["trending", "saved", "recent"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`command-button ${workspace.viewMode === mode ? "active" : ""}`}
+                onClick={() => workspace.setViewMode(mode)}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
         </div>
-        <label className="search-block">
-          <span>Search</span>
+        <label className="search-block command-card">
+          <span className="command-label">Search</span>
           <input
             ref={workspace.searchInputRef}
             value={workspace.query}
@@ -62,8 +73,8 @@ export function MarketWorkspacePage() {
             placeholder="Search both providers"
           />
         </label>
-        <label className="token-block">
-          <span>API Token</span>
+        <label className="token-block command-card">
+          <span className="command-label">API Token</span>
           <div className="token-row">
             <input
               value={workspace.apiTokenDraft}
@@ -72,7 +83,7 @@ export function MarketWorkspacePage() {
             />
             <button
               type="button"
-              className="command-button active"
+              className="command-button apply-button"
               onClick={workspace.applyApiToken}
             >
               Apply
@@ -99,6 +110,7 @@ export function MarketWorkspacePage() {
             "--provider-panel": theme.panel,
             "--provider-text": theme.text,
             "--provider-selected": theme.selected,
+            "--provider-accent": theme.accent,
           } as CSSProperties;
 
           return (
@@ -108,8 +120,9 @@ export function MarketWorkspacePage() {
               style={shellStyle}
             >
               <div className="provider-heading">
-                <span>{theme.label}</span>
-                <span className="provider-side">{provider === "polymarket" ? "left" : "right"}</span>
+                <span className="provider-name">{theme.label}</span>
+                <span className="provider-side">{provider === "polymarket" ? "left side" : "right side"}</span>
+                <span className="provider-count">{workspace.displayedMarkets[provider].length} markets</span>
               </div>
 
               <MarketTable
