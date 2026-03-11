@@ -2,6 +2,22 @@ import type { MarketSummary, ProviderId } from "@alphadb/market-core";
 
 import { formatCompactMoney, formatEndDate, formatPrice, providerThemes } from "../shared";
 
+function toneClass(change: number | null): string {
+  if (change === null || !Number.isFinite(change)) {
+    return "neutral";
+  }
+
+  if (change > 0) {
+    return "positive";
+  }
+
+  if (change < 0) {
+    return "negative";
+  }
+
+  return "neutral";
+}
+
 export function MarketTable({
   provider,
   markets,
@@ -40,6 +56,7 @@ export function MarketTable({
         ) : null}
         {markets.map((market, index) => {
           const flags = `${savedIds.has(market.id) ? "S" : "."}${recentIds.has(market.id) ? "R" : "."}`;
+          const priceTone = toneClass(market.oneDayPriceChange);
           return (
             <button
               type="button"
@@ -49,8 +66,8 @@ export function MarketTable({
             >
               <span className="market-question">{market.question}</span>
               <span className="market-flag">{flags}</span>
-              <span className="market-number">{formatPrice(market.lastTradePrice ?? market.outcomes[0]?.price ?? null)}</span>
-              <span className="market-number">{formatCompactMoney(market.volume24hr)}</span>
+              <span className={`market-number ${priceTone}`}>{formatPrice(market.lastTradePrice ?? market.outcomes[0]?.price ?? null)}</span>
+              <span className="market-number neutral">{formatCompactMoney(market.volume24hr)}</span>
               <span className="market-end">{formatEndDate(market.endDate)}</span>
             </button>
           );

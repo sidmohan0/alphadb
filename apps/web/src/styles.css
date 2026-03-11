@@ -313,6 +313,18 @@ button:focus {
   font-size: 0.62rem;
 }
 
+.positive {
+  color: var(--term-sage);
+}
+
+.negative {
+  color: var(--term-danger);
+}
+
+.neutral {
+  color: var(--term-text);
+}
+
 .provider-title.focused {
   color: var(--term-yellow);
 }
@@ -416,6 +428,13 @@ button:focus {
 
 .detail-subtitle {
   color: var(--term-muted);
+}
+
+.detail-change {
+  padding: 0.28rem 0.4rem;
+  border: 1px solid currentColor;
+  background: rgba(255, 255, 255, 0.01);
+  width: fit-content;
 }
 
 .detail-grid {

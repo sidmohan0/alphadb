@@ -1,7 +1,7 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useRef } from "react";
 import { AreaSeries, ColorType, createChart, LineStyle } from "lightweight-charts";
-import { providerThemes } from "../shared";
+import { NEGATIVE_ACCENT, providerThemes } from "../shared";
 function normalizeSeriesData(points) {
     const sortedPoints = [...points].sort((left, right) => left.timestamp - right.timestamp);
     const normalized = [];
@@ -87,9 +87,19 @@ function useChart(provider, points, loading) {
             return;
         }
         const data = normalizeSeriesData(points);
+        const first = data[0]?.value ?? null;
+        const last = data.at(-1)?.value ?? null;
+        const rising = first !== null && last !== null ? last >= first : true;
+        const theme = providerThemes[provider];
+        seriesRef.current.applyOptions({
+            lineColor: rising ? theme.chartLine : NEGATIVE_ACCENT,
+            topColor: rising ? theme.chartFillTop : "rgba(204, 0, 0, 0.18)",
+            bottomColor: rising ? theme.chartFillBottom : "rgba(32, 0, 0, 0.04)",
+            crosshairMarkerBackgroundColor: rising ? theme.chartLine : NEGATIVE_ACCENT,
+        });
         seriesRef.current.setData(data);
         chartRef.current?.timeScale().fitContent();
-    }, [points]);
+    }, [points, provider]);
     useEffect(() => {
         if (loading && seriesRef.current) {
             seriesRef.current.setData([]);
@@ -99,5 +109,10 @@ function useChart(provider, points, loading) {
 }
 export function ChartPanel({ provider, points, loading, }) {
     const containerRef = useChart(provider, points, loading);
-    return (_jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-header", children: [_jsx("div", { className: "panel-title", children: "Chart" }), _jsx("div", { className: "panel-meta", children: loading ? "syncing" : `${points.length} pts` })] }), _jsxs("div", { className: "chart-shell", children: [_jsx("div", { ref: containerRef, className: "chart-canvas" }), !loading && points.length === 0 ? (_jsx("div", { className: "chart-empty", children: "No chart data available for this selection." })) : null, loading ? _jsx("div", { className: "chart-empty", children: "Loading chart\u2026" }) : null] })] }));
+    const normalized = normalizeSeriesData(points);
+    const first = normalized[0]?.value ?? null;
+    const last = normalized.at(-1)?.value ?? null;
+    const chartChange = first !== null && last !== null ? last - first : null;
+    const changeLabel = chartChange === null ? `${points.length} pts` : `${chartChange > 0 ? "+" : ""}${chartChange.toFixed(2)}c`;
+    return (_jsxs("section", { className: "panel", children: [_jsxs("div", { className: "panel-header", children: [_jsx("div", { className: "panel-title", children: "Chart" }), _jsx("div", { className: `panel-meta ${chartChange === null ? "" : chartChange < 0 ? "negative" : chartChange > 0 ? "positive" : "neutral"}`, children: loading ? "syncing" : changeLabel })] }), _jsxs("div", { className: "chart-shell", children: [_jsx("div", { ref: containerRef, className: "chart-canvas" }), !loading && points.length === 0 ? (_jsx("div", { className: "chart-empty", children: "No chart data available for this selection." })) : null, loading ? _jsx("div", { className: "chart-empty", children: "Loading chart\u2026" }) : null] })] }));
 }

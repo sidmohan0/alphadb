@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { AreaSeries, ColorType, createChart, LineStyle, type IChartApi, type ISeriesApi, type UTCTimestamp } from "lightweight-charts";
 import type { PricePoint, ProviderId } from "@alphadb/market-core";
 
-import { providerThemes } from "../shared";
+import { NEGATIVE_ACCENT, providerThemes } from "../shared";
 
 function normalizeSeriesData(points: PricePoint[]): Array<{ time: UTCTimestamp; value: number }> {
   const sortedPoints = [...points].sort((left, right) => left.timestamp - right.timestamp);
@@ -103,9 +103,20 @@ function useChart(provider: ProviderId, points: PricePoint[], loading: boolean):
     }
 
     const data = normalizeSeriesData(points);
+    const first = data[0]?.value ?? null;
+    const last = data.at(-1)?.value ?? null;
+    const rising = first !== null && last !== null ? last >= first : true;
+    const theme = providerThemes[provider];
+
+    seriesRef.current.applyOptions({
+      lineColor: rising ? theme.chartLine : NEGATIVE_ACCENT,
+      topColor: rising ? theme.chartFillTop : "rgba(204, 0, 0, 0.18)",
+      bottomColor: rising ? theme.chartFillBottom : "rgba(32, 0, 0, 0.04)",
+      crosshairMarkerBackgroundColor: rising ? theme.chartLine : NEGATIVE_ACCENT,
+    });
     seriesRef.current.setData(data);
     chartRef.current?.timeScale().fitContent();
-  }, [points]);
+  }, [points, provider]);
 
   useEffect(() => {
     if (loading && seriesRef.current) {
@@ -126,12 +137,20 @@ export function ChartPanel({
   loading: boolean;
 }) {
   const containerRef = useChart(provider, points, loading);
+  const normalized = normalizeSeriesData(points);
+  const first = normalized[0]?.value ?? null;
+  const last = normalized.at(-1)?.value ?? null;
+  const chartChange = first !== null && last !== null ? last - first : null;
+  const changeLabel =
+    chartChange === null ? `${points.length} pts` : `${chartChange > 0 ? "+" : ""}${chartChange.toFixed(2)}c`;
 
   return (
     <section className="panel">
       <div className="panel-header">
         <div className="panel-title">Chart</div>
-        <div className="panel-meta">{loading ? "syncing" : `${points.length} pts`}</div>
+        <div className={`panel-meta ${chartChange === null ? "" : chartChange < 0 ? "negative" : chartChange > 0 ? "positive" : "neutral"}`}>
+          {loading ? "syncing" : changeLabel}
+        </div>
       </div>
       <div className="chart-shell">
         <div ref={containerRef} className="chart-canvas" />

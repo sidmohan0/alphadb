@@ -30,6 +30,8 @@ export interface ProviderTheme {
   chartFillBottom: string;
 }
 
+export const NEGATIVE_ACCENT = "#cc0000";
+
 const WEB_STATE_KEY = "alphadb-web-persistent-state";
 const WEB_TOKEN_KEY = "alphadb-web-api-token";
 
