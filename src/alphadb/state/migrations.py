@@ -85,4 +85,39 @@ INITIAL_OPERATIONAL_STATE = Migration(
 )
 
 
-MIGRATIONS: tuple[Migration, ...] = (INITIAL_OPERATIONAL_STATE,)
+RAW_EVENT_LOG = Migration(
+    version="0002_raw_event_log",
+    statements=(
+        """
+        create table if not exists raw_events (
+            raw_event_id text primary key,
+            run_id text references platform_runs(run_id),
+            market_ticker text references market_instances(market_ticker),
+            source text not null,
+            source_event_id text,
+            received_at timestamptz not null,
+            source_timestamp timestamptz,
+            schema_version text not null,
+            payload_hash text not null,
+            payload jsonb not null,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create unique index if not exists raw_events_source_event_id_idx
+        on raw_events(source, source_event_id)
+        where source_event_id is not null
+        """,
+        """
+        create index if not exists raw_events_replay_order_idx
+        on raw_events(run_id, market_ticker, received_at, raw_event_id)
+        """,
+        """
+        create index if not exists raw_events_source_schema_idx
+        on raw_events(source, schema_version)
+        """,
+    ),
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (INITIAL_OPERATIONAL_STATE, RAW_EVENT_LOG)

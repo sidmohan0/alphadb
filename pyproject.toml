@@ -18,6 +18,7 @@ dependencies = [
 alphadb-health = "alphadb.health:main"
 alphadb-markets = "alphadb.markets.cli:main"
 alphadb-state = "alphadb.state.cli:main"
+alphadb-events = "alphadb.events.cli:main"
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.35"]
