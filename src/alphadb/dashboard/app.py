@@ -15,6 +15,7 @@ from alphadb.markets.registry import default_market_registry
 from alphadb.model_registry.registry import ModelRegistryRepository
 from alphadb.paper.ioc import PaperExecutionRepository
 from alphadb.risk.gate import RiskDecisionRepository
+from alphadb.shadow.comparison import ShadowComparisonRepository
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -89,6 +90,14 @@ def paper_status_rows(database_url: str) -> dict[str, list[dict[str, str | int]]
     except Exception as exc:
         row = [{"paper": "unavailable", "detail": str(exc)}]
         return {"orders": row, "fills": row, "positions": row, "reconciliations": row}
+
+
+def shadow_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = ShadowComparisonRepository(database_url).recent(limit=10)
+    except Exception as exc:
+        return [{"comparison_id": "shadow_comparisons", "detail": str(exc)}]
+    return rows or [{"comparison_id": "shadow_comparisons", "detail": "none"}]
 
 
 def render() -> None:
@@ -175,6 +184,9 @@ def render() -> None:
     st.dataframe(paper["positions"], hide_index=True, use_container_width=True)
     st.subheader("Paper Reconciliation")
     st.dataframe(paper["reconciliations"], hide_index=True, use_container_width=True)
+
+    st.subheader("Shadow Comparisons")
+    st.dataframe(shadow_rows(settings.database_url), hide_index=True, use_container_width=True)
 
     st.caption(f"Generated {report.generated_at_utc.isoformat()}")
 

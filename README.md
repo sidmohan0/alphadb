@@ -121,6 +121,16 @@ alphadb-replay report \
   --probability-yes 0.65
 ```
 
+Compare AlphaDB and Current MVP decision-boundary records without giving
+AlphaDB live control:
+
+```bash
+alphadb-shadow compare \
+  --alpha-json '{"market_ticker":"..."}' \
+  --current-json '{"market_ticker":"..."}'
+alphadb-shadow status
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with

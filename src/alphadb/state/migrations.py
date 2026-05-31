@@ -299,6 +299,35 @@ PAPER_EXECUTION = Migration(
 )
 
 
+SHADOW_COMPARISONS = Migration(
+    version="0007_shadow_comparisons",
+    statements=(
+        """
+        create table if not exists shadow_comparisons (
+            comparison_id text primary key,
+            market_ticker text not null,
+            decision_timestamp timestamptz not null,
+            status text not null,
+            mismatch_count integer not null,
+            intentional_difference_count integer not null,
+            alpha_payload jsonb not null,
+            current_mvp_payload jsonb,
+            comparisons jsonb not null,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists shadow_comparisons_market_time_idx
+        on shadow_comparisons(market_ticker, decision_timestamp desc)
+        """,
+        """
+        create index if not exists shadow_comparisons_status_idx
+        on shadow_comparisons(status)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -306,4 +335,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     MODEL_REGISTRY,
     FEATURE_ROWS,
     PAPER_EXECUTION,
+    SHADOW_COMPARISONS,
 )
