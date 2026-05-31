@@ -61,6 +61,14 @@ To opt into Kalshi public market-data endpoints, use
 `--source kalshi-public`. This path only fetches market data and order books;
 it does not have order-entry code.
 
+Register and inspect model artifact metadata without storing model binaries in
+Postgres:
+
+```bash
+alphadb-models register-demo --series KXBTC15M
+alphadb-models list --series KXBTC15M
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with

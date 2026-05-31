@@ -152,8 +152,52 @@ COLLECTOR_RUNS = Migration(
 )
 
 
+MODEL_REGISTRY = Migration(
+    version="0004_model_registry",
+    statements=(
+        """
+        create table if not exists model_registry_records (
+            model_id text primary key,
+            series text not null,
+            model_name text not null,
+            model_version text not null,
+            artifact_uri text not null,
+            artifact_sha256 text not null
+                check (artifact_sha256 ~ '^[a-f0-9]{64}$'),
+            feature_version text not null,
+            calibration_version text not null,
+            dataset_id text not null,
+            promotion_state text not null
+                check (promotion_state in (
+                    'candidate',
+                    'shadow',
+                    'paper',
+                    'live',
+                    'archived',
+                    'rejected'
+                )),
+            report_uri text,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            unique (series, model_name, model_version)
+        )
+        """,
+        """
+        create index if not exists model_registry_series_state_idx
+        on model_registry_records(series, promotion_state)
+        """,
+        """
+        create index if not exists model_registry_dataset_idx
+        on model_registry_records(dataset_id)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
     COLLECTOR_RUNS,
+    MODEL_REGISTRY,
 )
