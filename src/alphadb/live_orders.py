@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlparse
 from urllib import request
 from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from alphadb.config import Settings, settings_from_env
 from alphadb.paper.ioc import ApprovedOrderIntent, PaperExecutionRepository
@@ -35,23 +41,24 @@ class KalshiLiveOrderClient(Protocol):
 
 
 class HttpKalshiLiveOrderClient:
+    path = "/portfolio/events/orders"
+
     def create_order(
         self,
         *,
         request_payload: Mapping[str, Any],
         settings: Settings,
     ) -> Mapping[str, Any]:
-        url = settings.kalshi_base_url.rstrip("/") + "/portfolio/orders"
+        url = settings.kalshi_base_url.rstrip("/") + self.path
         body = json.dumps(request_payload).encode("utf-8")
         http_request = request.Request(
             url,
             data=body,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "User-Agent": "alphadb/0.1",
-                "KALSHI-ACCESS-KEY": settings.kalshi_api_key_id or "",
-            },
+            headers=signed_kalshi_headers(
+                settings=settings,
+                method="POST",
+                path=self.path,
+            ),
             method="POST",
         )
         with request.urlopen(http_request, timeout=10) as response:
@@ -201,21 +208,75 @@ class GatedLiveKalshiOrderAdapter:
 
 
 def kalshi_order_request_from_intent(intent: ApprovedOrderIntent) -> dict[str, Any]:
-    price_cents = int(round(intent.limit_price_dollars * 100))
-    payload: dict[str, Any] = {
+    side, yes_side_limit_price = kalshi_order_side_and_price(intent)
+    return {
         "ticker": intent.market_ticker,
         "client_order_id": intent.order_intent_id,
-        "action": "buy",
-        "side": intent.side,
-        "count": intent.quantity,
-        "type": "limit",
+        "side": side,
+        "count": f"{float(intent.quantity):.2f}",
+        "price": f"{yes_side_limit_price:.4f}",
         "time_in_force": "immediate_or_cancel",
+        "post_only": False,
+        "self_trade_prevention_type": "taker_at_cross",
+        "cancel_order_on_pause": True,
     }
+
+
+def kalshi_order_side_and_price(intent: ApprovedOrderIntent) -> tuple[str, float]:
     if intent.side == "yes":
-        payload["yes_price"] = price_cents
-    else:
-        payload["no_price"] = price_cents
-    return payload
+        return "bid", intent.limit_price_dollars
+    if intent.side == "no":
+        return "ask", 1.0 - intent.limit_price_dollars
+    raise LiveOrderError(f"unsupported order intent side: {intent.side}")
+
+
+def signed_kalshi_headers(
+    *,
+    settings: Settings,
+    method: str,
+    path: str,
+) -> dict[str, str]:
+    if not settings.kalshi_api_key_id or not settings.kalshi_private_key_path:
+        raise LiveOrderError("Kalshi live order request needs API key id and private key path")
+    timestamp_ms = str(int(time.time() * 1000))
+    root_path = urlparse(settings.kalshi_base_url).path.rstrip("/")
+    full_path = f"{root_path}{path}"
+    signature = sign_kalshi_request(
+        private_key=load_private_key(settings.kalshi_private_key_path),
+        timestamp_ms=timestamp_ms,
+        method=method,
+        path=full_path,
+    )
+    return {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "alphadb/0.1",
+        "KALSHI-ACCESS-KEY": settings.kalshi_api_key_id,
+        "KALSHI-ACCESS-TIMESTAMP": timestamp_ms,
+        "KALSHI-ACCESS-SIGNATURE": signature,
+    }
+
+
+def load_private_key(path: str | Path) -> rsa.RSAPrivateKey:
+    key = serialization.load_pem_private_key(Path(path).expanduser().read_bytes(), password=None)
+    if not isinstance(key, rsa.RSAPrivateKey):
+        raise LiveOrderError("Kalshi private key must be an RSA private key")
+    return key
+
+
+def sign_kalshi_request(
+    *,
+    private_key: rsa.RSAPrivateKey,
+    timestamp_ms: str,
+    method: str,
+    path: str,
+) -> str:
+    signature = private_key.sign(
+        f"{timestamp_ms}{method.upper()}{path}".encode("utf-8"),
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("ascii")
 
 
 def attempt_from_guard(

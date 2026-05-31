@@ -66,11 +66,12 @@ def test_live_order_request_maps_order_intent_to_taker_ioc_semantics() -> None:
     payload = kalshi_order_request_from_intent(intent)
 
     assert payload["ticker"] == intent.market_ticker
-    assert payload["action"] == "buy"
-    assert payload["side"] == "yes"
-    assert payload["type"] == "limit"
+    assert payload["side"] == "bid"
+    assert payload["count"] == "1.00"
+    assert payload["price"] == "0.4900"
     assert payload["time_in_force"] == "immediate_or_cancel"
-    assert payload["yes_price"] == 49
+    assert payload["post_only"] is False
+    assert payload["self_trade_prevention_type"] == "taker_at_cross"
 
 
 def test_live_order_adapter_denies_paper_mode_and_missing_credentials() -> None:
