@@ -6,6 +6,8 @@ import streamlit as st
 
 from alphadb.config import settings_from_env
 from alphadb.health import collect_health
+from alphadb.markets.cli import spec_summary_row
+from alphadb.markets.registry import default_market_registry
 
 
 def render() -> None:
@@ -25,6 +27,15 @@ def render() -> None:
 
     st.subheader("Health")
     st.dataframe(report.as_rows(), hide_index=True, use_container_width=True)
+
+    st.subheader("Market Specs")
+    registry = default_market_registry()
+    st.dataframe(
+        [spec_summary_row(spec) for spec in registry.list()],
+        hide_index=True,
+        use_container_width=True,
+    )
+
     st.caption(f"Generated {report.generated_at_utc.isoformat()}")
 
 
