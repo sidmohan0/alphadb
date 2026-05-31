@@ -160,6 +160,18 @@ class FeatureLedgerRepository:
                 rows = cursor.fetchall()
         return [row_to_feature_row(row) for row in rows]
 
+    def get(self, feature_row_id: str) -> FeatureRow:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "select * from feature_rows where feature_row_id = %s",
+                    (feature_row_id,),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise KeyError(f"unknown feature_row_id: {feature_row_id}")
+        return row_to_feature_row(row)
+
     def recent_rows(self, *, limit: int = 10) -> list[dict[str, Any]]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
