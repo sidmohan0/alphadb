@@ -68,6 +68,7 @@ class Kxbtc15mHandledMarketScheduler:
         markets: Sequence[MarketCandidate],
         now: datetime,
         handler: MarketHandler,
+        keep_run_open: bool = False,
     ) -> SchedulerScanResult:
         now = ensure_utc(now)
         waiting = handled = skipped = errored = duplicate_prevented = 0
@@ -134,7 +135,7 @@ class Kxbtc15mHandledMarketScheduler:
         )
         self.repository.finish_run(
             run_id=run_id,
-            status="running" if waiting else "completed",
+            status="running" if keep_run_open or waiting else "completed",
             metadata_patch={"latest_counts": result.as_counts()},
         )
         return result

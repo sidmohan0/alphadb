@@ -25,11 +25,11 @@ The current implementation focus is the first target-platform live-prep slice:
 - Runtime modes for `fixture`, `shadow`, `paper`, and `gated-live`, with live
   order submission denied by default.
 - A pinned Current MVP artifact loader, Coinbase feature adapter, Current MVP
-  feature-row parity builder, live-data paper runner, shadow parity runner, and
-  gated-live Kalshi order adapter.
+  feature-row parity builder, live-data paper runner, shadow parity runner,
+  gated-live Kalshi order adapter, and continuous gated-live strategy loop.
 
-Authenticated WebSocket ingestion and live cutover remain gated work. AlphaDB is
-not live-authoritative until the human ALP-15 cutover approval happens.
+Authenticated WebSocket ingestion remains gated work. AlphaDB is not
+live-authoritative until the human ALP-15 cutover approval happens.
 
 ## Project Boundary
 
@@ -251,6 +251,20 @@ alphadb-strategy paper-cycle --source fixture --now 2026-05-31T21:13:00Z
 alphadb-strategy status
 ```
 
+Run one hour of live-data paper evidence against live Kalshi public market data
+and live Coinbase features. This does not submit real orders:
+
+```bash
+ALPHADB_RUNTIME_MODE=paper \
+ALPHADB_ENABLE_LIVE_ORDERS=0 \
+ALPHADB_LIVE_STAKE_CAP_DOLLARS=1.0 \
+ALPHADB_MAX_DAILY_LOSS_DOLLARS=10.0 \
+ALPHADB_MIN_EV_DOLLARS=0.0 \
+ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
+ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
+alphadb-strategy paper-loop --source live --duration-minutes 60 --max-markets 3
+```
+
 Import a Current MVP decision-boundary export and compare parity:
 
 ```bash
@@ -282,6 +296,40 @@ KALSHI_API_KEY_ID=... \
 KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
 alphadb-live-orders live-smoke --order-intent-id <order_intent_id>
 ```
+
+After the one-hour evidence report passes and ALP-15 is approved, run one
+guarded live-money cycle or the continuous live loop. The live loop uses live
+market data only, submits taker-only IOC orders through the gated-live adapter,
+and exits non-zero if a cycle records an error:
+
+```bash
+ALPHADB_RUNTIME_MODE=gated-live \
+ALPHADB_ENABLE_LIVE_ORDERS=1 \
+ALPHADB_HUMAN_CUTOVER_APPROVED=1 \
+ALPHADB_LIVE_STAKE_CAP_DOLLARS=1.0 \
+ALPHADB_MAX_DAILY_LOSS_DOLLARS=10.0 \
+ALPHADB_MIN_EV_DOLLARS=0.0 \
+KALSHI_API_KEY_ID=... \
+KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
+ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
+ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
+alphadb-strategy gated-live-cycle --max-markets 1
+
+ALPHADB_RUNTIME_MODE=gated-live \
+ALPHADB_ENABLE_LIVE_ORDERS=1 \
+ALPHADB_HUMAN_CUTOVER_APPROVED=1 \
+ALPHADB_LIVE_STAKE_CAP_DOLLARS=1.0 \
+ALPHADB_MAX_DAILY_LOSS_DOLLARS=10.0 \
+ALPHADB_MIN_EV_DOLLARS=0.0 \
+KALSHI_API_KEY_ID=... \
+KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
+ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
+ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
+alphadb-strategy gated-live-loop --max-markets 3
+```
+
+Keep the current private MVP runner available as rollback until the AlphaDB
+live smoke and first gated-live cycle both succeed.
 
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and

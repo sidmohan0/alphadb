@@ -8,6 +8,7 @@ import json
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -158,6 +159,25 @@ class LiveOrderRepository:
                 )
                 rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    def accepted_max_cost_dollars(self, *, trading_day: date) -> float:
+        day_start = datetime.combine(trading_day, datetime.min.time(), tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    select coalesce(sum(oi.max_cost_dollars), 0)::float as accepted_max_cost
+                    from live_order_attempts loa
+                    join order_intents oi on oi.order_intent_id = loa.order_intent_id
+                    where loa.status = 'accepted'
+                      and loa.created_at >= %s
+                      and loa.created_at < %s
+                    """,
+                    (day_start, day_end),
+                )
+                row = cursor.fetchone()
+        return float(row["accepted_max_cost"] if row else 0.0)
 
 
 class GatedLiveKalshiOrderAdapter:

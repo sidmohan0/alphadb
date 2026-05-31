@@ -151,13 +151,22 @@ def strategy_run_rows(database_url: str) -> list[dict[str, str | int]]:
             [
                 {
                     "metric": "per_trade_cap_dollars",
-                    "value": spec.risk_config.live_stake_cap_dollars,
-                    "detail": "risk_config",
+                    "value": metadata.get(
+                        "live_stake_cap_dollars", spec.risk_config.live_stake_cap_dollars
+                    ),
+                    "detail": "runtime_config",
                 },
                 {
                     "metric": "max_daily_loss_dollars",
-                    "value": spec.risk_config.max_daily_loss_dollars,
-                    "detail": "risk_config",
+                    "value": metadata.get(
+                        "max_daily_loss_dollars", spec.risk_config.max_daily_loss_dollars
+                    ),
+                    "detail": "runtime_config",
+                },
+                {
+                    "metric": "min_ev_dollars",
+                    "value": metadata.get("min_ev_dollars", spec.trading_cutoffs.min_ev),
+                    "detail": "runtime_config",
                 },
             ]
         )
