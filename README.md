@@ -14,19 +14,22 @@ shadow and paper trading workflows.
 AlphaDB is an early platform scaffold. It is not a live trading bot, not a
 signals service, and not investment advice.
 
-The current implementation focus is the first target-platform slice:
+The current implementation focus is the first target-platform live-prep slice:
 
 - A local health path for the Python package, Postgres runtime, tests, and
   dashboard shell.
 - A `MarketSpec` registry with `KXBTC15M` as the first concrete market family.
 - A Postgres-backed operational-state tracer for runs, decisions, risk
-  decisions, and order intents.
+  decisions, order intents, paper execution, strategy outcomes, shadow
+  comparisons, evidence reports, and guarded live-order attempts.
+- Runtime modes for `fixture`, `shadow`, `paper`, and `gated-live`, with live
+  order submission denied by default.
+- A pinned Current MVP artifact loader, Coinbase feature adapter, Current MVP
+  feature-row parity builder, live-data paper runner, shadow parity runner, and
+  gated-live Kalshi order adapter.
 
-Future slices are planned around raw event logs, REST-first market collection,
-model registry records, no-lookahead feature rows, a shared decision engine,
-risk gates, paper IOC execution, deterministic replay reports, shadow comparison
-against the current MVP, authenticated WebSocket ingestion, and an explicit
-human gate before any live cutover.
+Authenticated WebSocket ingestion and live cutover remain gated work. AlphaDB is
+not live-authoritative until the human ALP-15 cutover approval happens.
 
 ## Project Boundary
 
@@ -222,6 +225,62 @@ ALPHADB_KALSHI_WS_URL=wss://... \
 KALSHI_API_KEY_ID=... \
 KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
 alphadb-ws live-smoke
+```
+
+Inspect runtime guard state:
+
+```bash
+alphadb-runtime status
+```
+
+Validate pinned Current MVP strategy artifacts from local-only config:
+
+```bash
+ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
+ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
+alphadb-artifacts status
+```
+
+Run one bounded KXBTC15M live-data paper cycle with fixture market data:
+
+```bash
+ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
+ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
+alphadb-strategy paper-cycle --source fixture --now 2026-05-31T21:13:00Z
+
+alphadb-strategy status
+```
+
+Import a Current MVP decision-boundary export and compare parity:
+
+```bash
+alphadb-shadow-current-mvp import /path/to/current-mvp-boundary.json
+alphadb-shadow-parity compare-market --run-id <run_id> --market-ticker <market_ticker>
+alphadb-shadow status
+```
+
+Build an evidence report for a bounded paper run:
+
+```bash
+alphadb-evidence report \
+  --run-id <run_id> \
+  --observed-end 2026-05-31T22:13:00Z
+```
+
+Inspect the gated-live adapter. The smoke command is opt-in and still fails
+closed unless runtime mode, credentials, explicit live enablement, and human
+cutover approval are all present:
+
+```bash
+alphadb-live-orders status
+
+ALPHADB_RUNTIME_MODE=gated-live \
+ALPHADB_ENABLE_LIVE_ORDERS=1 \
+ALPHADB_HUMAN_CUTOVER_APPROVED=1 \
+ALPHADB_ENABLE_LIVE_ORDER_SMOKE=1 \
+KALSHI_API_KEY_ID=... \
+KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
+alphadb-live-orders live-smoke --order-intent-id <order_intent_id>
 ```
 
 By default, local Postgres is published on `localhost:55433` and Streamlit on

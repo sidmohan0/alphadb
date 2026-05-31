@@ -19,7 +19,9 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Event-driven replay**: Target-platform simulation or diagnostic run that reconstructs market state, features, risk decisions, orders, fills, positions, and PnL from raw event logs and immutable artifacts.
 - **REST-first target ingestion**: Initial target-platform ingestion slice that records Kalshi REST snapshots and external feature events as raw event logs before authenticated WebSocket ingestion is added.
 - **Shadow platform run**: A non-authoritative target-platform run that consumes the same market instances as the current MVP and compares decisions, features, predictions, risk outcomes, and simulated orders without controlling live trading.
+- **Live-data paper run**: A non-authoritative target-platform run that uses live market and feature data to make and paper-execute decisions without depending on the Current MVP or submitting real orders.
 - **Decision-boundary equivalence**: Shadow-run comparison standard where the target platform must match the current MVP's feature row, model artifact, probability, executable quotes, expected values, selected side or skip reason, risk result, and intended order size for the same market instance and decision timestamp.
+- **Gated-live runtime mode**: Target-platform runtime mode where live order-submission code is wired and testable but disabled unless explicit live configuration and human cutover approval are present.
 - **Live platform cutover**: The moment the target platform becomes authoritative for live trading after shadow runs prove equivalence or intentionally documented differences.
 - **Taker-only execution policy**: Initial execution policy that submits immediate-or-cancel style orders at observed executable prices and does not intentionally rest maker/post-only orders.
 - **Maker execution policy**: Future execution policy that may rest post-only orders and therefore requires order-book replay, fill modeling, adverse-selection analysis, cancellation maturity, and explicit risk enablement.
@@ -29,7 +31,9 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 ## Relationships
 
 - The **Current MVP** remains authoritative until **Live platform cutover**.
+- A **Live-data paper run** can prove AlphaDB's independent runtime before **Shadow platform runs** compare it against the **Current MVP**.
 - The **Target platform** should prove **Decision-boundary equivalence** through **Shadow platform runs** before live cutover.
+- **Gated-live runtime mode** may be implemented before **Live platform cutover**, but it must fail closed unless the human cutover gate is satisfied.
 - The **Shared decision engine** should be reused across historical replay, shadow runs, paper trading, and live trading; only the event source, clock, and exchange adapter should vary by runtime mode.
 - A strategy should **Handle every instance** by producing either an order intent or a skip decision; submitting an order for every instance is a policy choice, not a platform invariant.
 - **Target platform operational state** lives in Postgres from the start.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 from uuid import uuid4
@@ -22,14 +22,19 @@ ComparisonStatus = Literal[
     "mismatch",
     "intentional_difference",
     "missing_current_mvp_data",
+    "missing_alpha_data",
 ]
 
 BOUNDARY_FIELDS = (
+    "feature_values",
     "feature_row_id",
     "feature_row_hash",
     "model_id",
+    "model_artifact_sha256",
     "probability_yes",
     "executable_quotes",
+    "yes_ev_dollars",
+    "no_ev_dollars",
     "selected_ev_dollars",
     "selected_side",
     "skip_reason",
@@ -53,6 +58,11 @@ class DecisionBoundaryRecord:
     risk_status: str
     intended_quantity: int
     source: str
+    feature_values: Mapping[str, Any] = field(default_factory=dict)
+    model_artifact_sha256: str | None = None
+    yes_ev_dollars: float | None = None
+    no_ev_dollars: float | None = None
+    timing_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> DecisionBoundaryRecord:
@@ -73,6 +83,11 @@ class DecisionBoundaryRecord:
             risk_status=str(values["risk_status"]),
             intended_quantity=int(values["intended_quantity"]),
             source=str(values.get("source", "unknown")),
+            feature_values=dict(values.get("feature_values") or {}),
+            model_artifact_sha256=values.get("model_artifact_sha256"),
+            yes_ev_dollars=optional_float(values.get("yes_ev_dollars")),
+            no_ev_dollars=optional_float(values.get("no_ev_dollars")),
+            timing_metadata=dict(values.get("timing_metadata") or {}),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -90,6 +105,11 @@ class DecisionBoundaryRecord:
             "risk_status": self.risk_status,
             "intended_quantity": self.intended_quantity,
             "source": self.source,
+            "feature_values": dict(self.feature_values),
+            "model_artifact_sha256": self.model_artifact_sha256,
+            "yes_ev_dollars": self.yes_ev_dollars,
+            "no_ev_dollars": self.no_ev_dollars,
+            "timing_metadata": dict(self.timing_metadata),
         }
 
 
@@ -121,7 +141,7 @@ class ShadowComparisonReport:
     intentional_difference_count: int
     alpha_controls_live_orders: bool
     comparisons: tuple[FieldComparison, ...]
-    alpha: DecisionBoundaryRecord
+    alpha: DecisionBoundaryRecord | None
     current_mvp: DecisionBoundaryRecord | None
     inserted: bool = True
 
@@ -135,7 +155,7 @@ class ShadowComparisonReport:
             "intentional_difference_count": self.intentional_difference_count,
             "alpha_controls_live_orders": self.alpha_controls_live_orders,
             "comparisons": [comparison.as_dict() for comparison in self.comparisons],
-            "alpha": self.alpha.as_dict(),
+            "alpha": None if self.alpha is None else self.alpha.as_dict(),
             "current_mvp": None if self.current_mvp is None else self.current_mvp.as_dict(),
             "inserted": self.inserted,
         }
@@ -145,11 +165,27 @@ class ShadowComparator:
     def compare(
         self,
         *,
-        alpha: DecisionBoundaryRecord,
+        alpha: DecisionBoundaryRecord | None,
         current_mvp: DecisionBoundaryRecord | None,
         intentional_differences: Mapping[str, str] | None = None,
     ) -> ShadowComparisonReport:
         intentional_differences = intentional_differences or {}
+        if alpha is None and current_mvp is None:
+            raise ValueError("alpha or current_mvp boundary is required")
+        if alpha is None:
+            assert current_mvp is not None
+            return ShadowComparisonReport(
+                comparison_id=f"shadow_{uuid4().hex[:12]}",
+                market_ticker=current_mvp.market_ticker,
+                decision_timestamp=current_mvp.decision_timestamp,
+                status="missing_alpha_data",
+                mismatch_count=0,
+                intentional_difference_count=0,
+                alpha_controls_live_orders=False,
+                comparisons=(),
+                alpha=None,
+                current_mvp=current_mvp,
+            )
         if current_mvp is None:
             return ShadowComparisonReport(
                 comparison_id=f"shadow_{uuid4().hex[:12]}",
@@ -165,21 +201,21 @@ class ShadowComparator:
             )
 
         comparisons: list[FieldComparison] = []
-        for field in BOUNDARY_FIELDS:
-            alpha_value = getattr(alpha, field)
-            current_value = getattr(current_mvp, field)
+        for boundary_field in BOUNDARY_FIELDS:
+            alpha_value = getattr(alpha, boundary_field)
+            current_value = getattr(current_mvp, boundary_field)
             if alpha_value == current_value:
                 status: Literal["match", "mismatch", "intentional_difference"] = "match"
                 note = None
-            elif field in intentional_differences:
+            elif boundary_field in intentional_differences:
                 status = "intentional_difference"
-                note = intentional_differences[field]
+                note = intentional_differences[boundary_field]
             else:
                 status = "mismatch"
                 note = None
             comparisons.append(
                 FieldComparison(
-                    field=field,
+                    field=boundary_field,
                     alpha_value=alpha_value,
                     current_mvp_value=current_value,
                     status=status,
@@ -240,7 +276,7 @@ class ShadowComparisonRepository:
                         report.status,
                         report.mismatch_count,
                         report.intentional_difference_count,
-                        Jsonb(report.alpha.as_dict()),
+                        None if report.alpha is None else Jsonb(report.alpha.as_dict()),
                         None if report.current_mvp is None else Jsonb(report.current_mvp.as_dict()),
                         Jsonb([comparison.as_dict() for comparison in report.comparisons]),
                     ),
@@ -292,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     compare_parser = subparsers.add_parser("compare", help="Compare AlphaDB and Current MVP JSON")
-    compare_parser.add_argument("--alpha-json", required=True)
+    compare_parser.add_argument("--alpha-json", default=None)
     compare_parser.add_argument("--current-json", default=None)
     compare_parser.add_argument("--intentional-difference", action="append", default=[])
 
@@ -309,7 +345,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     repository = ShadowComparisonRepository(settings.database_url)
 
     if args.command == "compare":
-        alpha = DecisionBoundaryRecord.from_mapping(json.loads(args.alpha_json))
+        alpha = (
+            None
+            if args.alpha_json is None
+            else DecisionBoundaryRecord.from_mapping(json.loads(args.alpha_json))
+        )
         current = (
             None
             if args.current_json is None
