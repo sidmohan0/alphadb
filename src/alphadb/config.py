@@ -21,6 +21,10 @@ class Settings:
     database_url: str
     streamlit_port: str
     kalshi_base_url: str
+    kalshi_ws_url: str | None
+    kalshi_api_key_id: str | None
+    kalshi_private_key_path: str | None
+    enable_live_ws_smoke: bool
 
 
 def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
@@ -36,4 +40,8 @@ def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
         database_url=values.get("DATABASE_URL", default_database_url),
         streamlit_port=values.get("ALPHADB_STREAMLIT_PORT", "8501"),
         kalshi_base_url=values.get("ALPHADB_KALSHI_BASE_URL", DEFAULT_KALSHI_BASE_URL),
+        kalshi_ws_url=values.get("ALPHADB_KALSHI_WS_URL"),
+        kalshi_api_key_id=values.get("KALSHI_API_KEY_ID"),
+        kalshi_private_key_path=values.get("KALSHI_PRIVATE_KEY_PATH"),
+        enable_live_ws_smoke=values.get("ALPHADB_ENABLE_LIVE_WS_SMOKE") == "1",
     )

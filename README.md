@@ -131,6 +131,19 @@ alphadb-shadow compare \
 alphadb-shadow status
 ```
 
+Exercise WebSocket ingestion readiness with mocked events. Live WebSocket smoke
+is opt-in only and requires credentials from environment variables outside Git:
+
+```bash
+alphadb-ws mock-smoke --market-ticker <market_ticker> --run-id <run_id>
+
+ALPHADB_ENABLE_LIVE_WS_SMOKE=1 \
+ALPHADB_KALSHI_WS_URL=wss://... \
+KALSHI_API_KEY_ID=... \
+KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
+alphadb-ws live-smoke
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with

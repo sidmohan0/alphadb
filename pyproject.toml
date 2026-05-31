@@ -27,6 +27,7 @@ alphadb-risk = "alphadb.risk.gate:main"
 alphadb-paper = "alphadb.paper.ioc:main"
 alphadb-replay = "alphadb.replay.report:main"
 alphadb-shadow = "alphadb.shadow.comparison:main"
+alphadb-ws = "alphadb.collectors.kalshi_ws:main"
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.35"]
