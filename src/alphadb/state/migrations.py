@@ -230,10 +230,80 @@ FEATURE_ROWS = Migration(
 )
 
 
+PAPER_EXECUTION = Migration(
+    version="0006_paper_execution",
+    statements=(
+        """
+        create table if not exists paper_orders (
+            paper_order_id text primary key,
+            order_intent_id text not null unique references order_intents(order_intent_id),
+            risk_decision_id text not null references risk_decisions(risk_decision_id),
+            market_ticker text not null references market_instances(market_ticker),
+            side text not null check (side in ('yes', 'no')),
+            limit_price numeric not null,
+            quantity integer not null,
+            filled_quantity integer not null default 0,
+            status text not null,
+            time_in_force text not null,
+            submitted_at timestamptz not null,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists paper_fills (
+            paper_fill_id text primary key,
+            paper_order_id text not null references paper_orders(paper_order_id),
+            market_ticker text not null references market_instances(market_ticker),
+            side text not null check (side in ('yes', 'no')),
+            fill_price numeric not null,
+            quantity integer not null,
+            liquidity_role text not null,
+            filled_at timestamptz not null,
+            fee_dollars numeric not null default 0,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists paper_positions (
+            position_id text primary key,
+            market_ticker text not null references market_instances(market_ticker),
+            side text not null check (side in ('yes', 'no')),
+            quantity integer not null,
+            avg_price numeric not null,
+            realized_pnl_dollars numeric not null default 0,
+            unrealized_pnl_dollars numeric not null default 0,
+            updated_at timestamptz not null,
+            metadata jsonb not null default '{}'::jsonb,
+            unique (market_ticker, side)
+        )
+        """,
+        """
+        create table if not exists paper_reconciliations (
+            reconciliation_id text primary key,
+            paper_order_id text not null unique references paper_orders(paper_order_id),
+            status text not null,
+            expected_quantity integer not null,
+            filled_quantity integer not null,
+            open_quantity integer not null,
+            realized_pnl_dollars numeric not null default 0,
+            unrealized_pnl_dollars numeric not null default 0,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        "create index if not exists paper_orders_market_idx on paper_orders(market_ticker)",
+        "create index if not exists paper_fills_market_idx on paper_fills(market_ticker)",
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
     COLLECTOR_RUNS,
     MODEL_REGISTRY,
     FEATURE_ROWS,
+    PAPER_EXECUTION,
 )

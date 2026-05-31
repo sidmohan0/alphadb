@@ -24,6 +24,7 @@ alphadb-models = "alphadb.model_registry.registry:main"
 alphadb-features = "alphadb.features.ledger:main"
 alphadb-decide = "alphadb.decision_engine.engine:main"
 alphadb-risk = "alphadb.risk.gate:main"
+alphadb-paper = "alphadb.paper.ioc:main"
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.35"]

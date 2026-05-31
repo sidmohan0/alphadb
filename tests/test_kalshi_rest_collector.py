@@ -77,7 +77,7 @@ def test_collector_persists_status_and_recent_errors() -> None:
         max_markets=1,
         now=datetime(2026, 5, 31, 21, 12, tzinfo=UTC),
     )
-    recent_runs = collector.run_store.recent_runs(limit=25)
+    recent_runs = collector.run_store.recent_runs(limit=1000)
     current_run = next(
         row for row in recent_runs if row["collector_run_id"] == summary.collector_run_id
     )
