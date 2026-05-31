@@ -18,7 +18,7 @@ services:
       POSTGRES_PASSWORD: alphadb
       POSTGRES_DB: alphadb
     ports:
-      - "5432:5432"
+      - "${ALPHADB_POSTGRES_PORT:-55433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
@@ -31,7 +31,7 @@ services:
     environment:
       DATABASE_URL: postgresql://alphadb:alphadb@postgres:5432/alphadb
     ports:
-      - "8501:8501"
+      - "${ALPHADB_STREAMLIT_PORT:-8501}:8501"
     depends_on:
       - postgres
     command: bash -lc "python -m pip install -e '.[dashboard]' && streamlit hello --server.address=0.0.0.0"

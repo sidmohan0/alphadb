@@ -4,7 +4,7 @@
   "service": "app",
   "workspaceFolder": "/workspaces/alphadb",
   "postCreateCommand": "python -m pip install -e '.[dev,dashboard]'",
-  "forwardPorts": [5432, 8501],
+  "forwardPorts": [55433, 8501],
   "customizations": {
     "vscode": {
       "settings": {
