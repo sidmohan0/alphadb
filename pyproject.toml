@@ -9,6 +9,7 @@ description = "Replayable, risk-controlled prediction-market trading platform."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "joblib>=1.4",
   "pydantic>=2.7",
   "psycopg[binary]>=3.2",
   "pyyaml>=6.0",
@@ -18,8 +19,11 @@ dependencies = [
 alphadb-health = "alphadb.health:main"
 alphadb-markets = "alphadb.markets.cli:main"
 alphadb-state = "alphadb.state.cli:main"
+alphadb-runtime = "alphadb.runtime:main"
 alphadb-events = "alphadb.events.cli:main"
 alphadb-collect = "alphadb.collectors.kalshi_rest:main"
+alphadb-coinbase = "alphadb.collectors.coinbase:main"
+alphadb-artifacts = "alphadb.artifacts:main"
 alphadb-models = "alphadb.model_registry.registry:main"
 alphadb-features = "alphadb.features.ledger:main"
 alphadb-decide = "alphadb.decision_engine.engine:main"
@@ -27,7 +31,12 @@ alphadb-risk = "alphadb.risk.gate:main"
 alphadb-paper = "alphadb.paper.ioc:main"
 alphadb-replay = "alphadb.replay.report:main"
 alphadb-shadow = "alphadb.shadow.comparison:main"
+alphadb-shadow-current-mvp = "alphadb.shadow.current_mvp:main"
+alphadb-shadow-parity = "alphadb.shadow.parity:main"
 alphadb-ws = "alphadb.collectors.kalshi_ws:main"
+alphadb-strategy = "alphadb.strategy.runner:main"
+alphadb-evidence = "alphadb.evidence:main"
+alphadb-live-orders = "alphadb.live_orders:main"
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.35"]

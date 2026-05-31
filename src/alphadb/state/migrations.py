@@ -328,6 +328,78 @@ SHADOW_COMPARISONS = Migration(
 )
 
 
+STRATEGY_RUNTIME = Migration(
+    version="0008_strategy_runtime",
+    statements=(
+        """
+        create table if not exists strategy_market_outcomes (
+            outcome_id text primary key,
+            run_id text not null references platform_runs(run_id),
+            market_ticker text not null references market_instances(market_ticker),
+            decision_timestamp timestamptz not null,
+            status text not null,
+            reason text,
+            decision_id text references decisions(decision_id),
+            risk_decision_id text references risk_decisions(risk_decision_id),
+            paper_order_id text references paper_orders(paper_order_id),
+            latency_checkpoints jsonb not null default '{}'::jsonb,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now(),
+            unique (run_id, market_ticker)
+        )
+        """,
+        """
+        create table if not exists current_mvp_decision_boundaries (
+            import_id text primary key,
+            market_ticker text not null,
+            decision_timestamp timestamptz not null,
+            schema_version text not null,
+            source_identity text not null,
+            source_hash text not null,
+            record_hash text not null,
+            boundary_payload jsonb not null,
+            raw_payload jsonb not null,
+            intentional_differences jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            unique (market_ticker, decision_timestamp, record_hash)
+        )
+        """,
+        """
+        create table if not exists live_order_attempts (
+            live_order_attempt_id text primary key,
+            order_intent_id text references order_intents(order_intent_id),
+            risk_decision_id text,
+            market_ticker text,
+            runtime_mode text not null,
+            status text not null,
+            guard_reason text,
+            request_payload jsonb not null default '{}'::jsonb,
+            response_payload jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        "alter table shadow_comparisons alter column alpha_payload drop not null",
+        """
+        create index if not exists strategy_market_outcomes_run_status_idx
+        on strategy_market_outcomes(run_id, status)
+        """,
+        """
+        create index if not exists strategy_market_outcomes_updated_idx
+        on strategy_market_outcomes(updated_at desc)
+        """,
+        """
+        create index if not exists current_mvp_boundaries_lookup_idx
+        on current_mvp_decision_boundaries(market_ticker, decision_timestamp desc)
+        """,
+        """
+        create index if not exists live_order_attempts_status_idx
+        on live_order_attempts(status, created_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -336,4 +408,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     FEATURE_ROWS,
     PAPER_EXECUTION,
     SHADOW_COMPARISONS,
+    STRATEGY_RUNTIME,
 )

@@ -1,6 +1,6 @@
 """Streamlit entrypoint for the AlphaDB target-platform dashboard."""
 
-from __future__ import annotations
+from datetime import UTC, datetime
 
 import streamlit as st
 
@@ -10,13 +10,16 @@ from alphadb.decision_engine.engine import DecisionRepository
 from alphadb.events.log import RawEventLog
 from alphadb.features.ledger import FeatureLedgerRepository
 from alphadb.health import collect_health
+from alphadb.live_orders import LiveOrderRepository, live_adapter_status_rows
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
 from alphadb.model_registry.registry import ModelRegistryRepository
 from alphadb.paper.ioc import PaperExecutionRepository
 from alphadb.risk.gate import RiskDecisionRepository
+from alphadb.runtime import runtime_status_rows
 from alphadb.shadow.comparison import ShadowComparisonRepository
 from alphadb.state.repository import OperationalStateRepository
+from alphadb.strategy.state import StrategyRunRepository
 
 
 def operational_state_rows(database_url: str) -> list[dict[str, str | int]]:
@@ -100,6 +103,94 @@ def shadow_rows(database_url: str) -> list[dict[str, str | int]]:
     return rows or [{"comparison_id": "shadow_comparisons", "detail": "none"}]
 
 
+def strategy_run_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        repository = StrategyRunRepository(database_url)
+        run = repository.latest_run()
+        if run is None:
+            return [{"metric": "strategy_run", "value": "none", "detail": ""}]
+        counts = repository.counts(run_id=run["run_id"])
+        rows: list[dict[str, str | int]] = [
+            {"metric": "run_id", "value": str(run["run_id"]), "detail": str(run["status"])},
+            {"metric": "runtime_mode", "value": str(run["mode"]), "detail": str(run["market_series"])},
+            {
+                "metric": "uptime_seconds",
+                "value": int((datetime.now(UTC) - run["started_at"]).total_seconds()),
+                "detail": "wall_clock",
+            },
+        ]
+        latest = repository.latest_outcomes(run_id=run["run_id"], limit=1)
+        if latest:
+            rows.append(
+                {
+                    "metric": "current_market_instance",
+                    "value": str(latest[0]["market_ticker"]),
+                    "detail": str(latest[0]["status"]),
+                }
+            )
+        rows.extend({"metric": key, "value": value, "detail": "latest_counts"} for key, value in counts.items())
+        metadata = dict(run["metadata"])
+        if metadata.get("model_artifact_sha256"):
+            rows.append(
+                {
+                    "metric": "model_artifact_sha256",
+                    "value": str(metadata["model_artifact_sha256"])[:12],
+                    "detail": "active_model",
+                }
+            )
+        if metadata.get("feature_schema_sha256"):
+            rows.append(
+                {
+                    "metric": "feature_schema_sha256",
+                    "value": str(metadata["feature_schema_sha256"])[:12],
+                    "detail": "active_schema",
+                }
+            )
+        spec = default_market_registry().get(str(run["market_series"]))
+        rows.extend(
+            [
+                {
+                    "metric": "per_trade_cap_dollars",
+                    "value": spec.risk_config.live_stake_cap_dollars,
+                    "detail": "risk_config",
+                },
+                {
+                    "metric": "max_daily_loss_dollars",
+                    "value": spec.risk_config.max_daily_loss_dollars,
+                    "detail": "risk_config",
+                },
+            ]
+        )
+        guard = metadata.get("guard", {})
+        if isinstance(guard, dict):
+            rows.append(
+                {
+                    "metric": "live_guard",
+                    "value": str(guard.get("can_submit_live_orders")),
+                    "detail": str(guard.get("denial_reason") or ""),
+                }
+            )
+        return rows
+    except Exception as exc:
+        return [{"metric": "strategy_run", "value": "unavailable", "detail": str(exc)}]
+
+
+def latest_strategy_outcome_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = StrategyRunRepository(database_url).latest_outcomes(limit=10)
+    except Exception as exc:
+        return [{"outcome_id": "strategy_market_outcomes", "detail": str(exc)}]
+    return rows or [{"outcome_id": "strategy_market_outcomes", "detail": "none"}]
+
+
+def live_order_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = LiveOrderRepository(database_url).recent(limit=10)
+    except Exception as exc:
+        return [{"live_order_attempt_id": "live_order_attempts", "detail": str(exc)}]
+    return rows or [{"live_order_attempt_id": "live_order_attempts", "detail": "none"}]
+
+
 def render() -> None:
     settings = settings_from_env()
     report = collect_health(settings=settings)
@@ -129,6 +220,19 @@ def render() -> None:
     st.subheader("Operational State")
     st.dataframe(
         operational_state_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Runtime Guard")
+    st.dataframe(runtime_status_rows(settings), hide_index=True, use_container_width=True)
+
+    st.subheader("Strategy Run")
+    st.dataframe(strategy_run_rows(settings.database_url), hide_index=True, use_container_width=True)
+
+    st.subheader("Latest Handled Auctions")
+    st.dataframe(
+        latest_strategy_outcome_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )
@@ -187,6 +291,10 @@ def render() -> None:
 
     st.subheader("Shadow Comparisons")
     st.dataframe(shadow_rows(settings.database_url), hide_index=True, use_container_width=True)
+
+    st.subheader("Live Adapter")
+    st.dataframe(live_adapter_status_rows(settings), hide_index=True, use_container_width=True)
+    st.dataframe(live_order_rows(settings.database_url), hide_index=True, use_container_width=True)
 
     st.caption(f"Generated {report.generated_at_utc.isoformat()}")
 
