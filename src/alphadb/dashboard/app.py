@@ -13,6 +13,7 @@ from alphadb.health import collect_health
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
 from alphadb.model_registry.registry import ModelRegistryRepository
+from alphadb.risk.gate import RiskDecisionRepository
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -65,6 +66,14 @@ def decision_rows(database_url: str) -> list[dict[str, str | int]]:
     except Exception as exc:
         return [{"decision_id": "decisions", "detail": str(exc)}]
     return rows or [{"decision_id": "decisions", "detail": "none"}]
+
+
+def risk_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = RiskDecisionRepository(database_url).list()
+    except Exception as exc:
+        return [{"risk_decision_id": "risk_decisions", "detail": str(exc)}]
+    return rows or [{"risk_decision_id": "risk_decisions", "detail": "none"}]
 
 
 def render() -> None:
@@ -131,6 +140,13 @@ def render() -> None:
     st.subheader("Decisions")
     st.dataframe(
         decision_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Risk")
+    st.dataframe(
+        risk_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )

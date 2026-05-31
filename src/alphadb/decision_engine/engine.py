@@ -279,6 +279,22 @@ class DecisionRepository:
                 rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+    def get(self, decision_id: str) -> DecisionResult:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    select *
+                    from decisions
+                    where decision_id = %s
+                    """,
+                    (decision_id,),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            raise KeyError(f"unknown decision_id: {decision_id}")
+        return decision_row_to_result(row)
+
     def _fetch_by_identity(
         self,
         cursor: psycopg.Cursor,

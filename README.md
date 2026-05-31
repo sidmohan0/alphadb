@@ -89,6 +89,16 @@ alphadb-decide evaluate \
 alphadb-decide list --run-id <run_id>
 ```
 
+Apply the fail-closed risk gate and create an approved order intent only when
+policy allows it:
+
+```bash
+alphadb-risk evaluate \
+  --decision-id <decision_id> \
+  --realized-pnl-dollars 0
+alphadb-risk list --decision-id <decision_id>
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
