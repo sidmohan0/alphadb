@@ -120,4 +120,40 @@ RAW_EVENT_LOG = Migration(
 )
 
 
-MIGRATIONS: tuple[Migration, ...] = (INITIAL_OPERATIONAL_STATE, RAW_EVENT_LOG)
+COLLECTOR_RUNS = Migration(
+    version="0003_collector_runs",
+    statements=(
+        """
+        create table if not exists collector_runs (
+            collector_run_id text primary key,
+            platform_run_id text not null references platform_runs(run_id),
+            series text not null,
+            source text not null,
+            status text not null,
+            started_at timestamptz not null,
+            finished_at timestamptz,
+            markets_discovered integer not null default 0,
+            markets_collected integer not null default 0,
+            raw_events_written integer not null default 0,
+            errors jsonb not null default '[]'::jsonb,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists collector_runs_series_started_at_idx
+        on collector_runs(series, started_at desc)
+        """,
+        """
+        create index if not exists collector_runs_status_idx
+        on collector_runs(status)
+        """,
+    ),
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    INITIAL_OPERATIONAL_STATE,
+    RAW_EVENT_LOG,
+    COLLECTOR_RUNS,
+)
