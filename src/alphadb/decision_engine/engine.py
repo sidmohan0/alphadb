@@ -420,6 +420,7 @@ def build_decision_input(
     probability_yes: float,
     yes_ask_dollars: float | None = None,
     no_ask_dollars: float | None = None,
+    policy: DecisionPolicy | None = None,
 ) -> DecisionInput:
     quotes = ExecutableQuotes.from_feature_row(feature_row)
     if yes_ask_dollars is not None:
@@ -435,7 +436,7 @@ def build_decision_input(
             feature_row_id=feature_row.feature_row_id,
         ),
         executable_quotes=quotes,
-        policy=DecisionPolicy.from_spec(spec),
+        policy=policy or DecisionPolicy.from_spec(spec),
     )
 
 

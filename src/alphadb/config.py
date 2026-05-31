@@ -34,6 +34,10 @@ class Settings:
     coinbase_product_id: str
     coinbase_granularity_seconds: int
     coinbase_lookback_minutes: int
+    live_stake_cap_dollars: float = 1.0
+    max_daily_loss_dollars: float = 10.0
+    min_ev_dollars: float = 0.0
+    strategy_poll_seconds: int = 60
 
 
 def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
@@ -62,4 +66,8 @@ def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
         coinbase_product_id=values.get("ALPHADB_COINBASE_PRODUCT_ID", "BTC-USD"),
         coinbase_granularity_seconds=int(values.get("ALPHADB_COINBASE_GRANULARITY_SECONDS", "60")),
         coinbase_lookback_minutes=int(values.get("ALPHADB_COINBASE_LOOKBACK_MINUTES", "60")),
+        live_stake_cap_dollars=float(values.get("ALPHADB_LIVE_STAKE_CAP_DOLLARS", "1.0")),
+        max_daily_loss_dollars=float(values.get("ALPHADB_MAX_DAILY_LOSS_DOLLARS", "10.0")),
+        min_ev_dollars=float(values.get("ALPHADB_MIN_EV_DOLLARS", "0.0")),
+        strategy_poll_seconds=int(values.get("ALPHADB_STRATEGY_POLL_SECONDS", "60")),
     )

@@ -1,15 +1,18 @@
 import json
-from datetime import UTC, datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import psycopg
 import pytest
 
 from alphadb.artifacts import file_sha256, load_pinned_artifact_config, load_pinned_model_policy, register_loaded_model
+from alphadb.collectors.coinbase import FixtureCoinbaseClient
 from alphadb.collectors.kalshi_rest import FixtureKalshiRestClient
 from alphadb.config import settings_from_env
-from alphadb.strategy.runner import LiveDataPaperRunner
+from alphadb.strategy.runner import LiveDataGatedLiveRunner, LiveDataPaperRunner
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -114,6 +117,74 @@ def make_runner(repository: OperationalStateRepository, tmp_path: Path, probabil
     )
 
 
+class FakeLiveOrderClient:
+    def __init__(self, response: Mapping[str, Any] | None = None):
+        self.response = response or {"order": {"status": "executed"}}
+        self.requests: list[Mapping[str, Any]] = []
+
+    def create_order(
+        self,
+        *,
+        request_payload: Mapping[str, Any],
+        settings,
+    ) -> Mapping[str, Any]:
+        self.requests.append(dict(request_payload))
+        return self.response
+
+
+def gated_live_settings(max_daily_loss_dollars: str = "1000"):
+    current = settings_from_env()
+    return settings_from_env(
+        {
+            "DATABASE_URL": current.database_url,
+            "ALPHADB_RUNTIME_MODE": "gated-live",
+            "ALPHADB_ENABLE_LIVE_ORDERS": "1",
+            "ALPHADB_HUMAN_CUTOVER_APPROVED": "1",
+            "KALSHI_API_KEY_ID": "key-id",
+            "KALSHI_PRIVATE_KEY_PATH": "/tmp/private-key.pem",
+            "ALPHADB_LIVE_STAKE_CAP_DOLLARS": "1.0",
+            "ALPHADB_MAX_DAILY_LOSS_DOLLARS": max_daily_loss_dollars,
+            "ALPHADB_MIN_EV_DOLLARS": "0.0",
+        }
+    )
+
+
+def active_fixture_clients(now: datetime) -> tuple[FixtureKalshiRestClient, FixtureCoinbaseClient]:
+    open_time = now - timedelta(minutes=12)
+    close_time = now + timedelta(minutes=3)
+    ticker = f"KXBTC15M-{uuid4().hex[:12]}"
+    market = {
+        "ticker": ticker,
+        "series_ticker": "KXBTC15M",
+        "event_ticker": f"KXBTC15M-{uuid4().hex[:8]}",
+        "status": "open",
+        "open_time": open_time.isoformat().replace("+00:00", "Z"),
+        "close_time": close_time.isoformat().replace("+00:00", "Z"),
+        "updated_time": (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+        "title": "Bitcoin above prior 15 minute mark?",
+        "yes_bid_dollars": "0.4800",
+        "yes_ask_dollars": "0.5200",
+        "no_bid_dollars": "0.4700",
+        "no_ask_dollars": "0.5300",
+    }
+    orderbook = {
+        "orderbook_fp": {
+            "yes_dollars": [["0.4800", "14.00"]],
+            "no_dollars": [["0.4700", "11.00"]],
+        }
+    }
+    ts = int((now - timedelta(minutes=2)).timestamp())
+    candles = [
+        [ts - 120, 100.0, 101.0, 100.5, 100.8, 1.5],
+        [ts - 60, 100.1, 101.2, 100.8, 101.0, 1.7],
+        [ts, 100.4, 101.3, 101.0, 101.2, 1.4],
+    ]
+    return (
+        FixtureKalshiRestClient(markets=[market], orderbooks={ticker: orderbook}),
+        FixtureCoinbaseClient(candles=candles),
+    )
+
+
 def test_live_data_paper_runner_fills_positive_ev_trade_and_blocks_live_orders(
     tmp_path: Path,
 ) -> None:
@@ -159,3 +230,58 @@ def test_live_data_paper_runner_records_ev_skip_risk_skip_missing_features_and_d
     assert missing.outcome.status == "skipped"
     assert missing.outcome.reason == "missing_live_features"
     assert duplicate.counts["duplicate_prevented"] == 1
+
+
+def test_gated_live_runner_submits_risk_approved_ioc_order_without_paper_fill(
+    tmp_path: Path,
+) -> None:
+    repository = runner_repository_or_skip()
+    loaded = policy(tmp_path, 0.66)
+    model = register_loaded_model(database_url=repository.database_url, policy=loaded)
+    fake_live = FakeLiveOrderClient()
+    runner = LiveDataGatedLiveRunner(
+        database_url=repository.database_url,
+        policy=loaded,
+        model_id=model.model_id,
+        settings=gated_live_settings(),
+        kalshi_client=FixtureKalshiRestClient(),
+        live_order_client=fake_live,
+    )
+
+    result = runner.run_one_cycle(now=datetime(2026, 5, 31, 21, 13, tzinfo=UTC))
+
+    assert result.outcome is not None
+    assert result.outcome.status == "handled"
+    assert result.outcome.metadata["runtime_mode"] == "gated-live"
+    assert result.outcome.metadata["live_orders_sent"] == 1
+    assert result.outcome.metadata["live_order_status"] == "accepted"
+    assert result.outcome.paper_order_id is None
+    assert fake_live.requests
+    assert fake_live.requests[0]["time_in_force"] == "immediate_or_cancel"
+    assert fake_live.requests[0]["post_only"] is False
+
+
+def test_gated_live_loop_stops_on_live_order_rejection(tmp_path: Path) -> None:
+    repository = runner_repository_or_skip()
+    loaded = policy(tmp_path, 0.66)
+    model = register_loaded_model(database_url=repository.database_url, policy=loaded)
+    fake_live = FakeLiveOrderClient({"order": {"status": "rejected"}})
+    now = datetime.now(UTC).replace(microsecond=0)
+    kalshi_client, coinbase_client = active_fixture_clients(now)
+    runner = LiveDataGatedLiveRunner(
+        database_url=repository.database_url,
+        policy=loaded,
+        model_id=model.model_id,
+        settings=gated_live_settings(),
+        kalshi_client=kalshi_client,
+        coinbase_client=coinbase_client,
+        live_order_client=fake_live,
+    )
+
+    result = runner.run_loop(poll_seconds=0, max_markets=1, max_cycles=1)
+
+    assert result.status == "stopped_on_error"
+    assert result.latest_result is not None
+    assert result.latest_result.outcome is not None
+    assert result.latest_result.outcome.status == "error"
+    assert result.latest_result.outcome.reason == "live_order_error"

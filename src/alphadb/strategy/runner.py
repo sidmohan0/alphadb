@@ -1,4 +1,4 @@
-"""Live-data paper strategy runner for KXBTC15M."""
+"""Live-data strategy runners for KXBTC15M."""
 
 from __future__ import annotations
 
@@ -16,16 +16,23 @@ from alphadb.artifacts import (
     load_pinned_model_policy_from_settings,
     register_loaded_model,
 )
-from alphadb.collectors.coinbase import CoinbaseClient, CoinbaseFeatureAdapter, FixtureCoinbaseClient
+from alphadb.collectors.coinbase import (
+    CoinbaseClient,
+    CoinbaseFeatureAdapter,
+    FixtureCoinbaseClient,
+    HttpCoinbaseClient,
+)
 from alphadb.collectors.kalshi_rest import (
     FixtureKalshiRestClient,
+    HttpKalshiRestClient,
     KalshiRestClient,
     CollectorRunStore,
     MARKET_SNAPSHOT_SCHEMA,
     ORDERBOOK_SNAPSHOT_SCHEMA,
 )
-from alphadb.config import settings_from_env
+from alphadb.config import Settings, settings_from_env
 from alphadb.decision_engine.engine import (
+    DecisionPolicy,
     DecisionEngine,
     DecisionRepository,
     build_decision_input,
@@ -33,7 +40,14 @@ from alphadb.decision_engine.engine import (
 from alphadb.events.log import RawEventLog
 from alphadb.features.current_mvp import CurrentMvpFeatureRowBuilder, MissingCurrentMvpFeatureError
 from alphadb.features.ledger import MissingFeatureEventsError, NoLookaheadViolationError
+from alphadb.live_orders import (
+    GatedLiveKalshiOrderAdapter,
+    KalshiLiveOrderClient,
+    LiveOrderError,
+    LiveOrderRepository,
+)
 from alphadb.markets.registry import default_market_registry
+from alphadb.markets.spec import MarketSpec
 from alphadb.paper.ioc import PaperIocExecutor, PaperLiquidity
 from alphadb.risk.gate import RiskDecisionRepository, RiskGate, RiskPolicy, RiskState
 from alphadb.runtime import RuntimeMode, evaluate_runtime_guard, settings_with_overrides
@@ -57,6 +71,26 @@ class LiveDataPaperCycleResult:
         }
 
 
+@dataclass(frozen=True)
+class LiveDataStrategyLoopResult:
+    run_id: str
+    runtime_mode: str
+    status: str
+    cycles_completed: int
+    latest_result: LiveDataPaperCycleResult | None
+    error_reason: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "runtime_mode": self.runtime_mode,
+            "status": self.status,
+            "cycles_completed": self.cycles_completed,
+            "latest_result": None if self.latest_result is None else self.latest_result.as_dict(),
+            "error_reason": self.error_reason,
+        }
+
+
 class LiveDataPaperRunner:
     def __init__(
         self,
@@ -66,10 +100,12 @@ class LiveDataPaperRunner:
         model_id: str,
         kalshi_client: KalshiRestClient | None = None,
         coinbase_client: CoinbaseClient | None = None,
+        settings: Settings | None = None,
     ):
         self.database_url = database_url
         self.policy = policy
         self.model_id = model_id
+        self.settings = settings or settings_from_env()
         self.kalshi_client = kalshi_client or FixtureKalshiRestClient()
         self.coinbase_client = coinbase_client or FixtureCoinbaseClient()
         self.spec = default_market_registry().get("KXBTC15M")
@@ -84,6 +120,7 @@ class LiveDataPaperRunner:
         now: datetime | None = None,
         max_markets: int = 1,
         daily_realized_pnl_dollars: float = 0.0,
+        keep_run_open: bool = False,
     ) -> LiveDataPaperCycleResult:
         now = ensure_utc(now or datetime.now(UTC))
         guard = evaluate_runtime_guard(
@@ -99,6 +136,9 @@ class LiveDataPaperRunner:
                 metadata={
                     "model_artifact_sha256": self.policy.model_artifact_sha256,
                     "feature_schema_sha256": self.policy.feature_schema_sha256,
+                    "live_stake_cap_dollars": self.settings.live_stake_cap_dollars,
+                    "max_daily_loss_dollars": self.settings.max_daily_loss_dollars,
+                    "min_ev_dollars": self.settings.min_ev_dollars,
                 },
             )
             run_id = run.run_id
@@ -112,14 +152,27 @@ class LiveDataPaperRunner:
                 market=market,
                 decision_timestamp=decision_timestamp,
                 daily_realized_pnl_dollars=daily_realized_pnl_dollars,
+                runtime_mode=RuntimeMode.PAPER,
+                execute_paper=True,
             )
 
-        scan = scheduler.scan(run_id=run_id, markets=markets, now=now, handler=handler)
+        scan = scheduler.scan(
+            run_id=run_id,
+            markets=markets,
+            now=now,
+            handler=handler,
+            keep_run_open=keep_run_open,
+        )
+        cycle_counts = {f"cycle_{key}": value for key, value in scan.as_counts().items()}
         return LiveDataPaperCycleResult(
             run_id=run_id,
             market_ticker=markets[0].market_ticker if markets else None,
             outcome=scan.outcomes[0] if scan.outcomes else None,
-            counts={**scan.as_counts(), **self.strategy_store.counts(run_id=run_id)},
+            counts={
+                **scan.as_counts(),
+                **self.strategy_store.counts(run_id=run_id),
+                **cycle_counts,
+            },
         )
 
     def _collect_fixture_like_inputs(
@@ -165,9 +218,9 @@ class LiveDataPaperRunner:
             CoinbaseFeatureAdapter(
                 database_url=self.database_url,
                 client=self.coinbase_client,
-                product_id=settings_from_env().coinbase_product_id,
-                granularity_seconds=settings_from_env().coinbase_granularity_seconds,
-                lookback_minutes=settings_from_env().coinbase_lookback_minutes,
+                product_id=self.settings.coinbase_product_id,
+                granularity_seconds=self.settings.coinbase_granularity_seconds,
+                lookback_minutes=self.settings.coinbase_lookback_minutes,
             ).collect_feature_event(
                 run_id=run_id,
                 market_ticker=market_ticker,
@@ -246,6 +299,9 @@ class LiveDataPaperRunner:
         market: MarketCandidate,
         decision_timestamp: datetime,
         daily_realized_pnl_dollars: float,
+        runtime_mode: RuntimeMode,
+        execute_paper: bool,
+        live_order_adapter: GatedLiveKalshiOrderAdapter | None = None,
     ) -> StrategyMarketOutcome:
         latency: dict[str, float] = {}
         started = time.perf_counter()
@@ -274,7 +330,7 @@ class LiveDataPaperRunner:
                 metadata={
                     "error_type": type(exc).__name__,
                     "error_message": str(exc),
-                    "runtime_mode": RuntimeMode.PAPER.value,
+                    "runtime_mode": runtime_mode.value,
                     "live_orders_sent": 0,
                 },
             )
@@ -289,6 +345,7 @@ class LiveDataPaperRunner:
                     spec=self.spec,
                     feature_row=feature_build.feature_row,
                     probability_yes=probability_yes,
+                    policy=decision_policy_from_settings(self.spec, self.settings),
                 )
             )
         )
@@ -297,7 +354,7 @@ class LiveDataPaperRunner:
         risk = RiskDecisionRepository(self.database_url).persist(
             RiskGate().evaluate(
                 decision=decision,
-                policy=RiskPolicy.from_spec(self.spec),
+                policy=risk_policy_from_settings(self.spec, self.settings),
                 state=RiskState(
                     trading_day=date.fromisoformat(decision_timestamp.date().isoformat()),
                     realized_pnl_dollars=daily_realized_pnl_dollars,
@@ -308,7 +365,7 @@ class LiveDataPaperRunner:
 
         paper_order_id = None
         paper_status = None
-        if risk.order_intent is not None:
+        if execute_paper and risk.order_intent is not None:
             started = time.perf_counter()
             paper = PaperIocExecutor(self.database_url).execute(
                 order_intent_id=risk.order_intent.order_intent_id,
@@ -324,8 +381,32 @@ class LiveDataPaperRunner:
             paper_order_id = paper.paper_order_id
             paper_status = paper.status
 
+        live_order_attempt_id = None
+        live_order_status = None
+        live_orders_sent = 0
+        live_order_error_message = None
+        if live_order_adapter is not None and risk.order_intent is not None:
+            started = time.perf_counter()
+            try:
+                attempt = live_order_adapter.submit_order_intent(
+                    order_intent_id=risk.order_intent.order_intent_id,
+                    settings=self.settings,
+                )
+                live_order_attempt_id = attempt.live_order_attempt_id
+                live_order_status = attempt.status
+                live_orders_sent = 1 if attempt.status == "accepted" else 0
+                if attempt.status != "accepted":
+                    live_order_error_message = f"live order returned status {attempt.status}"
+            except LiveOrderError as exc:
+                live_order_status = "error"
+                live_order_error_message = str(exc)
+            latency["live_execution_ms"] = elapsed_ms(started)
+
         status = "handled" if risk.status == "approved" else "skipped"
         reason = decision.skip_reason or risk.reason
+        if live_order_error_message is not None:
+            status = "error"
+            reason = "live_order_error"
         return fresh_outcome(
             run_id=run_id,
             market_ticker=market.market_ticker,
@@ -344,14 +425,246 @@ class LiveDataPaperRunner:
                 "intended_quantity": decision.intended_quantity,
                 "risk_status": risk.status,
                 "paper_status": paper_status,
-                "runtime_mode": RuntimeMode.PAPER.value,
-                "live_orders_sent": 0,
+                "runtime_mode": runtime_mode.value,
+                "live_order_attempt_id": live_order_attempt_id,
+                "live_order_status": live_order_status,
+                "live_order_error_message": live_order_error_message,
+                "live_orders_sent": live_orders_sent,
             },
         )
+
+    def run_loop(
+        self,
+        *,
+        poll_seconds: int,
+        max_markets: int,
+        max_cycles: int | None = None,
+        duration_seconds: int | None = None,
+        stop_on_error: bool = True,
+    ) -> LiveDataStrategyLoopResult:
+        return run_strategy_loop(
+            runner=self,
+            runtime_mode=RuntimeMode.PAPER,
+            poll_seconds=poll_seconds,
+            max_markets=max_markets,
+            max_cycles=max_cycles,
+            duration_seconds=duration_seconds,
+            stop_on_error=stop_on_error,
+        )
+
+
+class LiveDataGatedLiveRunner(LiveDataPaperRunner):
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        policy: PinnedModelPolicy,
+        model_id: str,
+        settings: Settings | None = None,
+        kalshi_client: KalshiRestClient | None = None,
+        coinbase_client: CoinbaseClient | None = None,
+        live_order_client: KalshiLiveOrderClient | None = None,
+    ):
+        settings = settings or settings_from_env()
+        super().__init__(
+            database_url=database_url,
+            policy=policy,
+            model_id=model_id,
+            kalshi_client=kalshi_client or HttpKalshiRestClient(settings.kalshi_base_url),
+            coinbase_client=coinbase_client or HttpCoinbaseClient(),
+            settings=settings,
+        )
+        self.live_order_adapter = GatedLiveKalshiOrderAdapter(
+            database_url=database_url,
+            client=live_order_client,
+        )
+
+    def run_one_cycle(
+        self,
+        *,
+        run_id: str | None = None,
+        now: datetime | None = None,
+        max_markets: int = 1,
+        daily_realized_pnl_dollars: float = 0.0,
+        keep_run_open: bool = False,
+    ) -> LiveDataPaperCycleResult:
+        now = ensure_utc(now or datetime.now(UTC))
+        guard = evaluate_runtime_guard(self.settings)
+        if not guard.can_submit_live_orders:
+            raise LiveOrderError(f"gated-live runner denied: {guard.denial_reason}")
+        if run_id is None:
+            run = self.strategy_store.start_run(
+                market_series=self.spec.series,
+                runtime_mode=RuntimeMode.GATED_LIVE,
+                started_at=now,
+                metadata={
+                    "model_artifact_sha256": self.policy.model_artifact_sha256,
+                    "feature_schema_sha256": self.policy.feature_schema_sha256,
+                    "live_stake_cap_dollars": self.settings.live_stake_cap_dollars,
+                    "max_daily_loss_dollars": self.settings.max_daily_loss_dollars,
+                    "min_ev_dollars": self.settings.min_ev_dollars,
+                    "runner": "gated-live",
+                },
+            )
+            run_id = run.run_id
+
+        markets = self._collect_fixture_like_inputs(run_id=run_id, now=now, max_markets=max_markets)
+        scheduler = Kxbtc15mHandledMarketScheduler(database_url=self.database_url, spec=self.spec)
+
+        def handler(market: MarketCandidate, decision_timestamp: datetime) -> StrategyMarketOutcome:
+            risk_pnl = self._conservative_daily_risk_pnl(
+                trading_day=decision_timestamp.date(),
+                reported_realized_pnl_dollars=daily_realized_pnl_dollars,
+            )
+            return self._handle_market(
+                run_id=run_id,
+                market=market,
+                decision_timestamp=decision_timestamp,
+                daily_realized_pnl_dollars=risk_pnl,
+                runtime_mode=RuntimeMode.GATED_LIVE,
+                execute_paper=False,
+                live_order_adapter=self.live_order_adapter,
+            )
+
+        scan = scheduler.scan(
+            run_id=run_id,
+            markets=markets,
+            now=now,
+            handler=handler,
+            keep_run_open=keep_run_open,
+        )
+        cycle_counts = {f"cycle_{key}": value for key, value in scan.as_counts().items()}
+        return LiveDataPaperCycleResult(
+            run_id=run_id,
+            market_ticker=markets[0].market_ticker if markets else None,
+            outcome=scan.outcomes[0] if scan.outcomes else None,
+            counts={
+                **scan.as_counts(),
+                **self.strategy_store.counts(run_id=run_id),
+                **cycle_counts,
+            },
+        )
+
+    def _conservative_daily_risk_pnl(
+        self,
+        *,
+        trading_day: date,
+        reported_realized_pnl_dollars: float,
+    ) -> float:
+        accepted_cost = LiveOrderRepository(self.database_url).accepted_max_cost_dollars(
+            trading_day=trading_day
+        )
+        realized_loss = max(0.0, -reported_realized_pnl_dollars)
+        return -max(realized_loss, accepted_cost)
+
+    def run_loop(
+        self,
+        *,
+        poll_seconds: int,
+        max_markets: int,
+        max_cycles: int | None = None,
+        duration_seconds: int | None = None,
+        stop_on_error: bool = True,
+    ) -> LiveDataStrategyLoopResult:
+        return run_strategy_loop(
+            runner=self,
+            runtime_mode=RuntimeMode.GATED_LIVE,
+            poll_seconds=poll_seconds,
+            max_markets=max_markets,
+            max_cycles=max_cycles,
+            duration_seconds=duration_seconds,
+            stop_on_error=stop_on_error,
+        )
+
+
+def run_strategy_loop(
+    *,
+    runner: LiveDataPaperRunner,
+    runtime_mode: RuntimeMode,
+    poll_seconds: int,
+    max_markets: int,
+    max_cycles: int | None = None,
+    duration_seconds: int | None = None,
+    stop_on_error: bool = True,
+) -> LiveDataStrategyLoopResult:
+    if poll_seconds < 0:
+        raise ValueError("poll_seconds must be non-negative")
+    if max_cycles is not None and max_cycles < 1:
+        raise ValueError("max_cycles must be at least 1 when provided")
+    if duration_seconds is not None and duration_seconds < 1:
+        raise ValueError("duration_seconds must be at least 1 when provided")
+
+    run_id: str | None = None
+    latest: LiveDataPaperCycleResult | None = None
+    cycles = 0
+    started = time.monotonic()
+
+    while True:
+        if duration_seconds is not None and time.monotonic() - started >= duration_seconds:
+            break
+        latest = runner.run_one_cycle(
+            run_id=run_id,
+            now=datetime.now(UTC),
+            max_markets=max_markets,
+            keep_run_open=True,
+        )
+        run_id = latest.run_id
+        cycles += 1
+        if stop_on_error and int(latest.counts.get("cycle_errored", 0)) > 0:
+            runner.strategy_store.finish_run(
+                run_id=run_id,
+                status="error",
+                metadata_patch={"loop_status": "stopped_on_error"},
+            )
+            return LiveDataStrategyLoopResult(
+                run_id=run_id,
+                runtime_mode=runtime_mode.value,
+                status="stopped_on_error",
+                cycles_completed=cycles,
+                latest_result=latest,
+                error_reason="cycle_errored",
+            )
+        if max_cycles is not None and cycles >= max_cycles:
+            break
+        if poll_seconds:
+            time.sleep(poll_seconds)
+
+    if run_id is None:
+        run_id = ""
+    else:
+        runner.strategy_store.finish_run(
+            run_id=run_id,
+            status="completed",
+            metadata_patch={"loop_status": "completed", "cycles_completed": cycles},
+        )
+    return LiveDataStrategyLoopResult(
+        run_id=run_id,
+        runtime_mode=runtime_mode.value,
+        status="completed",
+        cycles_completed=cycles,
+        latest_result=latest,
+    )
 
 
 def elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 3)
+
+
+def decision_policy_from_settings(spec: MarketSpec, settings: Settings) -> DecisionPolicy:
+    return DecisionPolicy(
+        min_ev_dollars=settings.min_ev_dollars,
+        max_cost_dollars=settings.live_stake_cap_dollars,
+        time_in_force=spec.trading_cutoffs.time_in_force,
+    )
+
+
+def risk_policy_from_settings(spec: MarketSpec, settings: Settings) -> RiskPolicy:
+    return RiskPolicy(
+        max_daily_loss_dollars=settings.max_daily_loss_dollars,
+        per_trade_max_cost_dollars=settings.live_stake_cap_dollars,
+        fail_closed=True,
+        time_in_force=spec.trading_cutoffs.time_in_force,
+    )
 
 
 def parse_market_time(value: Any, fallback: datetime) -> datetime:
@@ -378,7 +691,29 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--now", default=None)
     run.add_argument("--max-markets", type=int, default=1)
     run.add_argument("--daily-realized-pnl-dollars", type=float, default=0.0)
-    run.add_argument("--source", choices=("fixture",), default="fixture")
+    run.add_argument("--source", choices=("fixture", "live"), default="fixture")
+    paper_loop = subparsers.add_parser("paper-loop", help="Run live-data paper cycles continuously")
+    paper_loop.add_argument("--source", choices=("fixture", "live"), default="live")
+    paper_loop.add_argument("--max-markets", type=int, default=3)
+    paper_loop.add_argument("--poll-seconds", type=int, default=None)
+    paper_loop.add_argument("--max-cycles", type=int, default=None)
+    paper_loop.add_argument("--duration-minutes", type=float, default=None)
+    paper_loop.add_argument("--no-stop-on-error", action="store_true")
+    live_cycle = subparsers.add_parser(
+        "gated-live-cycle",
+        help="Run one guarded live-money cycle using live market data",
+    )
+    live_cycle.add_argument("--max-markets", type=int, default=1)
+    live_cycle.add_argument("--daily-realized-pnl-dollars", type=float, default=0.0)
+    live_loop = subparsers.add_parser(
+        "gated-live-loop",
+        help="Run guarded live-money cycles continuously using live market data",
+    )
+    live_loop.add_argument("--max-markets", type=int, default=3)
+    live_loop.add_argument("--poll-seconds", type=int, default=None)
+    live_loop.add_argument("--max-cycles", type=int, default=None)
+    live_loop.add_argument("--duration-minutes", type=float, default=None)
+    live_loop.add_argument("--no-stop-on-error", action="store_true")
     status = subparsers.add_parser("status", help="Show latest strategy state")
     status.add_argument("--run-id", default=None)
     return parser
@@ -391,6 +726,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "paper-cycle":
         policy = load_pinned_model_policy_from_settings(settings)
         model = register_loaded_model(database_url=settings.database_url, policy=policy)
+        kalshi_client, coinbase_client = market_data_clients(args.source, settings)
         now = (
             datetime.fromisoformat(args.now.replace("Z", "+00:00"))
             if args.now
@@ -400,6 +736,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             database_url=settings.database_url,
             policy=policy,
             model_id=model.model_id,
+            kalshi_client=kalshi_client,
+            coinbase_client=coinbase_client,
+            settings=settings,
         ).run_one_cycle(
             now=now,
             max_markets=args.max_markets,
@@ -407,6 +746,61 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True, default=str))
         return 0
+    if args.command == "paper-loop":
+        policy = load_pinned_model_policy_from_settings(settings)
+        model = register_loaded_model(database_url=settings.database_url, policy=policy)
+        kalshi_client, coinbase_client = market_data_clients(args.source, settings)
+        result = LiveDataPaperRunner(
+            database_url=settings.database_url,
+            policy=policy,
+            model_id=model.model_id,
+            kalshi_client=kalshi_client,
+            coinbase_client=coinbase_client,
+            settings=settings,
+        ).run_loop(
+            poll_seconds=args.poll_seconds
+            if args.poll_seconds is not None
+            else settings.strategy_poll_seconds,
+            max_markets=args.max_markets,
+            max_cycles=args.max_cycles,
+            duration_seconds=duration_minutes_to_seconds(args.duration_minutes),
+            stop_on_error=not args.no_stop_on_error,
+        )
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True, default=str))
+        return 1 if result.status == "stopped_on_error" else 0
+    if args.command == "gated-live-cycle":
+        policy = load_pinned_model_policy_from_settings(settings)
+        model = register_loaded_model(database_url=settings.database_url, policy=policy)
+        result = LiveDataGatedLiveRunner(
+            database_url=settings.database_url,
+            policy=policy,
+            model_id=model.model_id,
+            settings=settings,
+        ).run_one_cycle(
+            max_markets=args.max_markets,
+            daily_realized_pnl_dollars=args.daily_realized_pnl_dollars,
+        )
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True, default=str))
+        return 1 if result.outcome is not None and result.outcome.status == "error" else 0
+    if args.command == "gated-live-loop":
+        policy = load_pinned_model_policy_from_settings(settings)
+        model = register_loaded_model(database_url=settings.database_url, policy=policy)
+        result = LiveDataGatedLiveRunner(
+            database_url=settings.database_url,
+            policy=policy,
+            model_id=model.model_id,
+            settings=settings,
+        ).run_loop(
+            poll_seconds=args.poll_seconds
+            if args.poll_seconds is not None
+            else settings.strategy_poll_seconds,
+            max_markets=args.max_markets,
+            max_cycles=args.max_cycles,
+            duration_seconds=duration_minutes_to_seconds(args.duration_minutes),
+            stop_on_error=not args.no_stop_on_error,
+        )
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True, default=str))
+        return 1 if result.status == "stopped_on_error" else 0
     if args.command == "status":
         run_id = args.run_id
         print(
@@ -423,3 +817,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     raise AssertionError(f"unhandled command: {args.command}")
+
+
+def market_data_clients(source: str, settings: Settings) -> tuple[KalshiRestClient, CoinbaseClient]:
+    if source == "fixture":
+        return FixtureKalshiRestClient(), FixtureCoinbaseClient()
+    if source == "live":
+        return HttpKalshiRestClient(settings.kalshi_base_url), HttpCoinbaseClient()
+    raise ValueError(f"unsupported strategy source: {source}")
+
+
+def duration_minutes_to_seconds(value: float | None) -> int | None:
+    if value is None:
+        return None
+    return max(1, int(value * 60))
