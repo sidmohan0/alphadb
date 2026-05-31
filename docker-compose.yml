@@ -34,7 +34,7 @@ services:
       - "${ALPHADB_STREAMLIT_PORT:-8501}:8501"
     depends_on:
       - postgres
-    command: bash -lc "python -m pip install -e '.[dashboard]' && streamlit hello --server.address=0.0.0.0"
+    command: bash -lc "python -m pip install -e '.[dashboard]' && streamlit run src/alphadb/dashboard/app.py --server.address=0.0.0.0"
 
 volumes:
   postgres-data:
