@@ -8,6 +8,18 @@ from alphadb.config import settings_from_env
 from alphadb.health import collect_health
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
+from alphadb.state.repository import OperationalStateRepository
+
+
+def operational_state_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        counts = OperationalStateRepository(database_url).counts().as_dict()
+    except Exception as exc:
+        return [{"metric": "operational_state", "value": "unavailable", "detail": str(exc)}]
+    return [
+        {"metric": metric, "value": value, "detail": "postgres"}
+        for metric, value in counts.items()
+    ]
 
 
 def render() -> None:
@@ -32,6 +44,13 @@ def render() -> None:
     registry = default_market_registry()
     st.dataframe(
         [spec_summary_row(spec) for spec in registry.list()],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Operational State")
+    st.dataframe(
+        operational_state_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )
