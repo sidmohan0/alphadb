@@ -13,6 +13,7 @@ from alphadb.health import collect_health
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
 from alphadb.model_registry.registry import ModelRegistryRepository
+from alphadb.paper.ioc import PaperExecutionRepository
 from alphadb.risk.gate import RiskDecisionRepository
 from alphadb.state.repository import OperationalStateRepository
 
@@ -74,6 +75,20 @@ def risk_rows(database_url: str) -> list[dict[str, str | int]]:
     except Exception as exc:
         return [{"risk_decision_id": "risk_decisions", "detail": str(exc)}]
     return rows or [{"risk_decision_id": "risk_decisions", "detail": "none"}]
+
+
+def paper_status_rows(database_url: str) -> dict[str, list[dict[str, str | int]]]:
+    try:
+        repository = PaperExecutionRepository(database_url)
+        return {
+            "orders": repository.list_orders(),
+            "fills": repository.list_fills(),
+            "positions": repository.list_positions(),
+            "reconciliations": repository.list_reconciliations(),
+        }
+    except Exception as exc:
+        row = [{"paper": "unavailable", "detail": str(exc)}]
+        return {"orders": row, "fills": row, "positions": row, "reconciliations": row}
 
 
 def render() -> None:
@@ -150,6 +165,16 @@ def render() -> None:
         hide_index=True,
         use_container_width=True,
     )
+
+    paper = paper_status_rows(settings.database_url)
+    st.subheader("Paper Orders")
+    st.dataframe(paper["orders"], hide_index=True, use_container_width=True)
+    st.subheader("Paper Fills")
+    st.dataframe(paper["fills"], hide_index=True, use_container_width=True)
+    st.subheader("Paper Positions")
+    st.dataframe(paper["positions"], hide_index=True, use_container_width=True)
+    st.subheader("Paper Reconciliation")
+    st.dataframe(paper["reconciliations"], hide_index=True, use_container_width=True)
 
     st.caption(f"Generated {report.generated_at_utc.isoformat()}")
 
