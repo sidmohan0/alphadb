@@ -49,9 +49,22 @@ alphadb-markets list
 alphadb-markets inspect KXBTC15M --json
 ```
 
+Run the bounded, read-only KXBTC15M REST collector smoke with deterministic
+fixture data:
+
+```bash
+alphadb-collect kxbtc15m-smoke --source fixture --max-markets 1
+alphadb-collect status
+```
+
+To opt into Kalshi public market-data endpoints, use
+`--source kalshi-public`. This path only fetches market data and order books;
+it does not have order-entry code.
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
-`ALPHADB_STREAMLIT_PORT` when needed.
+`ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
+`ALPHADB_KALSHI_BASE_URL`.
 
 ## License
 

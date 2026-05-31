@@ -12,6 +12,7 @@ DEFAULT_DATABASE_USER = "alphadb"
 DEFAULT_DATABASE_PASSWORD = "alphadb"
 DEFAULT_DATABASE_HOST = "localhost"
 DEFAULT_DATABASE_PORT = "55433"
+DEFAULT_KALSHI_BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class Settings:
     environment: str
     database_url: str
     streamlit_port: str
+    kalshi_base_url: str
 
 
 def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
@@ -33,4 +35,5 @@ def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
         environment=values.get("ALPHADB_ENV", "local"),
         database_url=values.get("DATABASE_URL", default_database_url),
         streamlit_port=values.get("ALPHADB_STREAMLIT_PORT", "8501"),
+        kalshi_base_url=values.get("ALPHADB_KALSHI_BASE_URL", DEFAULT_KALSHI_BASE_URL),
     )

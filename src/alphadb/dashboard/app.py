@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from alphadb.collectors.kalshi_rest import CollectorRunStore
 from alphadb.config import settings_from_env
 from alphadb.events.log import RawEventLog
 from alphadb.health import collect_health
@@ -29,6 +30,14 @@ def raw_event_rows(database_url: str) -> list[dict[str, str | int]]:
     except Exception as exc:
         return [{"source": "raw_events", "schema_version": "unavailable", "events": str(exc)}]
     return rows or [{"source": "raw_events", "schema_version": "none", "events": 0}]
+
+
+def collector_status_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = CollectorRunStore(database_url).recent_runs(limit=10)
+    except Exception as exc:
+        return [{"collector_run_id": "collector_runs", "status": "unavailable", "errors": str(exc)}]
+    return rows or [{"collector_run_id": "collector_runs", "status": "none", "errors": 0}]
 
 
 def render() -> None:
@@ -67,6 +76,13 @@ def render() -> None:
     st.subheader("Raw Events")
     st.dataframe(
         raw_event_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Collectors")
+    st.dataframe(
+        collector_status_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )

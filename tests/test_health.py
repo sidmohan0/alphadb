@@ -17,6 +17,7 @@ def test_collect_health_reports_ok_when_components_are_ok() -> None:
         environment="test",
         database_url="postgresql://alphadb:alphadb@localhost:55433/alphadb",
         streamlit_port="8501",
+        kalshi_base_url="https://external-api.kalshi.com/trade-api/v2",
     )
 
     report = collect_health(
@@ -41,6 +42,7 @@ def test_collect_health_reports_error_when_database_is_unavailable() -> None:
         environment="test",
         database_url="postgresql://alphadb:alphadb@localhost:55433/alphadb",
         streamlit_port="8501",
+        kalshi_base_url="https://external-api.kalshi.com/trade-api/v2",
     )
 
     report = collect_health(
