@@ -6,6 +6,7 @@ import streamlit as st
 
 from alphadb.collectors.kalshi_rest import CollectorRunStore
 from alphadb.config import settings_from_env
+from alphadb.decision_engine.engine import DecisionRepository
 from alphadb.events.log import RawEventLog
 from alphadb.features.ledger import FeatureLedgerRepository
 from alphadb.health import collect_health
@@ -56,6 +57,14 @@ def feature_ledger_rows(database_url: str) -> list[dict[str, str | int]]:
     except Exception as exc:
         return [{"feature_row_id": "feature_rows", "detail": str(exc)}]
     return rows or [{"feature_row_id": "feature_rows", "detail": "none"}]
+
+
+def decision_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = DecisionRepository(database_url).list()
+    except Exception as exc:
+        return [{"decision_id": "decisions", "detail": str(exc)}]
+    return rows or [{"decision_id": "decisions", "detail": "none"}]
 
 
 def render() -> None:
@@ -115,6 +124,13 @@ def render() -> None:
     st.subheader("Feature Ledger")
     st.dataframe(
         feature_ledger_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Decisions")
+    st.dataframe(
+        decision_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )

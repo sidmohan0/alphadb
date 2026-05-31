@@ -80,6 +80,15 @@ alphadb-features build-row \
 alphadb-features list --run-id <run_id>
 ```
 
+Evaluate and persist a runtime-independent decision candidate:
+
+```bash
+alphadb-decide evaluate \
+  --feature-row-id <feature_row_id> \
+  --probability-yes 0.62
+alphadb-decide list --run-id <run_id>
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
