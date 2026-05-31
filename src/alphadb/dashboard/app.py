@@ -7,6 +7,7 @@ import streamlit as st
 from alphadb.collectors.kalshi_rest import CollectorRunStore
 from alphadb.config import settings_from_env
 from alphadb.events.log import RawEventLog
+from alphadb.features.ledger import FeatureLedgerRepository
 from alphadb.health import collect_health
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
@@ -47,6 +48,14 @@ def model_registry_rows(database_url: str) -> list[dict[str, str | int]]:
     except Exception as exc:
         return [{"model_id": "model_registry", "promotion_state": "unavailable", "detail": str(exc)}]
     return rows or [{"model_id": "model_registry", "promotion_state": "none", "detail": ""}]
+
+
+def feature_ledger_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = FeatureLedgerRepository(database_url).recent_rows(limit=10)
+    except Exception as exc:
+        return [{"feature_row_id": "feature_rows", "detail": str(exc)}]
+    return rows or [{"feature_row_id": "feature_rows", "detail": "none"}]
 
 
 def render() -> None:
@@ -99,6 +108,13 @@ def render() -> None:
     st.subheader("Model Registry")
     st.dataframe(
         model_registry_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Feature Ledger")
+    st.dataframe(
+        feature_ledger_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )

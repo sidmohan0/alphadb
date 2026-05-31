@@ -195,9 +195,45 @@ MODEL_REGISTRY = Migration(
 )
 
 
+FEATURE_ROWS = Migration(
+    version="0005_feature_rows",
+    statements=(
+        """
+        create table if not exists feature_rows (
+            feature_row_id text primary key,
+            run_id text not null references platform_runs(run_id),
+            market_ticker text not null references market_instances(market_ticker),
+            model_id text not null references model_registry_records(model_id),
+            decision_timestamp timestamptz not null,
+            max_source_event_timestamp timestamptz not null,
+            source_lag_ms bigint not null check (source_lag_ms >= 0),
+            feature_version text not null,
+            calibration_version text not null,
+            dataset_id text not null,
+            feature_values jsonb not null,
+            source_event_ids text[] not null,
+            row_hash text not null,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            unique (run_id, market_ticker, model_id, decision_timestamp)
+        )
+        """,
+        """
+        create index if not exists feature_rows_run_market_idx
+        on feature_rows(run_id, market_ticker)
+        """,
+        """
+        create index if not exists feature_rows_model_idx
+        on feature_rows(model_id)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
     COLLECTOR_RUNS,
     MODEL_REGISTRY,
+    FEATURE_ROWS,
 )
