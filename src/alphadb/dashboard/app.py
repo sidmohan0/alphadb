@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from alphadb.config import settings_from_env
+from alphadb.events.log import RawEventLog
 from alphadb.health import collect_health
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
@@ -20,6 +21,14 @@ def operational_state_rows(database_url: str) -> list[dict[str, str | int]]:
         {"metric": metric, "value": value, "detail": "postgres"}
         for metric, value in counts.items()
     ]
+
+
+def raw_event_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = RawEventLog(database_url).counts_by_source_schema()
+    except Exception as exc:
+        return [{"source": "raw_events", "schema_version": "unavailable", "events": str(exc)}]
+    return rows or [{"source": "raw_events", "schema_version": "none", "events": 0}]
 
 
 def render() -> None:
@@ -51,6 +60,13 @@ def render() -> None:
     st.subheader("Operational State")
     st.dataframe(
         operational_state_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Raw Events")
+    st.dataframe(
+        raw_event_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )
