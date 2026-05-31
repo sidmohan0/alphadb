@@ -42,6 +42,13 @@ Start the Streamlit target-platform dashboard:
 docker compose --profile dashboard up streamlit
 ```
 
+Inspect registered market specifications:
+
+```bash
+alphadb-markets list
+alphadb-markets inspect KXBTC15M --json
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed.
