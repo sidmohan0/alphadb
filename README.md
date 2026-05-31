@@ -1,21 +1,101 @@
 # AlphaDB
 
-AlphaDB is a fresh workspace for a replayable, risk-controlled prediction-market trading platform.
+AlphaDB is an experimental target platform for researching, replaying, and
+risk-controlling prediction-market trading systems.
 
-The initial platform direction is:
+The project starts with Kalshi's `KXBTC15M` Bitcoin market family, but the
+platform is being built around reusable boundaries: explicit market
+specifications, append-only event capture, deterministic replay, Postgres-backed
+operational state, model registry records, shared decisioning, and risk-gated
+shadow and paper trading workflows.
 
-- Python modular monolith first.
-- Postgres-backed operational state for the target platform.
-- Dev Container plus Docker Compose as the reproducible development environment.
-- Streamlit-first target-platform dashboard.
-- Raw event logs for replay and promotion evidence.
-- `MarketSpec` as the canonical abstraction, with `KXBTC15M` as the first concrete market family.
+## Status
 
-This repository has been reset intentionally. Prior AlphaDB history is not part of this project.
+AlphaDB is an early platform scaffold. It is not a live trading bot, not a
+signals service, and not investment advice.
 
-## Development
+The current implementation focus is the first target-platform slice:
 
-Open the repository in a Dev Container, or run locally with Python 3.12+:
+- A local health path for the Python package, Postgres runtime, tests, and
+  dashboard shell.
+- A `MarketSpec` registry with `KXBTC15M` as the first concrete market family.
+- A Postgres-backed operational-state tracer for runs, decisions, risk
+  decisions, and order intents.
+
+Future slices are planned around raw event logs, REST-first market collection,
+model registry records, no-lookahead feature rows, a shared decision engine,
+risk gates, paper IOC execution, deterministic replay reports, shadow comparison
+against the current MVP, authenticated WebSocket ingestion, and an explicit
+human gate before any live cutover.
+
+## Project Boundary
+
+AlphaDB is the target-platform workspace for a future reusable prediction-market
+trading system. It is intentionally separate from the current private Kalshi MVP
+runner, which remains authoritative until a documented cutover.
+
+This repository is meant to be public portfolio-quality infrastructure and
+research code. It should not contain live credentials, generated market data,
+private strategy artifacts, account-specific risk settings, or the operational
+history of the current MVP.
+
+Live trading is outside the default development path. Any live mode must be
+introduced behind explicit configuration, shadow-run evidence, paper-trading
+evidence, risk limits, rollback instructions, and a human approval step.
+
+## Core Ideas
+
+- `MarketSpec`: a typed description of a tradable market family, including
+  discovery rules, settlement source, feature configuration, label behavior, fee
+  assumptions, risk configuration, and trading cutoffs.
+- Raw event log: append-only capture of market snapshots, external feature
+  events, exchange events, execution events, receive timestamps, schema versions,
+  payload hashes, and raw payloads.
+- Operational state: transactional Postgres records for runs, market instances,
+  decisions, risk decisions, order intents, orders, fills, positions,
+  reconciliation, and model registry references.
+- Shared decision engine: runtime-independent decisioning that can be reused by
+  historical replay, shadow runs, paper trading, and eventually live trading.
+- Event-driven replay: deterministic reconstruction of features, model outputs,
+  decisions, risk outcomes, execution, positions, PnL, and diagnostics from raw
+  events and immutable artifacts.
+- Target-platform dashboard: a Streamlit-first operational and research surface
+  for health, replay diagnostics, paper trading, live-readiness checks, risk
+  state, PnL, latency, and model registry visibility.
+
+## Architecture Shape
+
+```text
+MarketSpec registry
+  -> ingestion adapters
+  -> raw event log
+  -> feature rows and no-lookahead ledger
+  -> model registry and model outputs
+  -> shared decision engine
+  -> risk gate and sizing
+  -> paper/live execution adapters
+  -> operational state, replay reports, and dashboard
+```
+
+The same domain contracts should be used across replay, shadow, paper, and live
+modes. The event source, clock, and exchange adapter can vary; the decision and
+risk boundary should remain inspectable and replayable.
+
+## Repository Layout
+
+```text
+.
+|-- CONTEXT.md              # Domain vocabulary and architectural boundary
+|-- docker-compose.yml      # Local Postgres and dashboard-oriented services
+|-- docs/                   # Agent and architecture notes
+|-- src/alphadb/            # Python package
+|-- tests/                  # Pytest suite
+`-- pyproject.toml          # Package metadata and tool configuration
+```
+
+## Local Development
+
+AlphaDB targets Python 3.12+.
 
 ```bash
 python3.12 -m venv .venv
@@ -24,7 +104,7 @@ python -m pip install -e ".[dev]"
 pytest
 ```
 
-Docker Compose provides Postgres for target-platform development:
+Start Postgres for local target-platform development:
 
 ```bash
 docker compose up -d postgres
@@ -36,7 +116,7 @@ Run the same install/test path inside the Compose app container:
 docker compose run --rm app bash -lc "python -m pip install -e '.[dev,dashboard]' && pytest -q && alphadb-health"
 ```
 
-Start the Streamlit target-platform dashboard:
+Run the dashboard profile when dashboard work is active:
 
 ```bash
 docker compose --profile dashboard up streamlit
@@ -149,6 +229,57 @@ By default, local Postgres is published on `localhost:55433` and Streamlit on
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
 `ALPHADB_KALSHI_BASE_URL`.
 
+The default local Postgres URL is:
+
+```text
+postgresql://alphadb:alphadb@localhost:55433/alphadb
+```
+
+Use `.env.example` as the local configuration template. Do not commit secrets,
+live credentials, generated datasets, model binaries, or exchange/account
+artifacts.
+
+## Public Repo Metadata
+
+Recommended GitHub description:
+
+> Replayable, risk-controlled prediction-market trading platform for research,
+> shadow evaluation, and paper execution.
+
+Recommended GitHub topics:
+
+```text
+prediction-markets
+kalshi
+algorithmic-trading
+trading-systems
+market-data
+event-sourcing
+event-driven
+risk-management
+paper-trading
+backtesting
+python
+postgresql
+streamlit
+pydantic
+docker-compose
+model-registry
+mlops
+quant-research
+portfolio-project
+```
+
+## Non-Goals
+
+- AlphaDB does not replace the current private MVP until a deliberate cutover.
+- AlphaDB does not publish a turnkey profitable strategy.
+- AlphaDB does not require live exchange credentials for normal development or
+  tests.
+- AlphaDB does not store private account data, raw generated datasets, model
+  binaries, or secrets in Git.
+
 ## License
 
-Private while the project is taking shape. License TBD before any public/open-source release.
+License TBD before public release. Until a license is added, this code is not
+offered under an open-source license.
