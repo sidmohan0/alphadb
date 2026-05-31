@@ -10,6 +10,7 @@ from alphadb.events.log import RawEventLog
 from alphadb.health import collect_health
 from alphadb.markets.cli import spec_summary_row
 from alphadb.markets.registry import default_market_registry
+from alphadb.model_registry.registry import ModelRegistryRepository
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -38,6 +39,14 @@ def collector_status_rows(database_url: str) -> list[dict[str, str | int]]:
     except Exception as exc:
         return [{"collector_run_id": "collector_runs", "status": "unavailable", "errors": str(exc)}]
     return rows or [{"collector_run_id": "collector_runs", "status": "none", "errors": 0}]
+
+
+def model_registry_rows(database_url: str) -> list[dict[str, str | int]]:
+    try:
+        rows = ModelRegistryRepository(database_url).recent_models(limit=10)
+    except Exception as exc:
+        return [{"model_id": "model_registry", "promotion_state": "unavailable", "detail": str(exc)}]
+    return rows or [{"model_id": "model_registry", "promotion_state": "none", "detail": ""}]
 
 
 def render() -> None:
@@ -83,6 +92,13 @@ def render() -> None:
     st.subheader("Collectors")
     st.dataframe(
         collector_status_rows(settings.database_url),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Model Registry")
+    st.dataframe(
+        model_registry_rows(settings.database_url),
         hide_index=True,
         use_container_width=True,
     )

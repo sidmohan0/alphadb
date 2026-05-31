@@ -1,0 +1,2 @@
+"""Target-platform model registry."""
+

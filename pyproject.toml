@@ -20,6 +20,7 @@ alphadb-markets = "alphadb.markets.cli:main"
 alphadb-state = "alphadb.state.cli:main"
 alphadb-events = "alphadb.events.cli:main"
 alphadb-collect = "alphadb.collectors.kalshi_rest:main"
+alphadb-models = "alphadb.model_registry.registry:main"
 
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.35"]
