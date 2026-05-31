@@ -69,6 +69,17 @@ alphadb-models register-demo --series KXBTC15M
 alphadb-models list --series KXBTC15M
 ```
 
+Build decision-time feature rows with no-lookahead evidence:
+
+```bash
+alphadb-features build-row \
+  --run-id <run_id> \
+  --market-ticker <market_ticker> \
+  --model-id <model_id> \
+  --decision-timestamp 2026-05-31T21:13:00+00:00
+alphadb-features list --run-id <run_id>
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
