@@ -110,6 +110,17 @@ alphadb-paper execute \
 alphadb-paper status
 ```
 
+Build an event-driven replay report from raw events through paper execution:
+
+```bash
+alphadb-replay report \
+  --run-id <run_id> \
+  --market-ticker <market_ticker> \
+  --model-id <model_id> \
+  --decision-timestamp 2026-05-31T21:13:00+00:00 \
+  --probability-yes 0.65
+```
+
 By default, local Postgres is published on `localhost:55433` and Streamlit on
 `localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
 `ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
