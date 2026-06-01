@@ -254,7 +254,7 @@ def test_gated_live_runner_submits_risk_approved_ioc_order_without_paper_fill(
     assert result.outcome.status == "handled"
     assert result.outcome.metadata["runtime_mode"] == "gated-live"
     assert result.outcome.metadata["live_orders_sent"] == 1
-    assert result.outcome.metadata["live_order_status"] == "accepted"
+    assert result.outcome.metadata["live_order_status"] == "submitted"
     assert result.outcome.paper_order_id is None
     assert fake_live.requests
     assert fake_live.requests[0]["time_in_force"] == "immediate_or_cancel"

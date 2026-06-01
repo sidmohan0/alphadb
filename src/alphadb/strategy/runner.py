@@ -394,8 +394,8 @@ class LiveDataPaperRunner:
                 )
                 live_order_attempt_id = attempt.live_order_attempt_id
                 live_order_status = attempt.status
-                live_orders_sent = 1 if attempt.status == "accepted" else 0
-                if attempt.status != "accepted":
+                live_orders_sent = 1 if attempt.status in {"submitted", "accepted"} else 0
+                if attempt.status not in {"submitted", "accepted"}:
                     live_order_error_message = f"live order returned status {attempt.status}"
             except LiveOrderError as exc:
                 live_order_status = "error"
@@ -551,11 +551,11 @@ class LiveDataGatedLiveRunner(LiveDataPaperRunner):
         trading_day: date,
         reported_realized_pnl_dollars: float,
     ) -> float:
-        accepted_cost = LiveOrderRepository(self.database_url).accepted_max_cost_dollars(
+        submitted_cost = LiveOrderRepository(self.database_url).submitted_max_cost_dollars(
             trading_day=trading_day
         )
         realized_loss = max(0.0, -reported_realized_pnl_dollars)
-        return -max(realized_loss, accepted_cost)
+        return -max(realized_loss, submitted_cost)
 
     def run_loop(
         self,
@@ -701,13 +701,13 @@ def build_parser() -> argparse.ArgumentParser:
     paper_loop.add_argument("--no-stop-on-error", action="store_true")
     live_cycle = subparsers.add_parser(
         "gated-live-cycle",
-        help="Run one guarded live-money cycle using live market data",
+        help="Run one live-money cycle using live market data",
     )
     live_cycle.add_argument("--max-markets", type=int, default=1)
     live_cycle.add_argument("--daily-realized-pnl-dollars", type=float, default=0.0)
     live_loop = subparsers.add_parser(
         "gated-live-loop",
-        help="Run guarded live-money cycles continuously using live market data",
+        help="Run live-money cycles continuously using live market data",
     )
     live_loop.add_argument("--max-markets", type=int, default=3)
     live_loop.add_argument("--poll-seconds", type=int, default=None)

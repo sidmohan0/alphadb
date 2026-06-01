@@ -67,5 +67,5 @@ def test_runtime_guard_gated_live_requires_explicit_config_credentials_and_human
 def test_runtime_status_rows_expose_dashboard_guard_state() -> None:
     rows = runtime_status_rows(settings_from_env({"ALPHADB_RUNTIME_MODE": "paper"}))
 
-    assert {"metric": "runtime_mode", "value": "paper"} in rows
-    assert {"metric": "guard_denial_reason", "value": "paper_mode_disables_live_orders"} in rows
+    assert {"metric": "mode", "value": "paper"} in rows
+    assert {"metric": "live_order_block_reason", "value": "paper_mode_disables_live_orders"} in rows

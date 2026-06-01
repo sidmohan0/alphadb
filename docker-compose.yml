@@ -30,11 +30,40 @@ services:
       - .:/workspaces/alphadb:cached
     environment:
       DATABASE_URL: postgresql://alphadb:alphadb@postgres:5432/alphadb
+      ALPHADB_ENV: ${ALPHADB_ENV:-local}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      ALPHADB_AWS_REGION: ${ALPHADB_AWS_REGION:-us-east-2}
+      ALPHADB_RUNTIME_MODE: ${ALPHADB_RUNTIME_MODE:-fixture}
+      ALPHADB_ENABLE_LIVE_ORDERS: ${ALPHADB_ENABLE_LIVE_ORDERS:-0}
+      ALPHADB_HUMAN_CUTOVER_APPROVED: ${ALPHADB_HUMAN_CUTOVER_APPROVED:-0}
+      ALPHADB_DASHBOARD_PIN: ${ALPHADB_DASHBOARD_PIN:-}
+      ALPHADB_DASHBOARD_COOKIE_SECRET: ${ALPHADB_DASHBOARD_COOKIE_SECRET:-}
+      ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS: ${ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS:-604800}
     ports:
       - "${ALPHADB_STREAMLIT_PORT:-8501}:8501"
     depends_on:
       - postgres
     command: bash -lc "python -m pip install -e '.[dashboard]' && streamlit run src/alphadb/dashboard/app.py --server.address=0.0.0.0"
+
+  dashboard-runtime:
+    build:
+      context: .
+    profiles: ["dashboard-runtime"]
+    environment:
+      DATABASE_URL: postgresql://alphadb:alphadb@postgres:5432/alphadb
+      ALPHADB_ENV: ${ALPHADB_ENV:-local}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      ALPHADB_AWS_REGION: ${ALPHADB_AWS_REGION:-us-east-2}
+      ALPHADB_RUNTIME_MODE: ${ALPHADB_RUNTIME_MODE:-fixture}
+      ALPHADB_ENABLE_LIVE_ORDERS: ${ALPHADB_ENABLE_LIVE_ORDERS:-0}
+      ALPHADB_HUMAN_CUTOVER_APPROVED: ${ALPHADB_HUMAN_CUTOVER_APPROVED:-0}
+      ALPHADB_DASHBOARD_PIN: ${ALPHADB_DASHBOARD_PIN:-}
+      ALPHADB_DASHBOARD_COOKIE_SECRET: ${ALPHADB_DASHBOARD_COOKIE_SECRET:-}
+      ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS: ${ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS:-604800}
+    ports:
+      - "${ALPHADB_STREAMLIT_PORT:-8501}:8501"
+    depends_on:
+      - postgres
 
 volumes:
   postgres-data:

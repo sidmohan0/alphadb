@@ -8,6 +8,7 @@ from alphadb.live_orders import (
     GatedLiveKalshiOrderAdapter,
     LiveOrderError,
     LiveOrderRepository,
+    exchange_response_accepted,
     kalshi_order_request_from_intent,
     live_adapter_status_rows,
 )
@@ -101,22 +102,34 @@ def test_live_order_adapter_denies_paper_mode_and_missing_credentials() -> None:
 
 def test_live_order_adapter_records_exchange_success_and_rejection_without_exposing_secrets() -> None:
     repository = live_order_repository_or_skip()
-    accepted_intent = approved_intent(repository)
+    submitted_intent = approved_intent(repository)
     rejected_intent = approved_intent(repository)
-    accepted_client = FakeOrderClient({"order": {"status": "accepted", "order_id": "abc"}})
+    submitted_client = FakeOrderClient({"order": {"status": "accepted", "order_id": "abc"}})
     rejected_client = FakeOrderClient({"order": {"status": "rejected", "reason": "bad_price"}})
 
-    accepted = GatedLiveKalshiOrderAdapter(
+    submitted = GatedLiveKalshiOrderAdapter(
         database_url=repository.database_url,
-        client=accepted_client,
-    ).submit_order_intent(order_intent_id=accepted_intent, settings=gated_settings())
+        client=submitted_client,
+    ).submit_order_intent(order_intent_id=submitted_intent, settings=gated_settings())
     rejected = GatedLiveKalshiOrderAdapter(
         database_url=repository.database_url,
         client=rejected_client,
     ).submit_order_intent(order_intent_id=rejected_intent, settings=gated_settings())
     rows = live_adapter_status_rows(gated_settings())
 
-    assert accepted.status == "accepted"
+    assert submitted.status == "submitted"
     assert rejected.status == "rejected"
-    assert accepted_client.requests[0][1] == "key-id"
+    assert submitted_client.requests[0][1] == "key-id"
     assert not any("key-id" in str(row) for row in rows)
+
+
+def test_top_level_order_id_response_counts_as_accepted_ioc_attempt() -> None:
+    assert exchange_response_accepted(
+        {
+            "client_order_id": "intent_123",
+            "fill_count": "0.00",
+            "order_id": "order_123",
+            "remaining_count": "0.00",
+            "ts_ms": 1780292536260,
+        }
+    )

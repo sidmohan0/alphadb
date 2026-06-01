@@ -1,4 +1,4 @@
-"""Runtime-mode contract and fail-closed live order guard."""
+"""Runtime-mode contract for live order enablement."""
 
 from __future__ import annotations
 
@@ -114,13 +114,13 @@ def evaluate_runtime_guard(settings: Settings | None = None) -> RuntimeGuardDeci
 def runtime_status_rows(settings: Settings | None = None) -> list[dict[str, str | bool]]:
     decision = evaluate_runtime_guard(settings)
     return [
-        {"metric": "runtime_mode", "value": decision.runtime_mode.value},
-        {"metric": "live_enabled", "value": decision.live_enabled},
+        {"metric": "mode", "value": decision.runtime_mode.value},
+        {"metric": "live_order_submission_enabled", "value": decision.live_enabled},
         {"metric": "can_submit_live_orders", "value": decision.can_submit_live_orders},
-        {"metric": "paper_orders_allowed", "value": decision.paper_orders_allowed},
-        {"metric": "guard_denial_reason", "value": decision.denial_reason or ""},
-        {"metric": "credentials_present", "value": decision.credentials_present},
-        {"metric": "human_cutover_approved", "value": decision.human_cutover_approved},
+        {"metric": "simulator_orders_allowed", "value": decision.paper_orders_allowed},
+        {"metric": "live_order_block_reason", "value": decision.denial_reason or ""},
+        {"metric": "kalshi_credentials_present", "value": decision.credentials_present},
+        {"metric": "operator_live_approval", "value": decision.human_cutover_approved},
     ]
 
 
@@ -132,7 +132,7 @@ def settings_with_overrides(settings: Settings, overrides: Mapping[str, Any]) ->
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphadb-runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("status", help="Show runtime guard status")
+    subparsers.add_parser("status", help="Show runtime and live-order status")
     return parser
 
 

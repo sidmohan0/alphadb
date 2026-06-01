@@ -45,6 +45,20 @@ class OperationalStateRepository:
             connection.commit()
         return applied
 
+    def applied_migrations(self) -> list[str]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("select to_regclass('public.schema_migrations') as table_name")
+                table_row = cursor.fetchone()
+                if table_row is None or table_row["table_name"] is None:
+                    return []
+                cursor.execute("select version from schema_migrations order by version")
+                return [str(row["version"]) for row in cursor.fetchall()]
+
+    def pending_migrations(self) -> list[str]:
+        applied = set(self.applied_migrations())
+        return [migration.version for migration in MIGRATIONS if migration.version not in applied]
+
     def create_tracer_run(
         self,
         spec: MarketSpec,

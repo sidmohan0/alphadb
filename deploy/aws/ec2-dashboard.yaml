@@ -1,0 +1,260 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AlphaDB MVP dashboard on a single EC2 host with Docker and local Postgres.
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: alphadb-dashboard
+  ContainerImage:
+    Type: String
+    Description: ECR image URI for the AlphaDB dashboard container.
+  InstanceType:
+    Type: String
+    Default: t4g.micro
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  AllowedHttpCidr:
+    Type: String
+    Description: CIDR allowed to reach the dashboard over HTTP.
+    AllowedPattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
+  DashboardPin:
+    Type: String
+    NoEcho: true
+    Description: Four-digit dashboard PIN.
+    AllowedPattern: ^[0-9]{4}$
+  DashboardCookieSecret:
+    Type: String
+    NoEcho: true
+    Description: Hex cookie signing secret.
+    MinLength: 32
+    AllowedPattern: ^[A-Fa-f0-9]+$
+  DbPassword:
+    Type: String
+    NoEcho: true
+    Description: Local Postgres password used only inside the EC2 host.
+    MinLength: 16
+    AllowedPattern: ^[A-Fa-f0-9]+$
+  DashboardPort:
+    Type: Number
+    Default: 8501
+  RuntimeMode:
+    Type: String
+    Default: paper
+    AllowedValues:
+      - fixture
+      - shadow
+      - paper
+  AwsRegionValue:
+    Type: String
+    Default: us-east-2
+
+Resources:
+  DashboardVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-vpc
+
+  DashboardInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-igw
+
+  DashboardGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref DashboardInternetGateway
+      VpcId: !Ref DashboardVpc
+
+  DashboardPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref DashboardVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-public-a
+
+  DashboardPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref DashboardVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-public-rt
+
+  DashboardPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: DashboardGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref DashboardInternetGateway
+      RouteTableId: !Ref DashboardPublicRouteTable
+
+  DashboardPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref DashboardPublicRouteTable
+      SubnetId: !Ref DashboardPublicSubnet
+
+  DashboardSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP access to the AlphaDB MVP dashboard.
+      VpcId: !Ref DashboardVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedHttpCidr
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-sg
+
+  DashboardInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+  DashboardInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref DashboardInstanceRole
+
+  DashboardInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - DashboardPublicRoute
+      - DashboardPublicSubnetRouteTableAssociation
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref DashboardInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref DashboardSecurityGroup
+          SubnetId: !Ref DashboardPublicSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: 30
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: !Ref ServiceName
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee /var/log/alphadb-bootstrap.log | logger -t alphadb-bootstrap -s 2>/dev/console) 2>&1
+
+          dnf update -y
+          dnf install -y awscli docker
+          systemctl enable --now docker
+          systemctl enable --now amazon-ssm-agent || true
+          usermod -aG docker ec2-user || true
+
+          aws ecr get-login-password --region ${AWS::Region} \
+            | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+
+          docker network create alphadb || true
+          docker volume create alphadb-postgres
+          docker pull postgres:16
+          docker pull ${ContainerImage}
+
+          docker rm -f alphadb-dashboard || true
+          docker rm -f alphadb-postgres || true
+
+          docker run -d \
+            --restart unless-stopped \
+            --name alphadb-postgres \
+            --network alphadb \
+            -e POSTGRES_USER=alphadb \
+            -e POSTGRES_PASSWORD='${DbPassword}' \
+            -e POSTGRES_DB=alphadb \
+            -v alphadb-postgres:/var/lib/postgresql/data \
+            postgres:16
+
+          for attempt in $(seq 1 60); do
+            if docker exec alphadb-postgres pg_isready -U alphadb -d alphadb; then
+              break
+            fi
+            sleep 2
+          done
+
+          DATABASE_URL='postgresql://alphadb:${DbPassword}@alphadb-postgres:5432/alphadb'
+          COMMON_ENV=(
+            -e DATABASE_URL="$DATABASE_URL"
+            -e ALPHADB_ENV=aws
+            -e AWS_REGION=${AwsRegionValue}
+            -e ALPHADB_AWS_REGION=${AwsRegionValue}
+            -e ALPHADB_STREAMLIT_PORT=${DashboardPort}
+            -e ALPHADB_RUNTIME_MODE=${RuntimeMode}
+            -e ALPHADB_ENABLE_LIVE_ORDERS=0
+            -e ALPHADB_HUMAN_CUTOVER_APPROVED=0
+            -e ALPHADB_DASHBOARD_PIN='${DashboardPin}'
+            -e ALPHADB_DASHBOARD_COOKIE_SECRET='${DashboardCookieSecret}'
+            -e ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS=604800
+          )
+
+          docker run --rm --network alphadb "${!COMMON_ENV[@]}" ${ContainerImage} alphadb-deploy migrate
+          docker run --rm --network alphadb "${!COMMON_ENV[@]}" ${ContainerImage} alphadb-deploy seed-readiness --series KXBTC15M --skip-migrate
+          docker run --rm --network alphadb "${!COMMON_ENV[@]}" ${ContainerImage} alphadb-deploy smoke
+
+          docker run -d \
+            --restart unless-stopped \
+            --name alphadb-dashboard \
+            --network alphadb \
+            -p 80:${DashboardPort} \
+            "${!COMMON_ENV[@]}" \
+            ${ContainerImage}
+
+  DashboardElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-eip
+
+  DashboardElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt DashboardElasticIp.AllocationId
+      InstanceId: !Ref DashboardInstance
+
+Outputs:
+  InstanceId:
+    Value: !Ref DashboardInstance
+  PublicIp:
+    Value: !Ref DashboardElasticIp
+  DashboardUrl:
+    Value: !Sub http://${DashboardElasticIp}
+  SsmSessionCommand:
+    Value: !Sub aws ssm start-session --target ${DashboardInstance} --profile alphadb --region ${AWS::Region}

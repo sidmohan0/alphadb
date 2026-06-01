@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AlphaDB Streamlit dashboard on ECS Fargate with managed Postgres dependency.
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: alphadb-dashboard
+  ContainerImage:
+    Type: String
+    Description: ECR image URI for the AlphaDB dashboard container.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for the load balancer.
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for Fargate tasks with egress to Postgres and the internet.
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is DATABASE_URL for the managed Postgres instance.
+  DashboardPinSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is the four-digit dashboard PIN.
+  DashboardCookieSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value signs dashboard remember-cookies.
+  DashboardPort:
+    Type: Number
+    Default: 8501
+  DesiredCount:
+    Type: Number
+    Default: 1
+  TaskCpu:
+    Type: String
+    Default: "512"
+  TaskMemory:
+    Type: String
+    Default: "1024"
+  RuntimeMode:
+    Type: String
+    Default: paper
+    AllowedValues:
+      - fixture
+      - shadow
+      - paper
+  AwsRegionValue:
+    Type: String
+    Default: us-east-2
+
+Resources:
+  DashboardLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ServiceName}
+      RetentionInDays: 14
+
+  DashboardCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ServiceName
+
+  DashboardExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadDashboardSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseUrlSecretArn
+                  - !Ref DashboardPinSecretArn
+                  - !Ref DashboardCookieSecretArn
+
+  DashboardTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP access to the AlphaDB dashboard load balancer.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  DashboardServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AlphaDB dashboard tasks accept traffic only from the load balancer.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref DashboardPort
+          ToPort: !Ref DashboardPort
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  DashboardLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref ServiceName
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets: !Ref PublicSubnetIds
+      Type: application
+
+  DashboardTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckPath: /_stcore/health
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: "200"
+      Port: !Ref DashboardPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+
+  DashboardListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DashboardTargetGroup
+      LoadBalancerArn: !Ref DashboardLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  DashboardTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ServiceName
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt DashboardExecutionRole.Arn
+      TaskRoleArn: !GetAtt DashboardTaskRole.Arn
+      ContainerDefinitions:
+        - Name: dashboard
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref DashboardPort
+              Protocol: tcp
+          Environment:
+            - Name: ALPHADB_ENV
+              Value: aws
+            - Name: AWS_REGION
+              Value: !Ref AwsRegionValue
+            - Name: ALPHADB_AWS_REGION
+              Value: !Ref AwsRegionValue
+            - Name: ALPHADB_STREAMLIT_PORT
+              Value: !Sub "${DashboardPort}"
+            - Name: ALPHADB_RUNTIME_MODE
+              Value: !Ref RuntimeMode
+            - Name: ALPHADB_ENABLE_LIVE_ORDERS
+              Value: "0"
+            - Name: ALPHADB_HUMAN_CUTOVER_APPROVED
+              Value: "0"
+            - Name: ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS
+              Value: "604800"
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+            - Name: ALPHADB_DASHBOARD_PIN
+              ValueFrom: !Ref DashboardPinSecretArn
+            - Name: ALPHADB_DASHBOARD_COOKIE_SECRET
+              ValueFrom: !Ref DashboardCookieSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DashboardLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: dashboard
+
+  DashboardService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - DashboardListener
+    Properties:
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref DashboardCluster
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      TaskDefinition: !Ref DashboardTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref DashboardServiceSecurityGroup
+          Subnets: !Ref PrivateSubnetIds
+      LoadBalancers:
+        - ContainerName: dashboard
+          ContainerPort: !Ref DashboardPort
+          TargetGroupArn: !Ref DashboardTargetGroup
+
+Outputs:
+  ClusterName:
+    Value: !Ref DashboardCluster
+  ServiceName:
+    Value: !Ref DashboardService
+  LoadBalancerDnsName:
+    Value: !GetAtt DashboardLoadBalancer.DNSName
+  DashboardUrl:
+    Value: !Sub http://${DashboardLoadBalancer.DNSName}

@@ -1,4 +1,4 @@
-"""Gated-live Kalshi order adapter."""
+"""Live Kalshi order submission adapter."""
 
 from __future__ import annotations
 
@@ -160,24 +160,27 @@ class LiveOrderRepository:
                 rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
-    def accepted_max_cost_dollars(self, *, trading_day: date) -> float:
+    def submitted_max_cost_dollars(self, *, trading_day: date) -> float:
         day_start = datetime.combine(trading_day, datetime.min.time(), tzinfo=UTC)
         day_end = day_start + timedelta(days=1)
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    select coalesce(sum(oi.max_cost_dollars), 0)::float as accepted_max_cost
+                    select coalesce(sum(oi.max_cost_dollars), 0)::float as submitted_max_cost
                     from live_order_attempts loa
                     join order_intents oi on oi.order_intent_id = loa.order_intent_id
-                    where loa.status = 'accepted'
+                    where loa.status in ('submitted', 'accepted')
                       and loa.created_at >= %s
                       and loa.created_at < %s
                     """,
                     (day_start, day_end),
                 )
                 row = cursor.fetchone()
-        return float(row["accepted_max_cost"] if row else 0.0)
+        return float(row["submitted_max_cost"] if row else 0.0)
+
+    def accepted_max_cost_dollars(self, *, trading_day: date) -> float:
+        return self.submitted_max_cost_dollars(trading_day=trading_day)
 
 
 class GatedLiveKalshiOrderAdapter:
@@ -212,7 +215,7 @@ class GatedLiveKalshiOrderAdapter:
             self.repository.persist(attempt)
             raise LiveOrderError(f"live order denied: {guard.denial_reason}")
         response = self.client.create_order(request_payload=payload, settings=settings)
-        status = "accepted" if exchange_response_accepted(response) else "rejected"
+        status = "submitted" if exchange_response_accepted(response) else "rejected"
         attempt = LiveOrderAttempt(
             live_order_attempt_id=f"live_order_{uuid4().hex[:12]}",
             order_intent_id=intent.order_intent_id,
@@ -326,16 +329,18 @@ def exchange_response_accepted(response: Mapping[str, Any]) -> bool:
         status = str(order.get("status") or "").lower()
         return status not in {"rejected", "canceled", "failed"}
     status = str(response.get("status") or "").lower()
-    return status in {"accepted", "resting", "executed", "filled", "pending"}
+    if status:
+        return status in {"accepted", "resting", "executed", "filled", "pending"}
+    return bool(response.get("order_id"))
 
 
 def live_adapter_status_rows(settings: Settings | None = None) -> list[dict[str, str | bool]]:
     settings = settings or settings_from_env()
     guard = evaluate_runtime_guard(settings)
     return [
-        {"metric": "live_adapter_runtime_mode", "value": guard.runtime_mode.value},
-        {"metric": "live_adapter_ready", "value": guard.can_submit_live_orders},
-        {"metric": "live_adapter_guard_reason", "value": guard.denial_reason or ""},
+        {"metric": "mode", "value": guard.runtime_mode.value},
+        {"metric": "live_order_submit_ready", "value": guard.can_submit_live_orders},
+        {"metric": "live_order_block_reason", "value": guard.denial_reason or ""},
         {"metric": "kalshi_credentials_present", "value": guard.credentials_present},
     ]
 
@@ -343,7 +348,7 @@ def live_adapter_status_rows(settings: Settings | None = None) -> list[dict[str,
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphadb-live-orders")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    smoke = subparsers.add_parser("live-smoke", help="Submit one guarded live order smoke")
+    smoke = subparsers.add_parser("live-smoke", help="Submit one live order smoke")
     smoke.add_argument("--order-intent-id", required=True)
     status = subparsers.add_parser("status", help="Show live adapter readiness and attempts")
     status.add_argument("--limit", type=int, default=10)

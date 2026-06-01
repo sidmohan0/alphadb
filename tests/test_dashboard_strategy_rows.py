@@ -58,6 +58,8 @@ def test_dashboard_strategy_rows_reflect_persisted_runner_state() -> None:
     live_rows = live_order_rows(repository.database_url)
 
     assert any(row["metric"] == "run_id" and row["value"] == run.run_id for row in run_rows)
-    assert any(row["metric"] == "skipped" and row["value"] >= 1 for row in run_rows)
-    assert outcome_rows[0]["market_ticker"] == market
+    assert any(row["metric"] == "cycles_skipped" and row["value"] >= 1 for row in run_rows)
+    assert outcome_rows[0]["market"] == market
+    assert outcome_rows[0]["cycle_status"] == "cycle_skipped"
+    assert outcome_rows[0]["execution_status"] == "no_live_order"
     assert live_rows

@@ -233,12 +233,19 @@ class StrategyRunRepository:
                         d.selected_side,
                         d.skip_reason,
                         d.metadata->>'selected_ev_dollars' as selected_ev_dollars,
+                        d.metadata->>'selected_price_dollars' as selected_price_dollars,
+                        d.metadata->>'intended_quantity' as intended_quantity,
                         rd.status as risk_status,
                         rd.reason as risk_reason,
                         po.status as paper_status,
                         po.filled_quantity,
                         prc.realized_pnl_dollars,
                         prc.unrealized_pnl_dollars,
+                        loa.live_order_attempt_id,
+                        loa.status as live_submission_status,
+                        loa.request_payload as live_order_request,
+                        loa.response_payload as live_order_response,
+                        loa.created_at as live_order_created_at,
                         smo.latency_checkpoints,
                         smo.metadata
                     from strategy_market_outcomes smo
@@ -247,6 +254,8 @@ class StrategyRunRepository:
                     left join risk_decisions rd on rd.risk_decision_id = smo.risk_decision_id
                     left join paper_orders po on po.paper_order_id = smo.paper_order_id
                     left join paper_reconciliations prc on prc.paper_order_id = po.paper_order_id
+                    left join live_order_attempts loa
+                        on loa.live_order_attempt_id = smo.metadata->>'live_order_attempt_id'
                     {where}
                     order by smo.updated_at desc, smo.outcome_id desc
                     limit %s
@@ -303,7 +312,7 @@ class StrategyRunRepository:
                     """
                     select run_id, mode, market_series, status, started_at, metadata, created_at
                     from platform_runs
-                    where metadata->>'runner' = 'alphadb.strategy'
+                    where metadata->>'runner' in ('alphadb.strategy', 'gated-live')
                     order by created_at desc, run_id desc
                     limit 1
                     """
