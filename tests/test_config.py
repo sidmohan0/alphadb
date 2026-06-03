@@ -23,6 +23,10 @@ def test_settings_default_database_url_uses_configurable_local_port() -> None:
     assert settings.coinbase_product_id == "BTC-USD"
     assert settings.coinbase_granularity_seconds == 60
     assert settings.coinbase_lookback_minutes == 60
+    assert settings.x_api_base_url == "https://api.x.com"
+    assert settings.x_api_bearer_token is None
+    assert settings.x_api_daily_cap_usd is None
+    assert settings.x_api_default_output_root == "artifacts"
     assert settings.live_stake_cap_dollars == 1.0
     assert settings.max_daily_loss_dollars == 10.0
     assert settings.min_ev_dollars == 0.0
@@ -54,6 +58,10 @@ def test_settings_database_url_can_be_overridden() -> None:
             "ALPHADB_COINBASE_PRODUCT_ID": "ETH-USD",
             "ALPHADB_COINBASE_GRANULARITY_SECONDS": "300",
             "ALPHADB_COINBASE_LOOKBACK_MINUTES": "120",
+            "ALPHADB_X_API_BASE_URL": "https://api.x.test",
+            "ALPHADB_X_BEARER_TOKEN": "x-token",
+            "ALPHADB_X_API_DAILY_CAP_USD": "2.50",
+            "ALPHADB_X_API_DEFAULT_OUTPUT_ROOT": "research/external-signals",
             "ALPHADB_LIVE_STAKE_CAP_DOLLARS": "2.5",
             "ALPHADB_MAX_DAILY_LOSS_DOLLARS": "25",
             "ALPHADB_MIN_EV_DOLLARS": "0.02",
@@ -83,6 +91,10 @@ def test_settings_database_url_can_be_overridden() -> None:
     assert settings.coinbase_product_id == "ETH-USD"
     assert settings.coinbase_granularity_seconds == 300
     assert settings.coinbase_lookback_minutes == 120
+    assert settings.x_api_base_url == "https://api.x.test"
+    assert settings.x_api_bearer_token == "x-token"
+    assert settings.x_api_daily_cap_usd == 2.5
+    assert settings.x_api_default_output_root == "research/external-signals"
     assert settings.live_stake_cap_dollars == 2.5
     assert settings.max_daily_loss_dollars == 25.0
     assert settings.min_ev_dollars == 0.02

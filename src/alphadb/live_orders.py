@@ -179,6 +179,45 @@ class LiveOrderRepository:
                 row = cursor.fetchone()
         return float(row["submitted_max_cost"] if row else 0.0)
 
+    def filled_max_cost_dollars(self, *, trading_day: date) -> float:
+        day_start = datetime.combine(trading_day, datetime.min.time(), tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+        fill_count_expr = """
+            coalesce(
+                nullif(loa.response_payload->>'fill_count', '')::numeric,
+                nullif(loa.response_payload->>'fill_count_fp', '')::numeric,
+                nullif(loa.response_payload->>'filled_quantity', '')::numeric,
+                nullif(loa.response_payload#>>'{order,fill_count}', '')::numeric,
+                nullif(loa.response_payload#>>'{order,fill_count_fp}', '')::numeric,
+                nullif(loa.response_payload#>>'{order,filled_quantity}', '')::numeric,
+                0::numeric
+            )
+        """
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    select coalesce(
+                        sum(
+                            least(
+                                greatest(({fill_count_expr}), 0::numeric),
+                                oi.quantity::numeric
+                            )
+                            * (oi.max_cost_dollars / nullif(oi.quantity, 0))
+                        ),
+                        0
+                    )::float as filled_max_cost
+                    from live_order_attempts loa
+                    join order_intents oi on oi.order_intent_id = loa.order_intent_id
+                    where loa.status in ('submitted', 'accepted')
+                      and loa.created_at >= %s
+                      and loa.created_at < %s
+                    """,
+                    (day_start, day_end),
+                )
+                row = cursor.fetchone()
+        return float(row["filled_max_cost"] if row else 0.0)
+
     def accepted_max_cost_dollars(self, *, trading_day: date) -> float:
         return self.submitted_max_cost_dollars(trading_day=trading_day)
 

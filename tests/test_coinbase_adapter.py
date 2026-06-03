@@ -11,6 +11,7 @@ from alphadb.collectors.coinbase import (
     FixtureCoinbaseClient,
     MissingCoinbaseDataError,
     StaleCoinbaseDataError,
+    build_external_price_features,
 )
 from alphadb.config import settings_from_env
 from alphadb.events.log import RawEventLog
@@ -29,6 +30,42 @@ def coinbase_repository_or_skip() -> OperationalStateRepository:
         pytest.skip(f"Postgres is not available: {exc}")
     repository.apply_migrations()
     return repository
+
+
+def test_coinbase_market_structure_features_are_built_from_raw_candles() -> None:
+    features = build_external_price_features(
+        [
+            {
+                "timestamp": datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+                "open": 100,
+                "high": 101,
+                "low": 99,
+                "close": 100,
+                "volume": 2,
+            },
+            {
+                "timestamp": datetime(2026, 5, 1, 0, 1, tzinfo=UTC),
+                "open": 100,
+                "high": 103,
+                "low": 99,
+                "close": 102,
+                "volume": 3,
+            },
+            {
+                "timestamp": datetime(2026, 5, 1, 0, 2, tzinfo=UTC),
+                "open": 102,
+                "high": 104,
+                "low": 101,
+                "close": 103,
+                "volume": 4,
+            },
+        ]
+    )
+
+    assert features["coinbase_btc_momentum_1m"] > 0
+    assert features["coinbase_btc_realized_range_pct"] > 0
+    assert features["coinbase_btc_candle_shock_5m"] >= 0
+    assert features["coinbase_btc_volume"] == 4
 
 
 def test_coinbase_adapter_logs_feature_event_with_provenance_and_no_lookahead() -> None:

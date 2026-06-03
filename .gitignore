@@ -18,7 +18,16 @@ data/
 research/
 artifacts/
 *.parquet
+*.joblib
+*.pkl
+*.pickle
+*.onnx
+*.pt
+*.pth
+*.h5
 *.db
 *.sqlite
 *.sqlite3
 *.pem
+*.key
+*.log

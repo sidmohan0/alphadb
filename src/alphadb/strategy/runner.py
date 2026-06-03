@@ -551,11 +551,11 @@ class LiveDataGatedLiveRunner(LiveDataPaperRunner):
         trading_day: date,
         reported_realized_pnl_dollars: float,
     ) -> float:
-        submitted_cost = LiveOrderRepository(self.database_url).submitted_max_cost_dollars(
+        filled_cost = LiveOrderRepository(self.database_url).filled_max_cost_dollars(
             trading_day=trading_day
         )
         realized_loss = max(0.0, -reported_realized_pnl_dollars)
-        return -max(realized_loss, submitted_cost)
+        return -max(realized_loss, filled_cost)
 
     def run_loop(
         self,

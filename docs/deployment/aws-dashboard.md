@@ -1,10 +1,11 @@
 # AlphaDB AWS Dashboard Deployment
 
-This runbook prepares the target-platform dashboard for AWS without changing the
-Current MVP authority boundary. The deployed dashboard is an operations and
-research surface. It does not approve live-order cutover, and the runtime stays
-fail-closed for live order submission unless explicit cutover settings are added
-later.
+This runbook showcases AlphaDB's AWS-ready deployment path for a public
+prediction-market trading platform. The deployed dashboard is an operations and
+research surface backed by explicit secret management, managed infrastructure,
+and fail-closed runtime defaults. Live order submission remains
+operator-controlled and requires explicit runtime settings outside the default
+dashboard readiness path.
 
 ## Region Decision
 
@@ -59,10 +60,11 @@ ALPHADB_DASHBOARD_COOKIE_SECRET=<Secrets Manager value: random 32+ bytes>
 ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS=604800
 ```
 
-`ALPHADB_RUNTIME_MODE=paper` is the intended dashboard readiness mode. `fixture`
-is acceptable for pure container smoke tests. `gated-live`, live credentials,
-`ALPHADB_ENABLE_LIVE_ORDERS=1`, and `ALPHADB_HUMAN_CUTOVER_APPROVED=1` are out of
-scope for this dashboard deployment.
+`ALPHADB_RUNTIME_MODE=paper` is the intended public dashboard readiness mode.
+`fixture` is acceptable for pure container smoke tests. `gated-live`, live
+credentials, `ALPHADB_ENABLE_LIVE_ORDERS=1`, and
+`ALPHADB_HUMAN_CUTOVER_APPROVED=1` are operator-controlled settings and are out
+of scope for this public deployment path.
 
 ## Local AWS-Shaped Readiness
 

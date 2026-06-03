@@ -41,6 +41,10 @@ alphadb-evidence = "alphadb.evidence:main"
 alphadb-live-orders = "alphadb.live_orders:main"
 alphadb-deploy = "alphadb.deploy:main"
 alphadb-monitor = "alphadb.monitoring.status:main"
+alphadb-repo-hygiene = "alphadb.repo_hygiene:main"
+alphadb-settlement = "alphadb.settlement.cli:main"
+alphadb-model-eval = "alphadb.model_evaluation.cli:main"
+alphadb-external-signals = "alphadb.external_signals.cli:main"
 
 [project.optional-dependencies]
 dashboard = [

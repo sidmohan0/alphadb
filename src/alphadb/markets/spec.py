@@ -53,6 +53,107 @@ class TradingCutoffs(StrictModel):
     self_trade_prevention_type: str = Field(min_length=1)
 
 
+RuleVerificationStatus = Literal["confirmed", "requires_human_confirmation"]
+PayoutComparator = Literal["above", "below", "exactly", "at_least", "between"]
+
+
+class OfficialSettlementInputSource(StrictModel):
+    source_role: Literal["official_settlement_input"]
+    name: str = Field(min_length=1)
+    index_ticker: str = Field(min_length=1)
+    cadence_seconds: PositiveInt
+
+
+class SettlementRuleReference(StrictModel):
+    name: str = Field(min_length=1)
+    verification_status: RuleVerificationStatus
+    description: str = Field(min_length=1)
+
+
+class PayoutComparatorRule(StrictModel):
+    comparator: PayoutComparator
+    threshold_count: PositiveInt
+    lower_threshold_inclusive: bool | None
+    upper_threshold_inclusive: bool | None
+    exact_threshold_pays_yes: bool | None
+    description: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_comparator_shape(self) -> PayoutComparatorRule:
+        expected = {
+            "above": (1, False, None, False),
+            "below": (1, None, False, False),
+            "exactly": (1, None, None, True),
+            "at_least": (1, True, None, True),
+            "between": (2, True, True, None),
+        }[self.comparator]
+        actual = (
+            self.threshold_count,
+            self.lower_threshold_inclusive,
+            self.upper_threshold_inclusive,
+            self.exact_threshold_pays_yes,
+        )
+        if actual != expected:
+            raise ValueError(f"{self.comparator} comparator semantics do not match CRYPTO15M terms")
+        return self
+
+
+class FinalSettlementWindowRule(StrictModel):
+    name: Literal["final_window_average"]
+    duration_seconds: PositiveInt
+    cadence_seconds: PositiveInt
+    expected_print_count: PositiveInt
+    ends_at: Literal["market_close"]
+
+    @model_validator(mode="after")
+    def validate_expected_print_count(self) -> FinalSettlementWindowRule:
+        if self.duration_seconds % self.cadence_seconds != 0:
+            raise ValueError("final window duration must be divisible by print cadence")
+        expected = self.duration_seconds // self.cadence_seconds
+        if self.expected_print_count != expected:
+            raise ValueError("expected_print_count must match duration_seconds / cadence_seconds")
+        return self
+
+
+class SettlementInputQualityPolicy(StrictModel):
+    missing_prints: Literal["invalidate_row"]
+    duplicate_timestamps: Literal["invalidate_row"]
+    incomplete_window: Literal["invalidate_row"]
+    source_timestamp_after_decision: Literal["invalidate_row"]
+
+
+class SettlementTimestampSemantics(StrictModel):
+    authoritative_timestamp: Literal["official_effective_time"]
+    timezone: Literal["UTC"]
+    source_timestamp_field: str = Field(min_length=1)
+
+
+class SettlementSpec(StrictModel):
+    spec_version: str = Field(min_length=1)
+    market_series: str = Field(min_length=1)
+    settlement_family: Literal["listed_threshold_final_window_average"]
+    official_input_source: OfficialSettlementInputSource
+    payout_threshold_rule: SettlementRuleReference
+    payout_comparator_rules: tuple[PayoutComparatorRule, ...]
+    final_settlement_window: FinalSettlementWindowRule
+    input_quality_policy: SettlementInputQualityPolicy
+    timestamp_semantics: SettlementTimestampSemantics
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> SettlementSpec:
+        if self.official_input_source.cadence_seconds != self.final_settlement_window.cadence_seconds:
+            raise ValueError("official input cadence must match final settlement window cadence")
+        expected_comparators = {"above", "below", "exactly", "at_least", "between"}
+        comparators = {rule.comparator for rule in self.payout_comparator_rules}
+        if comparators != expected_comparators:
+            missing = sorted(expected_comparators - comparators)
+            extra = sorted(comparators - expected_comparators)
+            raise ValueError(f"payout comparator rules incomplete: missing={missing}, extra={extra}")
+        if len(self.payout_comparator_rules) != len(comparators):
+            raise ValueError("payout comparator rules must not contain duplicate comparators")
+        return self
+
+
 class MarketSpec(StrictModel):
     spec_version: str = Field(min_length=1)
     series: str = Field(min_length=1)
@@ -60,6 +161,7 @@ class MarketSpec(StrictModel):
     horizon_minutes: PositiveInt
     settlement_source: str = Field(min_length=1)
     settlement_reference: str = Field(min_length=1)
+    settlement_spec: SettlementSpec | None = None
     discovery_rules: DiscoveryRules
     feature_config: FeatureConfig
     label_function: LabelFunction
@@ -73,7 +175,106 @@ class MarketSpec(StrictModel):
             raise ValueError("discovery series_ticker must match series")
         if self.trading_cutoffs.decision_minute_offset >= self.horizon_minutes:
             raise ValueError("decision_minute_offset must be before market horizon")
+        if self.settlement_spec is not None:
+            if self.settlement_spec.market_series != self.series:
+                raise ValueError("settlement_spec market_series must match series")
+            if self.settlement_spec.official_input_source.name != self.settlement_source:
+                raise ValueError("settlement_spec official source must match settlement_source")
         return self
+
+
+def kxbtc15m_settlement_spec() -> SettlementSpec:
+    return SettlementSpec(
+        spec_version="kxbtc15m.settlement.v1",
+        market_series="KXBTC15M",
+        settlement_family="listed_threshold_final_window_average",
+        official_input_source=OfficialSettlementInputSource(
+            source_role="official_settlement_input",
+            name="CF Benchmarks RTI",
+            index_ticker="BRTI",
+            cadence_seconds=1,
+        ),
+        payout_threshold_rule=SettlementRuleReference(
+            name="listed_payout_threshold",
+            verification_status="confirmed",
+            description=(
+                "Concrete KXBTC15M market metadata supplies listed price levels "
+                "used as payout thresholds; CRYPTO15M terms do not define an "
+                "opening-window-derived reference."
+            ),
+        ),
+        payout_comparator_rules=kxbtc15m_payout_comparator_rules(),
+        final_settlement_window=FinalSettlementWindowRule(
+            name="final_window_average",
+            duration_seconds=60,
+            cadence_seconds=1,
+            expected_print_count=60,
+            ends_at="market_close",
+        ),
+        input_quality_policy=SettlementInputQualityPolicy(
+            missing_prints="invalidate_row",
+            duplicate_timestamps="invalidate_row",
+            incomplete_window="invalidate_row",
+            source_timestamp_after_decision="invalidate_row",
+        ),
+        timestamp_semantics=SettlementTimestampSemantics(
+            authoritative_timestamp="official_effective_time",
+            timezone="UTC",
+            source_timestamp_field="effective_time_utc",
+        ),
+    )
+
+
+def kxbtc15m_payout_comparator_rules() -> tuple[PayoutComparatorRule, ...]:
+    return (
+        PayoutComparatorRule(
+            comparator="above",
+            threshold_count=1,
+            lower_threshold_inclusive=False,
+            upper_threshold_inclusive=None,
+            exact_threshold_pays_yes=False,
+            description="Expiration value must be strictly greater than the listed threshold.",
+        ),
+        PayoutComparatorRule(
+            comparator="below",
+            threshold_count=1,
+            lower_threshold_inclusive=None,
+            upper_threshold_inclusive=False,
+            exact_threshold_pays_yes=False,
+            description="Expiration value must be strictly less than the listed threshold.",
+        ),
+        PayoutComparatorRule(
+            comparator="exactly",
+            threshold_count=1,
+            lower_threshold_inclusive=None,
+            upper_threshold_inclusive=None,
+            exact_threshold_pays_yes=True,
+            description=(
+                "Expiration value must equal the listed threshold at the specified precision."
+            ),
+        ),
+        PayoutComparatorRule(
+            comparator="at_least",
+            threshold_count=1,
+            lower_threshold_inclusive=True,
+            upper_threshold_inclusive=None,
+            exact_threshold_pays_yes=True,
+            description=(
+                "Expiration value must be greater than or equal to the listed threshold."
+            ),
+        ),
+        PayoutComparatorRule(
+            comparator="between",
+            threshold_count=2,
+            lower_threshold_inclusive=True,
+            upper_threshold_inclusive=True,
+            exact_threshold_pays_yes=None,
+            description=(
+                "Expiration value must be greater than or equal to the lower threshold "
+                "and less than or equal to the upper threshold."
+            ),
+        ),
+    )
 
 
 def kxbtc15m_spec() -> MarketSpec:
@@ -87,6 +288,7 @@ def kxbtc15m_spec() -> MarketSpec:
             "Kalshi crypto contracts settle from CF Benchmarks RTI; "
             "external BTC feeds are features only."
         ),
+        settlement_spec=kxbtc15m_settlement_spec(),
         discovery_rules=DiscoveryRules(
             series_ticker="KXBTC15M",
             recurrence_minutes=15,

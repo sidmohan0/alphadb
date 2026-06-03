@@ -16,6 +16,8 @@ DEFAULT_KALSHI_BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 DEFAULT_AWS_REGION = "us-east-2"
 DEFAULT_DASHBOARD_COOKIE_NAME = "alphadb_dashboard_auth"
 DEFAULT_DASHBOARD_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 7
+DEFAULT_X_API_BASE_URL = "https://api.x.com"
+DEFAULT_X_API_OUTPUT_ROOT = "artifacts"
 
 
 class SettingsError(ValueError):
@@ -42,6 +44,10 @@ class Settings:
     coinbase_product_id: str
     coinbase_granularity_seconds: int
     coinbase_lookback_minutes: int
+    x_api_base_url: str = DEFAULT_X_API_BASE_URL
+    x_api_bearer_token: str | None = None
+    x_api_daily_cap_usd: float | None = None
+    x_api_default_output_root: str = DEFAULT_X_API_OUTPUT_ROOT
     live_stake_cap_dollars: float = 1.0
     max_daily_loss_dollars: float = 10.0
     min_ev_dollars: float = 0.0
@@ -83,6 +89,16 @@ def _float(values: Mapping[str, str], key: str, default: str) -> float:
         raise SettingsError(f"{key} must be a number: {raw!r}") from exc
 
 
+def _optional_float(values: Mapping[str, str], key: str) -> float | None:
+    raw = _value(values, key)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise SettingsError(f"{key} must be a number: {raw!r}") from exc
+
+
 def validate_settings(settings: Settings) -> Settings:
     if not settings.streamlit_port.isdigit():
         raise SettingsError(f"ALPHADB_STREAMLIT_PORT must be a port number: {settings.streamlit_port!r}")
@@ -97,6 +113,10 @@ def validate_settings(settings: Settings) -> Settings:
         raise SettingsError("ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS must be positive")
     if not settings.dashboard_cookie_name:
         raise SettingsError("ALPHADB_DASHBOARD_COOKIE_NAME must not be empty")
+    if settings.x_api_daily_cap_usd is not None and settings.x_api_daily_cap_usd <= 0:
+        raise SettingsError("ALPHADB_X_API_DAILY_CAP_USD must be positive when set")
+    if not settings.x_api_default_output_root:
+        raise SettingsError("ALPHADB_X_API_DEFAULT_OUTPUT_ROOT must not be empty")
     return settings
 
 
@@ -127,6 +147,14 @@ def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
         coinbase_product_id=values.get("ALPHADB_COINBASE_PRODUCT_ID", "BTC-USD"),
         coinbase_granularity_seconds=_int(values, "ALPHADB_COINBASE_GRANULARITY_SECONDS", "60"),
         coinbase_lookback_minutes=_int(values, "ALPHADB_COINBASE_LOOKBACK_MINUTES", "60"),
+        x_api_base_url=values.get("ALPHADB_X_API_BASE_URL", DEFAULT_X_API_BASE_URL),
+        x_api_bearer_token=_value(values, "ALPHADB_X_BEARER_TOKEN")
+        or _value(values, "X_BEARER_TOKEN"),
+        x_api_daily_cap_usd=_optional_float(values, "ALPHADB_X_API_DAILY_CAP_USD"),
+        x_api_default_output_root=values.get(
+            "ALPHADB_X_API_DEFAULT_OUTPUT_ROOT",
+            DEFAULT_X_API_OUTPUT_ROOT,
+        ),
         live_stake_cap_dollars=_float(values, "ALPHADB_LIVE_STAKE_CAP_DOLLARS", "1.0"),
         max_daily_loss_dollars=_float(values, "ALPHADB_MAX_DAILY_LOSS_DOLLARS", "10.0"),
         min_ev_dollars=_float(values, "ALPHADB_MIN_EV_DOLLARS", "0.0"),
