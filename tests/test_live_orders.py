@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -8,6 +9,7 @@ from alphadb.live_orders import (
     GatedLiveKalshiOrderAdapter,
     LiveOrderError,
     LiveOrderRepository,
+    exchange_response_accepted,
     kalshi_order_request_from_intent,
     live_adapter_status_rows,
 )
@@ -95,28 +97,133 @@ def test_live_order_adapter_denies_paper_mode_and_missing_credentials() -> None:
             ),
         )
 
-    recent = LiveOrderRepository(repository.database_url).recent(limit=2)
-    assert {row["status"] for row in recent} == {"guard_denied"}
+    with repository.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select status
+                from live_order_attempts
+                where order_intent_id = %s
+                """,
+                (order_intent_id,),
+            )
+            statuses = {str(row["status"]) for row in cursor.fetchall()}
+    assert statuses == {"guard_denied"}
 
 
 def test_live_order_adapter_records_exchange_success_and_rejection_without_exposing_secrets() -> None:
     repository = live_order_repository_or_skip()
-    accepted_intent = approved_intent(repository)
+    submitted_intent = approved_intent(repository)
     rejected_intent = approved_intent(repository)
-    accepted_client = FakeOrderClient({"order": {"status": "accepted", "order_id": "abc"}})
+    submitted_client = FakeOrderClient({"order": {"status": "accepted", "order_id": "abc"}})
     rejected_client = FakeOrderClient({"order": {"status": "rejected", "reason": "bad_price"}})
 
-    accepted = GatedLiveKalshiOrderAdapter(
+    submitted = GatedLiveKalshiOrderAdapter(
         database_url=repository.database_url,
-        client=accepted_client,
-    ).submit_order_intent(order_intent_id=accepted_intent, settings=gated_settings())
+        client=submitted_client,
+    ).submit_order_intent(order_intent_id=submitted_intent, settings=gated_settings())
     rejected = GatedLiveKalshiOrderAdapter(
         database_url=repository.database_url,
         client=rejected_client,
     ).submit_order_intent(order_intent_id=rejected_intent, settings=gated_settings())
     rows = live_adapter_status_rows(gated_settings())
 
-    assert accepted.status == "accepted"
+    assert submitted.status == "submitted"
     assert rejected.status == "rejected"
-    assert accepted_client.requests[0][1] == "key-id"
+    assert submitted_client.requests[0][1] == "key-id"
     assert not any("key-id" in str(row) for row in rows)
+
+
+def test_filled_max_cost_counts_ioc_fills_not_submitted_notional() -> None:
+    repository = live_order_repository_or_skip()
+    unique_day = uuid4()
+    trading_day = date(
+        2031 + unique_day.bytes[0] % 60,
+        1 + unique_day.bytes[1] % 12,
+        1 + unique_day.bytes[2] % 28,
+    )
+    created_at = datetime(
+        trading_day.year,
+        trading_day.month,
+        trading_day.day,
+        12,
+        0,
+        tzinfo=UTC,
+    )
+    full_fill_intent = approved_intent(repository)
+    no_fill_intent = approved_intent(repository)
+    partial_fill_intent = approved_intent(repository)
+    intents = (full_fill_intent, no_fill_intent, partial_fill_intent)
+
+    full_fill = GatedLiveKalshiOrderAdapter(
+        database_url=repository.database_url,
+        client=FakeOrderClient(
+            {
+                "order_id": "full",
+                "fill_count": "1.00",
+                "remaining_count": "0.00",
+            }
+        ),
+    ).submit_order_intent(order_intent_id=full_fill_intent, settings=gated_settings())
+    no_fill = GatedLiveKalshiOrderAdapter(
+        database_url=repository.database_url,
+        client=FakeOrderClient(
+            {
+                "order_id": "none",
+                "fill_count": "0.00",
+                "remaining_count": "0.00",
+            }
+        ),
+    ).submit_order_intent(order_intent_id=no_fill_intent, settings=gated_settings())
+    partial_fill = GatedLiveKalshiOrderAdapter(
+        database_url=repository.database_url,
+        client=FakeOrderClient(
+            {
+                "order_id": "partial",
+                "fill_count": "0.50",
+                "remaining_count": "0.50",
+            }
+        ),
+    ).submit_order_intent(order_intent_id=partial_fill_intent, settings=gated_settings())
+
+    with repository.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update order_intents
+                set max_cost_dollars = 0.49
+                where order_intent_id in (%s, %s, %s)
+                """,
+                intents,
+            )
+            cursor.execute(
+                """
+                update live_order_attempts
+                set created_at = %s
+                where live_order_attempt_id in (%s, %s, %s)
+                """,
+                (
+                    created_at,
+                    full_fill.live_order_attempt_id,
+                    no_fill.live_order_attempt_id,
+                    partial_fill.live_order_attempt_id,
+                ),
+            )
+        connection.commit()
+
+    live_orders = LiveOrderRepository(repository.database_url)
+
+    assert live_orders.submitted_max_cost_dollars(trading_day=trading_day) == pytest.approx(1.47)
+    assert live_orders.filled_max_cost_dollars(trading_day=trading_day) == pytest.approx(0.735)
+
+
+def test_top_level_order_id_response_counts_as_accepted_ioc_attempt() -> None:
+    assert exchange_response_accepted(
+        {
+            "client_order_id": "intent_123",
+            "fill_count": "0.00",
+            "order_id": "order_123",
+            "remaining_count": "0.00",
+            "ts_ms": 1780292536260,
+        }
+    )

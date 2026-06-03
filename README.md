@@ -1,158 +1,200 @@
+<div align="center">
+
 # AlphaDB
+**Replayable, risk-controlled infrastructure for prediction-market trading systems.**
 
-AlphaDB is an experimental target platform for researching, replaying, and
-risk-controlling prediction-market trading systems.
+[![CI][ci-shield]][ci-url]
+[![Python][python-shield]][python-url]
+[![PostgreSQL][postgres-shield]][postgres-url]
+[![Streamlit][streamlit-shield]][streamlit-url]
+[![Docker Compose][compose-shield]][compose-url]
+[![License][license-shield]](#license)
 
-The project starts with Kalshi's `KXBTC15M` Bitcoin market family, but the
-platform is being built around reusable boundaries: explicit market
-specifications, append-only event capture, deterministic replay, Postgres-backed
-operational state, model registry records, shared decisioning, and risk-gated
-shadow and paper trading workflows.
+[ci-shield]: https://github.com/sidmohan0/alphadb/actions/workflows/ci.yml/badge.svg
+[ci-url]: https://github.com/sidmohan0/alphadb/actions/workflows/ci.yml
+[python-shield]: https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat&logo=python&logoColor=white
+[python-url]: https://www.python.org/
+[postgres-shield]: https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat&logo=postgresql&logoColor=white
+[postgres-url]: https://www.postgresql.org/
+[streamlit-shield]: https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?style=flat&logo=streamlit&logoColor=white
+[streamlit-url]: https://streamlit.io/
+[compose-shield]: https://img.shields.io/badge/Runtime-Docker%20Compose-2496ED?style=flat&logo=docker&logoColor=white
+[compose-url]: https://docs.docker.com/compose/
+[license-shield]: https://img.shields.io/badge/License-TBD-lightgrey?style=flat
 
-## Status
+</div>
 
-AlphaDB is an early platform scaffold. It is not a live trading bot, not a
-signals service, and not investment advice.
+AlphaDB is a target-platform workspace for researching, replaying, deploying,
+and risk-controlling prediction-market trading systems. It starts with Kalshi's
+`KXBTC15M` Bitcoin market family, but the design is intentionally broader:
+explicit market specifications, append-only event capture, deterministic replay,
+Postgres-backed operational state, model registry records, shared decisioning,
+and fail-closed runtime guards.
 
-The current implementation focus is the first target-platform live-prep slice:
+- Build market-family specs instead of one-off strategy scripts.
+- Capture raw events and feature rows with no-lookahead evidence.
+- Reuse one decision boundary across replay, shadow, paper, and guarded live modes.
+- Keep public development useful without live credentials or private artifacts.
+- Preserve a hard boundary between this target platform and any current live MVP.
 
-- A local health path for the Python package, Postgres runtime, tests, and
-  dashboard shell.
-- A `MarketSpec` registry with `KXBTC15M` as the first concrete market family.
-- A Postgres-backed operational-state tracer for runs, decisions, risk
-  decisions, order intents, paper execution, strategy outcomes, shadow
-  comparisons, evidence reports, and guarded live-order attempts.
-- Runtime modes for `fixture`, `shadow`, `paper`, and `gated-live`, with live
-  order submission denied by default.
-- A pinned Current MVP artifact loader, Coinbase feature adapter, Current MVP
-  feature-row parity builder, live-data paper runner, shadow parity runner,
-  gated-live Kalshi order adapter, and continuous gated-live strategy loop.
+AlphaDB is not a signals service, not investment advice, and not a promise of
+profitable trading. Live operation is outside the default contributor path and
+requires explicit operator configuration, risk gates, credentials, evidence, and
+human approval.
 
-Authenticated WebSocket ingestion remains gated work. AlphaDB is not
-live-authoritative until the human ALP-15 cutover approval happens.
+## Get Started
 
-## Project Boundary
+### Local
 
-AlphaDB is the target-platform workspace for a future reusable prediction-market
-trading system. It is intentionally separate from the current private Kalshi MVP
-runner, which remains authoritative until a documented cutover.
-
-This repository is meant to be public portfolio-quality infrastructure and
-research code. It should not contain live credentials, generated market data,
-private strategy artifacts, account-specific risk settings, or the operational
-history of the current MVP.
-
-Live trading is outside the default development path. Any live mode must be
-introduced behind explicit configuration, shadow-run evidence, paper-trading
-evidence, risk limits, rollback instructions, and a human approval step.
-
-## Core Ideas
-
-- `MarketSpec`: a typed description of a tradable market family, including
-  discovery rules, settlement source, feature configuration, label behavior, fee
-  assumptions, risk configuration, and trading cutoffs.
-- Raw event log: append-only capture of market snapshots, external feature
-  events, exchange events, execution events, receive timestamps, schema versions,
-  payload hashes, and raw payloads.
-- Operational state: transactional Postgres records for runs, market instances,
-  decisions, risk decisions, order intents, orders, fills, positions,
-  reconciliation, and model registry references.
-- Shared decision engine: runtime-independent decisioning that can be reused by
-  historical replay, shadow runs, paper trading, and eventually live trading.
-- Event-driven replay: deterministic reconstruction of features, model outputs,
-  decisions, risk outcomes, execution, positions, PnL, and diagnostics from raw
-  events and immutable artifacts.
-- Target-platform dashboard: a Streamlit-first operational and research surface
-  for health, replay diagnostics, paper trading, live-readiness checks, risk
-  state, PnL, latency, and model registry visibility.
-
-## Architecture Shape
-
-```text
-MarketSpec registry
-  -> ingestion adapters
-  -> raw event log
-  -> feature rows and no-lookahead ledger
-  -> model registry and model outputs
-  -> shared decision engine
-  -> risk gate and sizing
-  -> paper/live execution adapters
-  -> operational state, replay reports, and dashboard
-```
-
-The same domain contracts should be used across replay, shadow, paper, and live
-modes. The event source, clock, and exchange adapter can vary; the decision and
-risk boundary should remain inspectable and replayable.
-
-## Repository Layout
-
-```text
-.
-|-- CONTEXT.md              # Domain vocabulary and architectural boundary
-|-- docker-compose.yml      # Local Postgres and dashboard-oriented services
-|-- docs/                   # Agent and architecture notes
-|-- src/alphadb/            # Python package
-|-- tests/                  # Pytest suite
-`-- pyproject.toml          # Package metadata and tool configuration
-```
-
-## Local Development
-
-AlphaDB targets Python 3.12+.
+Install the package and run the test suite:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,dashboard]"
 pytest
 ```
 
-Start Postgres for local target-platform development:
+Start local Postgres:
 
 ```bash
 docker compose up -d postgres
 ```
 
-Run the same install/test path inside the Compose app container:
+Run the same health path inside the Compose app container:
 
 ```bash
 docker compose run --rm app bash -lc "python -m pip install -e '.[dev,dashboard]' && pytest -q && alphadb-health"
 ```
 
-Run the dashboard profile when dashboard work is active:
+### Dashboard
+
+Run the Streamlit dashboard against local Postgres:
 
 ```bash
 docker compose --profile dashboard up streamlit
 ```
 
-Inspect registered market specifications:
+Open `http://localhost:8501`. By default, Postgres is published on
+`localhost:55433` and Streamlit on `localhost:8501`. Override those with
+`ALPHADB_POSTGRES_PORT` and `ALPHADB_STREAMLIT_PORT`.
+
+### Configuration
+
+Use `.env.example` as the local configuration template:
+
+```bash
+cp .env.example .env
+```
+
+Do not commit `.env`, live credentials, private keys, model binaries, generated
+datasets, strategy logs, exchange account data, or private runtime artifacts.
+
+## What AlphaDB Does
+
+AlphaDB is organized around trading-system boundaries that stay inspectable
+under replay and fail closed around live money.
+
+| Surface | What it provides |
+| --- | --- |
+| `MarketSpec` registry | Typed market-family assumptions, starting with `KXBTC15M`. |
+| Raw event log | Append-only market, feature, exchange, and execution events with payload hashes. |
+| Feature ledger | Decision-time feature rows with no-lookahead evidence and artifact references. |
+| Model registry | Postgres metadata for immutable model, feature, calibration, and dataset artifacts. |
+| Decision engine | Runtime-independent order-or-skip decisions from state, features, quotes, and policy. |
+| Risk gate | Fail-closed sizing, loss, mode, and live-order checks before execution. |
+| Paper execution | Taker-only IOC simulation and reconciliation without live exchange control. |
+| Shadow comparison | Decision-boundary parity checks against an external or current MVP export. |
+| Dashboard | Streamlit operations and research surface for state, runtime guard, signals, and runs. |
+| AWS deployment | Secret-safe dashboard deployment path with managed infrastructure assumptions. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    spec["MarketSpec registry"] --> ingest["REST, WebSocket, fixture ingestion"]
+    ingest --> log["Raw event log"]
+    log --> features["Feature rows and no-lookahead ledger"]
+    features --> registry["Model registry and pinned artifacts"]
+    registry --> decision["Shared decision engine"]
+    decision --> risk["Risk gate and sizing"]
+    risk --> execute["Paper or gated-live execution"]
+    execute --> state["Operational state"]
+    state --> replay["Replay, evidence, dashboard"]
+    log --> replay
+```
+
+The same domain contracts are meant to run across fixture, replay, shadow,
+paper, and gated-live workflows. The event source, clock, and exchange adapter
+can change; the decision, risk, and audit boundary should remain reconstructable.
+
+## Runtime Modes
+
+| Mode | Purpose | Live orders |
+| --- | --- | --- |
+| `fixture` | Deterministic local development and tests. | Disabled |
+| `shadow` | Compare AlphaDB decisions against another decision boundary. | Disabled |
+| `paper` | Run live-data or replay-backed simulations without exchange control. | Disabled |
+| `gated-live` | Wire live order submission behind explicit operator gates. | Disabled until all gates pass |
+
+Inspect the current runtime guard:
+
+```bash
+alphadb-runtime status
+```
+
+## Examples
+
+### Market Specs
+
+Inspect registered market families:
 
 ```bash
 alphadb-markets list
 alphadb-markets inspect KXBTC15M --json
 ```
 
-Run the bounded, read-only KXBTC15M REST collector smoke with deterministic
-fixture data:
+### Settlement Readiness
+
+Run the public synthetic settlement-state readiness workflow:
+
+```bash
+alphadb-settlement synthetic-readiness
+```
+
+This uses bundled synthetic fixtures only. It writes generated settlement-state
+rows, summaries, public-safe manifests, and readiness reports under ignored
+`artifacts/settlement-state/` output by default. Synthetic readiness is not a
+strategy promotion decision and does not imply live-trading readiness.
+
+### Market Collection
+
+Run a bounded, read-only `KXBTC15M` collector smoke with fixture data:
 
 ```bash
 alphadb-collect kxbtc15m-smoke --source fixture --max-markets 1
 alphadb-collect status
 ```
 
-To opt into Kalshi public market-data endpoints, use
-`--source kalshi-public`. This path only fetches market data and order books;
-it does not have order-entry code.
+Opt into Kalshi public market-data endpoints:
 
-Register and inspect model artifact metadata without storing model binaries in
-Postgres:
+```bash
+alphadb-collect kxbtc15m-smoke --source kalshi-public --max-markets 1
+```
+
+This path fetches market data and order books only. It does not contain
+order-entry behavior.
+
+### Model Registry And Decisions
+
+Register model artifact metadata without storing model binaries in Postgres:
 
 ```bash
 alphadb-models register-demo --series KXBTC15M
 alphadb-models list --series KXBTC15M
 ```
 
-Build decision-time feature rows with no-lookahead evidence:
+Build a decision-time feature row:
 
 ```bash
 alphadb-features build-row \
@@ -160,29 +202,27 @@ alphadb-features build-row \
   --market-ticker <market_ticker> \
   --model-id <model_id> \
   --decision-timestamp 2026-05-31T21:13:00+00:00
-alphadb-features list --run-id <run_id>
 ```
 
-Evaluate and persist a runtime-independent decision candidate:
+Evaluate a runtime-independent decision candidate:
 
 ```bash
 alphadb-decide evaluate \
   --feature-row-id <feature_row_id> \
   --probability-yes 0.62
-alphadb-decide list --run-id <run_id>
 ```
 
-Apply the fail-closed risk gate and create an approved order intent only when
-policy allows it:
+Apply the risk gate and create an approved order intent only when policy allows:
 
 ```bash
 alphadb-risk evaluate \
   --decision-id <decision_id> \
   --realized-pnl-dollars 0
-alphadb-risk list --decision-id <decision_id>
 ```
 
-Run paper-only taker IOC execution and reconciliation:
+### Paper Execution And Replay
+
+Run taker-only IOC paper execution:
 
 ```bash
 alphadb-paper execute \
@@ -190,7 +230,6 @@ alphadb-paper execute \
   --side yes \
   --available-price-dollars 0.52 \
   --available-quantity 1
-alphadb-paper status
 ```
 
 Build an event-driven replay report from raw events through paper execution:
@@ -204,22 +243,35 @@ alphadb-replay report \
   --probability-yes 0.65
 ```
 
-Compare AlphaDB and Current MVP decision-boundary records without giving
-AlphaDB live control:
+### Shadow Parity
+
+Compare two decision-boundary records without giving AlphaDB live control:
 
 ```bash
 alphadb-shadow compare \
   --alpha-json '{"market_ticker":"..."}' \
   --current-json '{"market_ticker":"..."}'
-alphadb-shadow status
 ```
 
-Exercise WebSocket ingestion readiness with mocked events. Live WebSocket smoke
-is opt-in only and requires credentials from environment variables outside Git:
+Import an external decision-boundary export and compare parity:
+
+```bash
+alphadb-shadow-current-mvp import /path/to/current-mvp-boundary.json
+alphadb-shadow-parity compare-market --run-id <run_id> --market-ticker <market_ticker>
+```
+
+### WebSocket Readiness
+
+Exercise WebSocket ingestion with mocked events:
 
 ```bash
 alphadb-ws mock-smoke --market-ticker <market_ticker> --run-id <run_id>
+```
 
+Live WebSocket smoke is opt-in only and requires credentials from environment
+variables outside Git:
+
+```bash
 ALPHADB_ENABLE_LIVE_WS_SMOKE=1 \
 ALPHADB_KALSHI_WS_URL=wss://... \
 KALSHI_API_KEY_ID=... \
@@ -227,13 +279,9 @@ KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
 alphadb-ws live-smoke
 ```
 
-Inspect runtime guard state:
+### Live-Data Paper Runs
 
-```bash
-alphadb-runtime status
-```
-
-Validate pinned Current MVP strategy artifacts from local-only config:
+Validate pinned model artifacts from local-only config:
 
 ```bash
 ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
@@ -241,18 +289,16 @@ ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
 alphadb-artifacts status
 ```
 
-Run one bounded KXBTC15M live-data paper cycle with fixture market data:
+Run one bounded `KXBTC15M` paper cycle with fixture market data:
 
 ```bash
 ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
 ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
 alphadb-strategy paper-cycle --source fixture --now 2026-05-31T21:13:00Z
-
-alphadb-strategy status
 ```
 
 Run one hour of live-data paper evidence against live Kalshi public market data
-and live Coinbase features. This does not submit real orders:
+and Coinbase features. This does not submit real orders:
 
 ```bash
 ALPHADB_RUNTIME_MODE=paper \
@@ -265,14 +311,6 @@ ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
 alphadb-strategy paper-loop --source live --duration-minutes 60 --max-markets 3
 ```
 
-Import a Current MVP decision-boundary export and compare parity:
-
-```bash
-alphadb-shadow-current-mvp import /path/to/current-mvp-boundary.json
-alphadb-shadow-parity compare-market --run-id <run_id> --market-ticker <market_ticker>
-alphadb-shadow status
-```
-
 Build an evidence report for a bounded paper run:
 
 ```bash
@@ -281,7 +319,9 @@ alphadb-evidence report \
   --observed-end 2026-05-31T22:13:00Z
 ```
 
-Inspect the gated-live adapter. The smoke command is opt-in and still fails
+### Gated Live Adapter
+
+Inspect the live-order adapter. The smoke command remains opt-in and fails
 closed unless runtime mode, credentials, explicit live enablement, and human
 cutover approval are all present:
 
@@ -297,10 +337,8 @@ KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
 alphadb-live-orders live-smoke --order-intent-id <order_intent_id>
 ```
 
-After the one-hour evidence report passes and ALP-15 is approved, run one
-guarded live-money cycle or the continuous live loop. The live loop uses live
-market data only, submits taker-only IOC orders through the gated-live adapter,
-and exits non-zero if a cycle records an error:
+Operator-controlled live-money cycles should run only after evidence, risk,
+credential, rollback, and human approval gates are satisfied:
 
 ```bash
 ALPHADB_RUNTIME_MODE=gated-live \
@@ -314,7 +352,11 @@ KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
 ALPHADB_ARTIFACT_ROOT=/path/to/private/artifacts \
 ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
 alphadb-strategy gated-live-cycle --max-markets 1
+```
 
+Continuous live loops follow the same gate pattern:
+
+```bash
 ALPHADB_RUNTIME_MODE=gated-live \
 ALPHADB_ENABLE_LIVE_ORDERS=1 \
 ALPHADB_HUMAN_CUTOVER_APPROVED=1 \
@@ -328,65 +370,84 @@ ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
 alphadb-strategy gated-live-loop --max-markets 3
 ```
 
-Keep the current private MVP runner available as rollback until the AlphaDB
-live smoke and first gated-live cycle both succeed.
+## Dashboard And Deployment
 
-By default, local Postgres is published on `localhost:55433` and Streamlit on
-`localhost:8501`. Override those with `ALPHADB_POSTGRES_PORT` and
-`ALPHADB_STREAMLIT_PORT` when needed. Override the Kalshi REST base URL with
-`ALPHADB_KALSHI_BASE_URL`.
+The dashboard is a Streamlit-first operations and research surface backed by
+Postgres. In AWS-like environments, dashboard access requires a four-digit PIN
+and signed cookie secret supplied outside Git.
 
-The default local Postgres URL is:
+Run deployment-shaped local checks:
 
-```text
-postgresql://alphadb:alphadb@localhost:55433/alphadb
+```bash
+export DATABASE_URL=postgresql://alphadb:alphadb@localhost:55433/alphadb
+export ALPHADB_ENV=aws
+export AWS_REGION=us-east-2
+export ALPHADB_AWS_REGION=us-east-2
+export ALPHADB_RUNTIME_MODE=paper
+export ALPHADB_ENABLE_LIVE_ORDERS=0
+export ALPHADB_HUMAN_CUTOVER_APPROVED=0
+export ALPHADB_DASHBOARD_PIN=1234
+export ALPHADB_DASHBOARD_COOKIE_SECRET="$(openssl rand -hex 32)"
+
+alphadb-deploy migrate
+alphadb-deploy seed-readiness --series KXBTC15M
+alphadb-deploy smoke
 ```
 
-Use `.env.example` as the local configuration template. Do not commit secrets,
-live credentials, generated datasets, model binaries, or exchange/account
-artifacts.
+See [docs/deployment/aws-dashboard.md](docs/deployment/aws-dashboard.md) for the
+ECS/Fargate and EC2 dashboard deployment paths.
 
-## Public Repo Metadata
-
-Recommended GitHub description:
-
-> Replayable, risk-controlled prediction-market trading platform for research,
-> shadow evaluation, and paper execution.
-
-Recommended GitHub topics:
+## Repository Layout
 
 ```text
-prediction-markets
-kalshi
-algorithmic-trading
-trading-systems
-market-data
-event-sourcing
-event-driven
-risk-management
-paper-trading
-backtesting
-python
-postgresql
-streamlit
-pydantic
-docker-compose
-model-registry
-mlops
-quant-research
-portfolio-project
+.
+|-- CONTEXT.md              # Domain vocabulary and architecture boundary
+|-- deploy/aws/             # Dashboard deployment templates and helper scripts
+|-- docs/                   # Agent, deployment, public profile, and settlement notes
+|-- src/alphadb/            # Python package
+|-- tests/                  # Pytest suite
+|-- docker-compose.yml      # Local Postgres and dashboard services
+`-- pyproject.toml          # Package metadata, scripts, and tool config
 ```
+
+## Repository Hygiene
+
+The public repository is designed to be useful without private runtime material.
+Run the hygiene gate before opening a pull request:
+
+```bash
+alphadb-repo-hygiene check
+```
+
+Run the public-share audit before sending the repository link widely:
+
+```bash
+alphadb-repo-hygiene audit
+```
+
+Use `--strict-local` when ignored local sensitive files should fail the audit
+too. The audit distinguishes tracked Git blockers from ignored local files such
+as `.env`, private keys, model artifacts, generated datasets, and strategy logs.
+
+## Roadmap
+
+AlphaDB is early but functional. Active roadmap areas include authenticated
+Kalshi WebSocket ingestion, broader market-family support, richer replay
+diagnostics, research artifact manifests, live-data paper evidence, and a
+documented live cutover path.
+
+The current MVP remains authoritative until a deliberate cutover. AlphaDB may
+shadow it, compare against it, and prepare target-platform infrastructure, but
+this repository should not assume control of any existing live runner by default.
 
 ## Non-Goals
 
-- AlphaDB does not replace the current private MVP until a deliberate cutover.
 - AlphaDB does not publish a turnkey profitable strategy.
-- AlphaDB does not require live exchange credentials for normal development or
-  tests.
-- AlphaDB does not store private account data, raw generated datasets, model
-  binaries, or secrets in Git.
+- AlphaDB does not require live exchange credentials for normal development or tests.
+- AlphaDB does not store private account data, raw generated datasets, model binaries, or secrets in Git.
+- AlphaDB does not make live order submission the default path.
 
 ## License
 
-License TBD before public release. Until a license is added, this code is not
-offered under an open-source license.
+License TBD before public release or broad outside contribution. Until a license
+is added, this code is not offered under an open-source license.

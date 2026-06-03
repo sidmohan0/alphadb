@@ -247,7 +247,7 @@ def build_external_price_features(candles: Sequence[Mapping[str, Any]]) -> dict[
         if closes[index - 1] > 0 and closes[index] > 0
     ]
     prev_close = closes[-2] if len(closes) >= 2 else None
-    return {
+    features = {
         "external_granularity_seconds": 60.0,
         "external_open": float(latest["open"]),
         "external_high": float(latest["high"]),
@@ -263,6 +263,60 @@ def build_external_price_features(candles: Sequence[Mapping[str, Any]]) -> dict[
         "external_realized_vol_5": sample_std(log_returns[-5:]),
         "external_realized_vol_15": sample_std(log_returns[-15:]),
     }
+    features.update(build_coinbase_btc_market_structure_features(candles, log_returns))
+    return features
+
+
+def build_coinbase_btc_market_structure_features(
+    candles: Sequence[Mapping[str, Any]],
+    log_returns: Sequence[float],
+) -> dict[str, float]:
+    latest = candles[-1]
+    closes = [float(row["close"]) for row in candles]
+    close = float(latest["close"])
+    open_ = float(latest["open"])
+    high = float(latest["high"])
+    low = float(latest["low"])
+    volume = float(latest["volume"])
+    log_return_1 = float(log_returns[-1]) if log_returns else 0.0
+    close_to_open = 0.0 if open_ == 0 else (close / open_) - 1.0
+    range_pct = 0.0 if close == 0 else (high - low) / close
+    vol_5 = sample_std(log_returns[-5:])
+    vol_15 = sample_std(log_returns[-15:])
+    features = {
+        "coinbase_btc_momentum_1m": 0.0 if len(closes) < 2 else (close / closes[-2]) - 1.0,
+        "coinbase_btc_log_momentum_1m": log_return_1,
+        "coinbase_btc_abs_log_momentum_1m": abs(log_return_1),
+        "coinbase_btc_close_to_open_return": close_to_open,
+        "coinbase_btc_candle_body_pct": 0.0 if open_ == 0 else (close - open_) / open_,
+        "coinbase_btc_realized_range_pct": range_pct,
+        "coinbase_btc_realized_volatility_5m": vol_5,
+        "coinbase_btc_realized_volatility_15m": vol_15,
+        "coinbase_btc_volatility_ratio_15m_5m": vol_15 / max(vol_5, 1e-12),
+        "coinbase_btc_candle_shock_5m": abs(log_return_1) / max(vol_5, 1e-12),
+        "coinbase_btc_range_shock_5m": range_pct / max(vol_5, 1e-12),
+        "coinbase_btc_continuation_pressure": log_return_1 * close_to_open,
+        "coinbase_btc_reversal_pressure": -(log_return_1 * close_to_open),
+        "coinbase_btc_volume": volume,
+        "coinbase_btc_log_volume": math.log1p(max(volume, 0.0)),
+    }
+    for window in (5, 15):
+        if len(closes) > window and closes[-window - 1] > 0:
+            features[f"coinbase_btc_momentum_{window}m"] = (close / closes[-window - 1]) - 1.0
+        trailing = candles[-window:]
+        if trailing:
+            high_window = max(float(row["high"]) for row in trailing)
+            low_window = min(float(row["low"]) for row in trailing)
+            volume_window = sum(float(row["volume"]) for row in trailing)
+            features[f"coinbase_btc_realized_range_{window}m_pct"] = (
+                0.0 if close == 0 else (high_window - low_window) / close
+            )
+            features[f"coinbase_btc_volume_{window}m"] = volume_window
+    volume_5 = features.get("coinbase_btc_volume_5m")
+    volume_15 = features.get("coinbase_btc_volume_15m")
+    if volume_5 is not None and volume_15 is not None:
+        features["coinbase_btc_volume_ratio_5m_15m"] = volume_5 / max(volume_15, 1e-12)
+    return features
 
 
 def sample_std(values: Sequence[float]) -> float:

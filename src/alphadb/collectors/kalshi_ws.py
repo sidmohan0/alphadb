@@ -1,7 +1,7 @@
 """Authenticated Kalshi WebSocket ingestion readiness.
 
-Normal tests and local smoke paths use mocked WebSocket events. Live smoke is
-guarded behind explicit environment configuration and does not run by default.
+Normal tests and local smoke paths use mocked WebSocket events. Live smoke needs
+explicit environment configuration and does not run by default.
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     mock_parser.add_argument("--market-ticker", required=True)
     mock_parser.add_argument("--run-id", default=None)
 
-    subparsers.add_parser("live-smoke", help="Validate guarded live WS smoke configuration")
+    subparsers.add_parser("live-smoke", help="Validate live WS smoke configuration")
     return parser
 
 

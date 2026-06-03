@@ -15,6 +15,7 @@ def ok_package() -> ComponentHealth:
 def test_collect_health_reports_ok_when_components_are_ok() -> None:
     settings = Settings(
         environment="test",
+        aws_region="us-east-2",
         database_url="postgresql://alphadb:alphadb@localhost:55433/alphadb",
         streamlit_port="8501",
         runtime_mode="fixture",
@@ -53,6 +54,7 @@ def test_collect_health_reports_ok_when_components_are_ok() -> None:
 def test_collect_health_reports_error_when_database_is_unavailable() -> None:
     settings = Settings(
         environment="test",
+        aws_region="us-east-2",
         database_url="postgresql://alphadb:alphadb@localhost:55433/alphadb",
         streamlit_port="8501",
         runtime_mode="fixture",

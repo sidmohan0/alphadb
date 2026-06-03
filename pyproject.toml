@@ -14,6 +14,7 @@ dependencies = [
   "pydantic>=2.7",
   "psycopg[binary]>=3.2",
   "pyyaml>=6.0",
+  "scikit-learn==1.6.1",
 ]
 
 [project.scripts]
@@ -38,9 +39,18 @@ alphadb-ws = "alphadb.collectors.kalshi_ws:main"
 alphadb-strategy = "alphadb.strategy.runner:main"
 alphadb-evidence = "alphadb.evidence:main"
 alphadb-live-orders = "alphadb.live_orders:main"
+alphadb-deploy = "alphadb.deploy:main"
+alphadb-monitor = "alphadb.monitoring.status:main"
+alphadb-repo-hygiene = "alphadb.repo_hygiene:main"
+alphadb-settlement = "alphadb.settlement.cli:main"
+alphadb-model-eval = "alphadb.model_evaluation.cli:main"
+alphadb-external-signals = "alphadb.external_signals.cli:main"
 
 [project.optional-dependencies]
-dashboard = ["streamlit>=1.35"]
+dashboard = [
+  "streamlit>=1.38",
+  "streamlit-cookies-controller>=0.0.4",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",
