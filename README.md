@@ -68,28 +68,33 @@ docker compose run --rm app bash -lc "python -m pip install -e '.[dev,dashboard]
 
 ### Cockpit
 
-Run the Python AlphaDB API and legacy compatibility surface against local
-Postgres:
+Start the canonical local Cockpit stack:
 
 ```bash
-docker compose --profile dashboard up dashboard
+docker compose --profile cockpit up --build cockpit
 ```
 
-Then run the canonical local Cockpit:
+Open `http://localhost:3000`. This one Compose profile starts:
+
+- Postgres, published on `localhost:55433` by default.
+- The Python AlphaDB API and legacy compatibility surface, published on
+  `localhost:8501` by default.
+- The Next.js Cockpit, published on `localhost:3000` by default.
+
+The Cockpit calls the Python AlphaDB API through `/api/alphadb/*`; the Next.js
+service is not given `DATABASE_URL` and does not connect directly to Postgres.
+Override the published host ports with `ALPHADB_POSTGRES_PORT`,
+`ALPHADB_DASHBOARD_PORT`, and `ALPHADB_COCKPIT_PORT` when needed.
+
+Run the AFK-agent smoke check after the stack is up:
 
 ```bash
-cd apps/dashboard
-corepack enable
-pnpm install
-pnpm dev
+./scripts/smoke-local-cockpit.sh
 ```
 
-Open `http://localhost:3000`. By default, Postgres is published on
-`localhost:55433`, the Python AlphaDB API and legacy compatibility surface run
-on `localhost:8501`, and the Cockpit proxies API requests through
-`/api/alphadb/*`. Override the Python API port with `ALPHADB_DASHBOARD_PORT`
-and set `ALPHADB_API_BASE_URL` for the Cockpit when the API is not on
-`http://127.0.0.1:8501`.
+It checks the direct Python compatibility health endpoint, the Cockpit page,
+and the proxied Cockpit `/api/alphadb/health` route against the Python service.
+For more detail, see [docs/deployment/local-cockpit.md](docs/deployment/local-cockpit.md).
 
 ### Configuration
 
@@ -421,6 +426,13 @@ Cockpit does not connect directly to Postgres or own trading logic.
 The canonical local operator URL is the Cockpit at `http://localhost:3000`.
 The Python service on `http://localhost:8501` is the local AlphaDB API target
 and legacy compatibility surface during the MVP transition.
+
+Start both services with local Postgres through the Cockpit Compose profile:
+
+```bash
+docker compose --profile cockpit up --build cockpit
+./scripts/smoke-local-cockpit.sh
+```
 
 The current AWS dashboard deployment path still runs the legacy Python
 dashboard service from `alphadb-dashboard`. Serving the Next.js Cockpit at the

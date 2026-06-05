@@ -114,26 +114,27 @@ export ALPHADB_DASHBOARD_COOKIE_SECRET="$(openssl rand -hex 32)"
 .venv/bin/alphadb-deploy smoke
 ```
 
-Run the production-style Python API and legacy compatibility container locally:
+Run the production-style Python API and legacy compatibility container locally
+when you only need the Python surface:
 
 ```bash
 docker build -t alphadb-dashboard:local .
 docker compose --profile dashboard-runtime up --build dashboard-runtime
 ```
 
-For the canonical local operator surface, run Cockpit separately:
+For the canonical local operator surface, start the one-command Cockpit stack:
 
 ```bash
-cd apps/dashboard
-corepack enable
-pnpm install
-ALPHADB_API_BASE_URL=http://127.0.0.1:8501 pnpm dev
+docker compose --profile cockpit up --build cockpit
+./scripts/smoke-local-cockpit.sh
 ```
 
 Open `http://localhost:3000` and confirm the Cockpit opens on the Live workspace.
 The Python service remains available at `http://localhost:8501` for AlphaDB API
-proxying and legacy compatibility while the MVP transition is in progress. The
-smoke command should report:
+proxying and legacy compatibility while the MVP transition is in progress. See
+[local-cockpit.md](local-cockpit.md) for the local stack and proxy smoke path.
+
+The AWS-shaped smoke command should report:
 
 - `dashboard_auth.ok=true`
 - `migrations.ok=true`
