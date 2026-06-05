@@ -1,263 +1,157 @@
-# AlphaDB AWS Dashboard Deployment
+# AlphaDB AWS Cockpit Deployment
 
-This runbook captures the current AWS-ready deployment path for AlphaDB's
-legacy Python dashboard service and AlphaDB API compatibility surface. The
-canonical product UI is now the Next.js Cockpit. Local and future AWS operator
-work should treat Cockpit as the user-facing surface and the Python service as
-the API/runtime owner until the AWS deployment wiring serves Cockpit at the
-public dashboard URL.
+This is the canonical AWS operator path for the MVP cutover.
 
-## Region Decision
+The public AWS URL serves the production-built Next.js Cockpit. Browser API
+calls stay same-origin at `/api/alphadb/*`; the Cockpit server proxies those
+requests to a private Python AlphaDB API ECS service through VPC-only service
+discovery. The Python service remains the AlphaDB API and Postgres owner. The
+Cockpit does not receive database credentials.
 
-Default deployment region: `us-east-2`.
+The previous Python-only public dashboard path is deprecated after this cutover.
+The Python `alphadb-dashboard` command may still serve legacy HTML routes as a
+private compatibility surface, but it is not the public operator UI.
 
-Grounding as of 2026-06-01:
-
-- Kalshi's current documentation points production REST traffic at
-  `https://external-api.kalshi.com/trade-api/v2`, with WebSocket traffic at the
-  matching `external-api-ws.kalshi.com` host.
-- A live DNS check from this workspace returned both production hostnames as
-  CNAMEs to `elections-external-api-107430227.us-east-2.elb.amazonaws.com`.
-- AWS documents `us-east-2` as US East (Ohio).
-
-Re-check before any live cutover or latency-sensitive move:
-
-```bash
-dig +short external-api.kalshi.com CNAME
-dig +short external-api-ws.kalshi.com CNAME
-curl -sS -o /dev/null \
-  -w '%{remote_ip} connect=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total}\n' \
-  https://external-api.kalshi.com/trade-api/v2/exchange/status
-```
-
-If the CNAME stops naming `us-east-2`, update `DEFAULT_AWS_REGION`, the AWS
-template parameter default, and this runbook before deploying latency-sensitive
-collectors or strategy workers.
-
-Sources:
-
-- [Kalshi API environments](https://docs.kalshi.com/getting_started/api_environments)
-- [Kalshi API docs](https://docs.kalshi.com/api-reference/exchange/get-exchange-status)
-- [Kalshi market data quick start](https://docs.kalshi.com/getting_started/quick_start_market_data)
-- [AWS Region table](https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html)
-- [DNS snapshot for external-api.kalshi.com](https://www.vedbex.com/dns/external-api.kalshi.com)
-
-## Required Runtime Values
-
-For AWS-like environments, use Secrets Manager for secret values:
+## Boundary
 
 ```text
-ALPHADB_ENV=aws
+browser -> public ALB -> Cockpit ECS service -> /api/alphadb/* proxy -> private AlphaDB API ECS service -> managed Postgres
+```
+
+- Public surface: Cockpit only.
+- Private product API: AlphaDB API only.
+- Private state: managed Postgres, provided before this stack is deployed.
+- Live worker: unchanged and out of scope for this deployment.
+
+## Required Inputs
+
+Use existing AWS resources and Secrets Manager values. Do not pass raw secret
+values to the deploy script.
+
+```text
+AWS_PROFILE=alphadb
 AWS_REGION=us-east-2
-ALPHADB_AWS_REGION=us-east-2
-DATABASE_URL=<Secrets Manager value>
-ALPHADB_DASHBOARD_PORT=8501
+STACK_NAME=alphadb-cockpit
+SERVICE_NAME=alphadb-cockpit
+ECR_REPOSITORY=alphadb-cockpit
+VPC_ID=<vpc-id>
+PUBLIC_SUBNET_IDS=<public-subnet-a>,<public-subnet-b>
+PRIVATE_SUBNET_IDS=<private-subnet-a>,<private-subnet-b>
+DATABASE_URL_SECRET_ARN=<secret arn containing DATABASE_URL>
+COCKPIT_PIN_SECRET_ARN=<secret arn containing four-digit PIN>
+COCKPIT_COOKIE_SECRET_ARN=<secret arn containing random cookie secret>
+```
+
+Optional MVP knobs:
+
+```text
+ASSIGN_PUBLIC_IP=DISABLED
+PRIVATE_NAMESPACE_NAME=alphadb.local
 ALPHADB_RUNTIME_MODE=gated-live
-ALPHADB_ENABLE_LIVE_ORDERS=0
-ALPHADB_HUMAN_CUTOVER_APPROVED=0
-ALPHADB_DASHBOARD_PIN=<Secrets Manager value: exactly four digits>
-ALPHADB_DASHBOARD_COOKIE_SECRET=<Secrets Manager value: random 32+ bytes>
-ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS=604800
+PLATFORM=linux/arm64
+DRY_RUN=1
+SKIP_BUILD=1
+SKIP_PUSH=1
+SKIP_MIGRATE=1
+SKIP_SMOKE=1
 ```
 
-`ALPHADB_RUNTIME_MODE=gated-live` keeps the dashboard environment aligned with
-the live control plane. The dashboard web task still cannot submit orders because
-`ALPHADB_ENABLE_LIVE_ORDERS=0`, `ALPHADB_HUMAN_CUTOVER_APPROVED=0`, and Kalshi
-live credentials are not attached to the dashboard service. `fixture`, `shadow`,
-and `paper` are acceptable only for local/container readiness checks, not the AWS
-operator console.
+`ASSIGN_PUBLIC_IP=ENABLED` is only for smoke deployments in public subnets
+without NAT. The preferred shape is private task subnets with managed egress.
 
-The dashboard-owned runtime config stored in Postgres contains only non-secret
-MVP knobs:
+## Deploy
 
-- Max order dollars.
-- Max market exposure dollars.
-- Max daily loss dollars.
-- Min edge.
-- Max markets.
-
-Database URLs, Kalshi credentials, private keys, dashboard PINs, cookie secrets,
-subnets, security groups, and task wiring stay in Secrets Manager or AWS
-infrastructure configuration. The live worker reads the latest active Postgres
-config at run start and records the config id/version/snapshot in each run
-manifest.
-
-## Local AWS-Shaped Readiness
-
-Install the local package with dashboard and dev dependencies:
+Run one command from the repository root:
 
 ```bash
-.venv/bin/python -m pip install -e '.[dev,dashboard]'
+AWS_PROFILE=alphadb \
+AWS_REGION=us-east-2 \
+VPC_ID=<vpc-id> \
+PUBLIC_SUBNET_IDS=<public-subnet-a>,<public-subnet-b> \
+PRIVATE_SUBNET_IDS=<private-subnet-a>,<private-subnet-b> \
+DATABASE_URL_SECRET_ARN=<database-url-secret-arn> \
+COCKPIT_PIN_SECRET_ARN=<cockpit-pin-secret-arn> \
+COCKPIT_COOKIE_SECRET_ARN=<cockpit-cookie-secret-arn> \
+deploy/aws/deploy-cockpit-stack.sh
 ```
 
-Start local Postgres:
+The script:
+
+- Builds the Cockpit image from `apps/dashboard/Dockerfile`.
+- Builds the AlphaDB API image from the root `Dockerfile`.
+- Tags both images separately in one ECR repository.
+- Deploys `deploy/aws/ecs-fargate-dashboard.yaml`.
+- Runs one-off AlphaDB API tasks for `alphadb-deploy migrate`,
+  `alphadb-deploy seed-readiness --series KXBTC15M`, and
+  `alphadb-deploy smoke`.
+- Runs public Cockpit smoke against the ALB URL.
+
+Use a dry run to check inputs and rendered commands without touching AWS:
 
 ```bash
-docker compose up -d postgres
+DRY_RUN=1 \
+VPC_ID=vpc-example \
+PUBLIC_SUBNET_IDS=subnet-public-a,subnet-public-b \
+PRIVATE_SUBNET_IDS=subnet-private-a,subnet-private-b \
+DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:database \
+COCKPIT_PIN_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:pin \
+COCKPIT_COOKIE_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:cookie \
+deploy/aws/deploy-cockpit-stack.sh
 ```
 
-Run the AWS-shaped checks with live orders disabled:
+For local Cockpit auth preflight, start the production build with Cockpit auth
+env vars and run:
 
 ```bash
-export DATABASE_URL=postgresql://alphadb:alphadb@localhost:55433/alphadb
-export ALPHADB_ENV=aws
-export AWS_REGION=us-east-2
-export ALPHADB_AWS_REGION=us-east-2
-export ALPHADB_RUNTIME_MODE=paper
-export ALPHADB_ENABLE_LIVE_ORDERS=0
-export ALPHADB_HUMAN_CUTOVER_APPROVED=0
-export ALPHADB_DASHBOARD_PIN=1234
-export ALPHADB_DASHBOARD_COOKIE_SECRET="$(openssl rand -hex 32)"
-
-.venv/bin/alphadb-deploy migrate
-.venv/bin/alphadb-deploy seed-readiness --series KXBTC15M
-.venv/bin/alphadb-deploy smoke
+COCKPIT_URL=http://localhost:3000 \
+ALPHADB_COCKPIT_PIN=1234 \
+apps/dashboard/scripts/smoke-auth.sh
 ```
 
-Run the production-style Python API and legacy compatibility container locally:
+## Smoke
+
+The deploy script runs the smoke gate by default. To rerun only the public
+Cockpit smoke:
 
 ```bash
-docker build -t alphadb-dashboard:local .
-docker compose --profile dashboard-runtime up --build dashboard-runtime
+AWS_PROFILE=alphadb \
+AWS_REGION=us-east-2 \
+STACK_NAME=alphadb-cockpit \
+COCKPIT_PIN_SECRET_ARN=<cockpit-pin-secret-arn> \
+deploy/aws/smoke-cockpit-stack.sh
 ```
 
-For the canonical local operator surface, run Cockpit separately:
+The smoke verifies:
 
-```bash
-cd apps/dashboard
-corepack enable
-pnpm install
-ALPHADB_API_BASE_URL=http://127.0.0.1:8501 pnpm dev
-```
+- `GET /healthz` reaches the public Cockpit service.
+- Unauthenticated `GET /api/alphadb/health` returns `401`.
+- PIN login sets a signed cookie.
+- The signed cookie can open the Cockpit.
+- The signed cookie reaches proxied `/api/alphadb/health`.
+- The proxied Python health response reports Postgres as `ok`.
 
-Open `http://localhost:3000` and confirm the Cockpit opens on the Live workspace.
-The Python service remains available at `http://localhost:8501` for AlphaDB API
-proxying and legacy compatibility while the MVP transition is in progress. The
-smoke command should report:
-
-- `dashboard_auth.ok=true`
-- `migrations.ok=true`
-- `runtime_config.ok=true`
-- `runtime_guard.can_submit_live_orders=false`
-- `ok=true`
-
-The container also includes a read-only machine status command for SSM-based
-monitoring. It does not authenticate to the human dashboard UI and does not
-start, stop, or modify live strategy state:
-
-```bash
-docker exec alphadb-dashboard alphadb-monitor status --json
-```
-
-The command exits `0` only when health checks pass, exactly one
-`alphadb-strategy gated-live-loop` process is visible, and the latest strategy
-run status is `running`. It emits JSON suitable for Codex or AWS-side watchdog
-logs.
-
-## AWS Deployment Skeleton
-
-The CloudFormation skeleton in
-`deploy/aws/ecs-fargate-dashboard.yaml` assumes these dependencies already exist:
-
-- VPC with public subnets for an ALB.
-- Private subnets for Fargate tasks.
-- Managed Postgres reachable from those private subnets by both dashboard tasks
-  and live worker tasks.
-- `DATABASE_URL`, dashboard PIN, and dashboard cookie secret stored in Secrets
-  Manager.
-- ECR image built from this repository's `Dockerfile`.
-
-Build and push an image:
-
-```bash
-export AWS_REGION=us-east-2
-export AWS_ACCOUNT_ID=<account-id>
-export ECR_REPOSITORY=alphadb-dashboard
-export IMAGE_TAG=$(git rev-parse --short HEAD)
-
-aws ecr create-repository --repository-name "$ECR_REPOSITORY" --region "$AWS_REGION"
-aws ecr get-login-password --region "$AWS_REGION" \
-  | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-docker build -t "$ECR_REPOSITORY:$IMAGE_TAG" .
-docker tag "$ECR_REPOSITORY:$IMAGE_TAG" \
-  "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
-docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
-```
-
-Create or update the stack:
-
-```bash
-aws cloudformation deploy \
-  --region "$AWS_REGION" \
-  --stack-name alphadb-dashboard \
-  --template-file deploy/aws/ecs-fargate-dashboard.yaml \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides \
-    ContainerImage="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" \
-    VpcId=<vpc-id> \
-    PublicSubnetIds=<public-subnet-a>,<public-subnet-b> \
-    PrivateSubnetIds=<private-subnet-a>,<private-subnet-b> \
-    AssignPublicIp=DISABLED \
-    DatabaseUrlSecretArn=<database-url-secret-arn> \
-    DashboardPinSecretArn=<dashboard-pin-secret-arn> \
-    DashboardCookieSecretArn=<dashboard-cookie-secret-arn> \
-    AwsRegionValue=us-east-2 \
-    RuntimeMode=gated-live
-```
-
-Use `AssignPublicIp=ENABLED` only for a public-subnet smoke deployment without
-NAT egress. The production preference remains private task subnets with managed
-egress.
-
-Before enabling the service for users, run one-off tasks from the same task
-definition:
-
-```bash
-alphadb-deploy migrate
-alphadb-deploy seed-readiness --series KXBTC15M
-alphadb-deploy smoke
-```
-
-When running those commands through ECS, override the container command to the
-desired `alphadb-deploy ...` command and use the same private subnets and service
-security group as the dashboard service.
-
-For ALP-156, the human deployment verifier should also run or schedule the
-fair-value live worker template with `DatabaseUrlSecretArn` pointing to this same
-managed Postgres secret. The worker task security group/subnets must be able to
-reach the database, and the task command should include
-`--runtime-config-source postgres`.
-
-The fair-value live worker uses a single S3 live-run lock under the configured
-artifact prefix to prevent overlapping scheduled ECS tasks from submitting
-duplicate orders. A task that cannot acquire that lock should leave auditable
-run artifacts, but it must not replace the dashboard's latest actionable live
-status with `live_run_lock_held` / `not_submitted`.
-
-Use `docs/deployment/live-money-cutover-checklist.md` as the ALP-157 checklist
-and evidence template before any live-money authority change.
+The API one-off `alphadb-deploy smoke` verifies migrations, runtime config, and
+that live order submission remains fail-closed.
 
 ## Rollback
 
-Rollback is image and service oriented:
+For this single-operator MVP, rollback stays image/service oriented:
 
-- Re-deploy the stack with the previous known-good `ContainerImage` tag.
-- If the dashboard should be removed quickly, set `DesiredCount=0`.
-- Keep the managed Postgres instance intact unless an operator explicitly
-  chooses data teardown.
-- Inspect `/ecs/alphadb-dashboard` CloudWatch logs and the JSON output from
-  `alphadb-deploy smoke` before reattempting deployment.
+- Re-run `deploy/aws/deploy-cockpit-stack.sh` with the previous known-good
+  `COCKPIT_IMAGE_TAG` and `ALPHADB_API_IMAGE_TAG`.
+- Or set the stack `DesiredCount` to `0` if the operator URL should be removed
+  quickly.
+- Keep managed Postgres intact unless an operator explicitly chooses teardown.
+- Inspect `/ecs/<service>/cockpit`, `/ecs/<service>/alphadb-api`, and the smoke
+  output before redeploying.
 
-## Acceptance Checklist
+## Explicit Deferrals
 
-- Docker image builds from the repository root.
-- `alphadb-deploy migrate` applies all operational-state migrations.
-- `alphadb-deploy smoke` verifies the live runtime config table exists and an
-  active config can be read.
-- `alphadb-deploy seed-readiness` creates a tracer run visible in the dashboard.
-- `alphadb-deploy smoke` passes in AWS-shaped dashboard mode without live-order
-  credentials on the dashboard service.
-- Dashboard login requires a four-digit PIN in `ALPHADB_ENV=aws`.
-- Runtime guard reports `can_submit_live_orders=false`.
-- ECS/Fargate service uses `us-east-2`, private task subnets, managed Postgres
-  via `DATABASE_URL`, and Secrets Manager for dashboard credentials.
+- No live worker deployment, schedule, image, or order-authority changes.
+- No new managed Postgres provisioning.
+- No CI/CD or GitHub Actions workflow.
+- No custom domain, TLS, ACM, or Route53.
+- No OAuth, RBAC, ALB auth, or approval workflow.
+- No public AlphaDB API endpoint.
+- No blue/green, canary, or parallel public Python dashboard.
+- No broad AlphaDB API hardening or route redesign.

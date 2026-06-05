@@ -91,6 +91,16 @@ on `localhost:8501`, and the Cockpit proxies API requests through
 and set `ALPHADB_API_BASE_URL` for the Cockpit when the API is not on
 `http://127.0.0.1:8501`.
 
+Run the lightweight Cockpit auth smoke against a running local Cockpit:
+
+```bash
+COCKPIT_URL=http://localhost:3000 apps/dashboard/scripts/smoke-auth.sh
+```
+
+For AWS-shaped local auth, run Cockpit with `ALPHADB_COCKPIT_PIN` and
+`ALPHADB_COCKPIT_COOKIE_SECRET`, then rerun the same script with
+`ALPHADB_COCKPIT_PIN` exported.
+
 ### Configuration
 
 Use `.env.example` as the local configuration template:
@@ -422,15 +432,18 @@ The canonical local operator URL is the Cockpit at `http://localhost:3000`.
 The Python service on `http://localhost:8501` is the local AlphaDB API target
 and legacy compatibility surface during the MVP transition.
 
-The current AWS dashboard deployment path still runs the legacy Python
-dashboard service from `alphadb-dashboard`. Serving the Next.js Cockpit at the
-public URL requires separate deployment wiring.
+The AWS Cockpit deployment path runs two ECS services: public Cockpit and
+private AlphaDB API. The public URL serves the production-built Next.js
+Cockpit, while the Python API remains private and owns Postgres access. Browser
+calls keep the same `/api/alphadb/*` shape used locally.
 
 Runtime config contains only non-secret fair-value live parameters: max order
 dollars, max market exposure dollars, max daily loss dollars, min edge, and max
 markets. Secrets and infrastructure values stay outside the dashboard/Cockpit.
-In AWS-like environments, dashboard access requires a four-digit PIN and signed
-cookie secret supplied outside Git.
+In AWS-like environments, Cockpit access requires a four-digit PIN and signed
+cookie secret supplied through Secrets Manager. The Cockpit task receives those
+Cockpit auth secrets but does not receive `DATABASE_URL`; the private AlphaDB
+API task receives `DATABASE_URL`.
 
 Run deployment-shaped local checks:
 
@@ -451,8 +464,8 @@ alphadb-deploy smoke
 ```
 
 See [docs/deployment/aws-dashboard.md](docs/deployment/aws-dashboard.md) for the
-current ECS/Fargate Python API and legacy compatibility deployment path. The
-next AWS deployment milestone is serving Cockpit at the public dashboard URL.
+current ECS/Fargate Cockpit and private AlphaDB API deployment path. The live
+worker deployment remains separate.
 
 ## Repository Layout
 
