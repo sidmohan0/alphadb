@@ -14,6 +14,7 @@ export type CockpitAuthConfig = {
 }
 
 const DEFAULT_COOKIE_NAME = "alphadb_cockpit_auth"
+const DEFAULT_LEGACY_DASHBOARD_COOKIE_NAME = "alphadb_dashboard_auth"
 const DEFAULT_COOKIE_TTL_SECONDS = 60 * 60 * 24 * 7
 
 function firstEnv(env: Env, ...keys: string[]) {
@@ -107,6 +108,26 @@ export async function createCockpitAuthToken(
   const encodedPayload = base64UrlEncode(payloadBytes)
   const encodedSignature = await sign(config.cookieSecret, payloadBytes)
   return `${encodedPayload}.${encodedSignature}`
+}
+
+export async function createAlphaDbApiAuthCookieHeader(
+  env: Env = process.env,
+  issuedAt = Math.floor(Date.now() / 1000),
+) {
+  const config = getCockpitAuthConfig(env)
+  if (!authIsActive(config) || !config.cookieSecret) return null
+
+  const cookieName =
+    firstEnv(env, "ALPHADB_DASHBOARD_COOKIE_NAME") || DEFAULT_LEGACY_DASHBOARD_COOKIE_NAME
+  const payload = {
+    exp: issuedAt + config.cookieTtlSeconds,
+    iat: issuedAt,
+    v: 1,
+  }
+  const payloadBytes = new TextEncoder().encode(canonicalJson(payload))
+  const encodedPayload = base64UrlEncode(payloadBytes)
+  const encodedSignature = await sign(config.cookieSecret, payloadBytes)
+  return `${cookieName}=${encodedPayload}.${encodedSignature}`
 }
 
 export async function verifyCockpitAuthToken(

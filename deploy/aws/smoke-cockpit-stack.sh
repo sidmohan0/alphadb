@@ -98,6 +98,7 @@ path = sys.argv[1]
 with open(path, encoding="utf-8") as handle:
     payload = json.load(handle)
 
+payload = payload.get("data", payload)
 components = {
     component.get("component"): component.get("status")
     for component in payload.get("components", [])

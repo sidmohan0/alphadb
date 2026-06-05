@@ -348,8 +348,6 @@ Resources:
           Subnets: !Ref PrivateSubnetIds
       ServiceRegistries:
         - RegistryArn: !GetAtt AlphaDbApiDiscoveryService.Arn
-          ContainerName: api
-          ContainerPort: !Ref AlphaDbApiPort
 
   CockpitService:
     Type: AWS::ECS::Service
