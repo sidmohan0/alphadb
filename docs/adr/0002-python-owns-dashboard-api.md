@@ -1,10 +1,10 @@
-# Python Owns the Dashboard API
+# Python Owns The AlphaDB API
 
-Accepted. The Agent-first dashboard will call Python-owned Dashboard API endpoints for operational state, actions, Data Explorer views, saved dataset snapshots, Experiment Journal records, and agent skills; Next.js will not connect directly to target-platform Postgres for MVP dashboard behavior. We chose this over TypeScript route handlers owning backend logic so trading, replay, registry, state migrations, and Postgres repositories stay in one Python target-platform backend.
+Accepted. The Cockpit will call Python-owned AlphaDB API endpoints for operational state, actions, Data Explorer views, Data evidence, Lab Entries, and agent skills; Next.js will not connect directly to target-platform Postgres for MVP behavior. We chose this over TypeScript route handlers owning backend logic so trading, replay, registry, state migrations, and Postgres repositories stay in one Python target-platform backend.
 
 ## Considered Options
 
-- Python owns Dashboard API endpoints and Next.js remains the user-facing cockpit.
+- Python owns AlphaDB API endpoints and Next.js remains the user-facing Cockpit.
 - Next.js owns route handlers and connects directly to Postgres.
 - Hybrid ownership between Python and Next.js.
 

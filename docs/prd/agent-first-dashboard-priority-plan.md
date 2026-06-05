@@ -19,7 +19,7 @@ The product vocabulary is settled enough for the next implementation pass:
 - **Data Explorer** produces **Data evidence** that can be saved into Lab.
 - **Lab Entries** hold evidence, strategy JSON, runs, notes, metrics, verdicts,
   and **Semantic Lab insights**.
-- The **Dashboard API** stays Python-owned. Next.js stays the cockpit.
+- The **AlphaDB API** stays Python-owned. Next.js is the Cockpit.
 
 ## Module Map
 
@@ -35,10 +35,10 @@ The product vocabulary is settled enough for the next implementation pass:
 - `apps/dashboard/app/lab/page.tsx` renders Lab.
 - `apps/dashboard/components/terminal/agent-terminal.tsx` provides the
   persistent Agent Terminal surface.
-- `apps/dashboard/app/api/alphadb/[...path]/route.ts` proxies dashboard calls to
-  the Python Dashboard API.
+- `apps/dashboard/app/api/alphadb/[...path]/route.ts` proxies Cockpit calls to
+  the Python AlphaDB API.
 
-### Dashboard API Boundary
+### AlphaDB API Boundary
 
 - `src/alphadb/dashboard/app.py` owns HTTP routing, auth reuse, API envelopes,
   dashboard service methods, and the stdlib compatibility surface.
@@ -100,7 +100,7 @@ accounting, and gated-live behavior.
 
 Agent-run work:
 
-- Verify Dashboard API health and live status endpoints after every backend
+- Verify AlphaDB API health and live status endpoints after every backend
   change.
 - Keep Python tests green for live runtime, dashboard API envelopes, Data
   Explorer, Lab, and Strategy Spec behavior.
@@ -160,7 +160,7 @@ Agent-run work:
 ### 5. Let The Agent Terminal Use The Same Skills
 
 The terminal should not become a separate toy layer. It should call the same
-Dashboard API capabilities that the UI and external agents can discover.
+AlphaDB API capabilities that the UI and external agents can discover.
 
 Agent-run work:
 

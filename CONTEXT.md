@@ -44,10 +44,14 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Live risk day**: `America/Los_Angeles` calendar day used for live daily loss-cap accounting. It is an order-admission risk window, not a settlement timestamp, market timestamp, or full-history reconciliation window.
 - **Taker-only execution policy**: Initial execution policy that submits immediate-or-cancel style orders at observed executable prices and does not intentionally rest maker/post-only orders.
 - **Maker execution policy**: Future execution policy that may rest post-only orders and therefore requires order-book replay, fill modeling, adverse-selection analysis, cancellation maturity, and explicit risk enablement.
-- **Target platform dashboard**: Live-first operator console for live operations, dashboard-owned non-secret runtime config, curated risk/status panels, recent attempts, research/replay diagnostics, and model registry visibility.
-- **Agent-first dashboard**: MVP dashboard direction where autonomous strategy agents are the primary actors and humans supervise by defining Strategy Briefs and Strategy Specs, inspecting evidence, reviewing Lab Entries, and intervening through a terminal or kill/pause controls.
-- **Dashboard API**: Python-owned API surface that exposes target-platform operational state and actions to the Agent-first dashboard without moving trading, replay, registry, or Postgres ownership into the frontend.
-- **Dashboard service hardening**: MVP reliability work for the Python Dashboard API, including structured routes, response schemas, bounded queries, timeouts, health checks, and useful logs. It explicitly does not mean RBAC, OAuth, granular permissions, or new security architecture for the disposable-capital MVP.
+- **Cockpit**: Preferred architecture term for the Next.js human-and-agent supervision UI. The Cockpit owns live operations display, Strategy Studio, Data Explorer, Lab, Agent Terminal, navigation, and interaction polish. It does not own trading logic, Postgres queries, runtime state transitions, model/replay semantics, or direct database access.
+- **AlphaDB API**: Python-owned product API used by the Cockpit and external agents. It exposes Strategy Brief compilation, Strategy Spec validation and persistence, Data Explorer views, Data evidence creation, Lab Entries, Semantic Lab insights, agent capabilities, runtime config, and operational state actions without moving trading, replay, registry, or Postgres ownership into the frontend.
+- **Operational State**: Postgres-backed transactional state for runs, market instances, raw events, feature rows, decisions, risk decisions, order intents, paper orders/fills, live order attempts, model registry records, runtime config, Strategy Specs, and Lab Entries.
+- **Legacy Python dashboard surface**: Existing stdlib HTML served by `alphadb-dashboard`. It may remain as a compatibility or deployment surface during MVP transition, but it is not the long-term Cockpit UI.
+- **Target platform dashboard**: Historical alias for the live-first operator console. Prefer **Cockpit** when referring to the Next.js UI.
+- **Agent-first dashboard**: Historical PRD label for the Cockpit direction where autonomous strategy agents are the primary actors and humans supervise by defining Strategy Briefs and Strategy Specs, inspecting evidence, reviewing Lab Entries, and intervening through a terminal or kill/pause controls.
+- **Dashboard API**: Deprecated alias for **AlphaDB API**. Keep only when referring to existing code names or older docs.
+- **Dashboard service hardening**: MVP reliability work for the Python AlphaDB API, including structured routes, response schemas, bounded queries, timeouts, health checks, and useful logs. It explicitly does not mean RBAC, OAuth, granular permissions, or new security architecture for the disposable-capital MVP.
 - **Agent mandate**: Deprecated alias for Strategy Brief plus Strategy Spec. Avoid this term in new UI and issue language.
 - **Strategy contract sentence**: Human-readable rendering of a Strategy Spec used in Strategy Studio to help users inspect the spec quickly. It is not a separate persisted strategy object.
 - **Strategy Brief**: Human-authored thesis and notes that describe what a strategy should try to do before it is converted into a machine-readable strategy definition.
@@ -58,12 +62,12 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Compiler blocker**: Structured reason a Strategy Brief cannot yet become a runnable Strategy Spec, such as missing fields, unsupported data sources, unsupported execution modes, or future capability needs.
 - **Research Idea**: Deprecated MVP UI label for a blocked Strategy Brief saved to Lab. New UI and issue language should call this a Lab Entry with compiler blockers.
 - **Lab Entry**: Single MVP research-memory record that can hold an uncompiled brief, compiler blockers, Data Explorer evidence, strategy JSON, runs, metrics, notes, insights, metadata, and a verdict when available. The MVP UI should not force users to choose between idea, experiment, dataset, or snapshot object types.
-- **Data Explorer**: Dashboard evidence-locker workspace for browsing curated operational Postgres views such as raw events, feature rows, decisions, risk decisions, orders, fills, settlement records, and model registry records, with lightweight filters, export, and Save to Lab evidence actions.
+- **Data Explorer**: Cockpit evidence-locker workspace for browsing curated operational Postgres views such as raw events, feature rows, decisions, risk decisions, orders, fills, settlement records, and model registry records, with lightweight filters, export, and Save to Lab evidence actions.
 - **Data evidence**: Lab Entry evidence payload generated from a Data Explorer query, including source view, filters, sort, schema, row count, query hash, small preview, and provenance metadata. It replaces separate saved-dataset objects in the MVP UI.
 - **Saved dataset snapshot**: Deprecated MVP UI label for Data evidence. Use only when discussing older designs or future immutable artifacts.
 - **Experiment Journal**: Deprecated alias for Lab. New UI should present a flexible Lab Entry workflow rather than a separate experiment object model.
 - **Semantic Lab insight**: Generated or heuristic Lab note that connects entry history across hypotheses, features, evidence, outcomes, and verdicts. It is advisory research memory and does not authorize promotion, live trading, Current MVP changes, or target-platform cutover.
-- **Target platform dev environment**: Dev Container backed by Docker Compose that provides the reproducible local runtime for Postgres, target-platform services, and the dashboard.
+- **Target platform dev environment**: Dev Container backed by Docker Compose that provides the reproducible local runtime for Postgres, target-platform services, AlphaDB API, and Cockpit.
 
 ## Relationships
 
@@ -95,12 +99,13 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - Settlement-state readiness outputs should be manifest-first: downstream fair-value and edge research should depend on dataset manifests and hashes rather than implicit local files.
 - **REST-first target ingestion** may prove target-platform boundaries and shadow comparison, but authenticated Kalshi WebSocket ingestion is required before serious paper/live promotion.
 - The target platform should preserve **Taker-only execution policy** as the first paper/live execution mode; **Maker execution policy** belongs in a later milestone and must be explicitly enabled by risk config.
-- The **Target platform dashboard** should open on the Live operator workspace.
+- The preferred control-plane boundary stack is **Cockpit -> AlphaDB API -> Operational State -> Runtime / Replay / Research**.
+- The **Cockpit** should open on the Live operator workspace.
 - The **Agent-first dashboard** should keep the MVP's security posture intentionally light: private Postgres plus existing dashboard access controls are sufficient for disposable live-trading capital, and new work should not add role systems, approval mazes, or other security friction unless explicitly reprioritized.
-- The **Agent-first dashboard** should use the supplied Next.js prototype as the committed user-facing dashboard surface, while Python target-platform services expose the operational APIs and keep ownership of trading, state, replay, and registry logic.
-- The **Dashboard API** is the boundary between the Next.js dashboard and Python target-platform services; Next.js should not connect directly to target-platform Postgres for MVP dashboard features.
-- **Dashboard service hardening** should improve API reliability and frontend integration speed without expanding MVP security scope.
-- Agent-first dashboard screens should prefer sparse, truthful usefulness over visually dense mock completeness; do not invent operational data simply to fill the prototype layout.
+- The **Cockpit** should use the supplied Next.js prototype as the committed user-facing UI surface, while Python target-platform services expose the AlphaDB API and keep ownership of trading, state, replay, and registry logic.
+- The **AlphaDB API** is the boundary between Cockpit and Python target-platform services; Next.js should not connect directly to target-platform Postgres for MVP features.
+- **Dashboard service hardening** should improve AlphaDB API reliability and frontend integration speed without expanding MVP security scope.
+- Cockpit screens should prefer sparse, truthful usefulness over visually dense mock completeness; do not invent operational data simply to fill the prototype layout.
 - New strategy definitions should be expressed as a **Strategy Brief** that is compiled into a **Strategy Spec** through a **Spec Compiler**. The earlier "Agent mandate" language is deprecated in favor of Strategy, Brief, Spec, Lab Entry, Run, Report, and Artifact.
 - The MVP **Spec Compiler** should support template-based Strategy Specs with constrained outputs and deterministic validation, not arbitrary natural-language-to-code execution.
 - The MVP **Spec Compiler** should use deterministic extraction and constrained UI choices first, while keeping an LLM-ready proposal interface for later. It should not require an LLM provider to compile or classify Strategy Briefs.

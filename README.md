@@ -104,7 +104,8 @@ under replay and fail closed around live money.
 | Risk gate | Fail-closed sizing, loss, mode, and live-order checks before execution. |
 | Paper execution | Taker-only IOC simulation and reconciliation without live exchange control. |
 | Shadow comparison | Decision-boundary parity checks against an external or current MVP export. |
-| Dashboard | Live-first operator console for status, runtime config, recent attempts, and risk usage. |
+| Cockpit | Next.js human-and-agent supervision UI for live ops, Strategy Studio, Data Explorer, Lab, and Terminal. |
+| AlphaDB API | Python product API for Cockpit and external agents; owns strategy, data, Lab, skills, and runtime-config surfaces. |
 | AWS deployment | Secret-safe dashboard deployment path with managed infrastructure assumptions. |
 
 ## Architecture
@@ -119,13 +120,18 @@ flowchart LR
     decision --> risk["Risk gate and sizing"]
     risk --> execute["Paper or gated-live execution"]
     execute --> state["Operational state"]
-    state --> replay["Replay, evidence, dashboard"]
+    state --> api["AlphaDB API"]
+    api --> cockpit["Cockpit"]
+    state --> replay["Replay, evidence, Lab"]
     log --> replay
 ```
 
 The same domain contracts are meant to run across fixture, replay, shadow,
 paper, and gated-live workflows. The event source, clock, and exchange adapter
 can change; the decision, risk, and audit boundary should remain reconstructable.
+For UI and agent work, the default boundary stack is
+`Cockpit -> AlphaDB API -> Operational State -> Runtime / Replay / Research`.
+See [docs/architecture/boundaries.md](docs/architecture/boundaries.md).
 
 ## Runtime Modes
 
@@ -392,14 +398,22 @@ dashboard is the non-secret runtime config control plane. The live worker reads
 the latest Postgres-saved config at run start and records the config snapshot in
 the run manifest.
 
-## Dashboard And Deployment
+## Cockpit, API, And Deployment
 
-The dashboard is a Live-first operator console backed by Postgres. It owns
-non-secret fair-value live runtime parameters: max order dollars, max market
-exposure dollars, max daily loss dollars, min edge, and max markets. Secrets and
-infrastructure values stay outside the dashboard. In AWS-like environments,
-dashboard access requires a four-digit PIN and signed cookie secret supplied
-outside Git.
+The Cockpit is the Next.js human-and-agent supervision UI. The AlphaDB API is
+the Python service that owns strategy compilation, curated data access, Lab
+memory, agent skills, runtime config, and Postgres-backed operational state.
+Cockpit does not connect directly to Postgres or own trading logic.
+
+The current AWS dashboard deployment path still runs the legacy Python
+dashboard service from `alphadb-dashboard`. Serving the Next.js Cockpit at the
+public URL requires separate deployment wiring.
+
+Runtime config contains only non-secret fair-value live parameters: max order
+dollars, max market exposure dollars, max daily loss dollars, min edge, and max
+markets. Secrets and infrastructure values stay outside the dashboard/Cockpit.
+In AWS-like environments, dashboard access requires a four-digit PIN and signed
+cookie secret supplied outside Git.
 
 Run deployment-shaped local checks:
 
