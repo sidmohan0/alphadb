@@ -400,6 +400,81 @@ STRATEGY_RUNTIME = Migration(
 )
 
 
+LIVE_RUNTIME_CONFIG = Migration(
+    version="0009_live_runtime_config",
+    statements=(
+        """
+        create table if not exists live_runtime_configs (
+            config_id text primary key,
+            strategy text not null,
+            version integer not null check (version >= 1),
+            is_active boolean not null default true,
+            max_order_dollars numeric not null check (max_order_dollars > 0),
+            max_market_exposure_dollars numeric not null
+                check (max_market_exposure_dollars > 0),
+            max_daily_loss_dollars numeric not null check (max_daily_loss_dollars > 0),
+            min_edge numeric not null check (min_edge >= 0),
+            max_markets integer not null check (max_markets >= 1),
+            snapshot jsonb not null default '{}'::jsonb,
+            created_by text not null default 'dashboard',
+            created_at timestamptz not null default now(),
+            unique (strategy, version)
+        )
+        """,
+        """
+        create unique index if not exists live_runtime_configs_active_idx
+        on live_runtime_configs(strategy)
+        where is_active
+        """,
+        """
+        create index if not exists live_runtime_configs_strategy_created_idx
+        on live_runtime_configs(strategy, created_at desc)
+        """,
+    ),
+)
+
+
+LIVE_RUN_STATUS = Migration(
+    version="0010_live_run_status",
+    statements=(
+        """
+        create table if not exists live_run_statuses (
+            run_id text primary key,
+            strategy text not null,
+            generated_at timestamptz not null,
+            config_id text,
+            config_version integer,
+            live_orders_enabled boolean not null default false,
+            current_market_ticker text,
+            decision_outcome text not null,
+            selected_side text,
+            skip_reason text,
+            latest_attempt_status text,
+            latest_attempt_reason text,
+            fill_status text,
+            daily_loss_used_dollars numeric not null default 0,
+            daily_loss_limit_dollars numeric not null default 0,
+            market_exposure_used_dollars numeric not null default 0,
+            market_exposure_limit_dollars numeric not null default 0,
+            recent_attempt_count integer not null default 0,
+            recent_submitted_count integer not null default 0,
+            recent_skipped_count integer not null default 0,
+            recent_no_fill_count integer not null default 0,
+            recent_filled_count integer not null default 0,
+            summary jsonb not null default '{}'::jsonb,
+            recent_attempts jsonb not null default '[]'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists live_run_statuses_strategy_generated_idx
+        on live_run_statuses(strategy, generated_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -409,4 +484,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     PAPER_EXECUTION,
     SHADOW_COMPARISONS,
     STRATEGY_RUNTIME,
+    LIVE_RUNTIME_CONFIG,
+    LIVE_RUN_STATUS,
 )

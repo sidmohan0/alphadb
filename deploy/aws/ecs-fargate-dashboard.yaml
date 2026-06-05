@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: AlphaDB Streamlit dashboard on ECS Fargate with managed Postgres dependency.
+Description: AlphaDB live operator dashboard on ECS Fargate with managed Postgres dependency.
 
 Parameters:
   ServiceName:
@@ -16,6 +16,13 @@ Parameters:
   PrivateSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Private subnets for Fargate tasks with egress to Postgres and the internet.
+  AssignPublicIp:
+    Type: String
+    Default: DISABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+    Description: Set ENABLED only for public-subnet deployments without NAT.
   DatabaseUrlSecretArn:
     Type: String
     Description: Secrets Manager ARN whose value is DATABASE_URL for the managed Postgres instance.
@@ -39,11 +46,12 @@ Parameters:
     Default: "1024"
   RuntimeMode:
     Type: String
-    Default: paper
+    Default: gated-live
     AllowedValues:
       - fixture
       - shadow
       - paper
+      - gated-live
   AwsRegionValue:
     Type: String
     Default: us-east-2
@@ -138,7 +146,7 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       HealthCheckEnabled: true
-      HealthCheckPath: /_stcore/health
+      HealthCheckPath: /healthz
       HealthCheckProtocol: HTTP
       Matcher:
         HttpCode: "200"
@@ -166,6 +174,9 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt DashboardExecutionRole.Arn
       TaskRoleArn: !GetAtt DashboardTaskRole.Arn
       ContainerDefinitions:
@@ -182,7 +193,7 @@ Resources:
               Value: !Ref AwsRegionValue
             - Name: ALPHADB_AWS_REGION
               Value: !Ref AwsRegionValue
-            - Name: ALPHADB_STREAMLIT_PORT
+            - Name: ALPHADB_DASHBOARD_PORT
               Value: !Sub "${DashboardPort}"
             - Name: ALPHADB_RUNTIME_MODE
               Value: !Ref RuntimeMode
@@ -218,7 +229,7 @@ Resources:
       TaskDefinition: !Ref DashboardTaskDefinition
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
+          AssignPublicIp: !Ref AssignPublicIp
           SecurityGroups:
             - !Ref DashboardServiceSecurityGroup
           Subnets: !Ref PrivateSubnetIds

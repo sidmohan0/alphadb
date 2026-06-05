@@ -7,11 +7,33 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from alphadb.config import settings_from_env
 from alphadb.model_evaluation.artifacts import audit_model_artifacts
 from alphadb.model_evaluation.edge import (
     build_edge_verdict_report,
     build_feature_pruning_report,
     build_focused_edge_walk_forward_report,
+)
+from alphadb.model_evaluation.fair_value_replay import (
+    FairValueReplayConfig,
+    build_fair_value_replay_report,
+    build_fair_value_walk_forward_report,
+    parse_min_edge_values,
+)
+from alphadb.model_evaluation.fair_value_live import (
+    FairValueDecisionRowCollector,
+    FairValueDecisionRowCollectorConfig,
+    make_coinbase_client,
+    make_kalshi_client,
+)
+from alphadb.model_evaluation.fair_value_live_job import (
+    FairValueLiveTradingJob,
+    FairValueLiveTradingJobConfig,
+    parse_live_job_min_edge_values,
+)
+from alphadb.model_evaluation.fair_value_model import (
+    ThresholdVolatilityFairValueConfig,
+    build_threshold_volatility_fair_value_report,
 )
 from alphadb.model_evaluation.io import load_json, load_tabular_rows, write_json
 from alphadb.model_evaluation.live_attribution import summarize_live_attribution
@@ -156,6 +178,87 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--report", default=None)
     live.add_argument("--output", default=None)
 
+    fair = subparsers.add_parser(
+        "fair-value-replay",
+        help="Replay fair-value strategy rows with default settlement/PnL reporting",
+    )
+    fair.add_argument("--rows", required=True)
+    fair.add_argument("--probability-column", default="p_yes")
+    fair.add_argument("--min-edge", type=float, default=0.0)
+    fair.add_argument("--max-order-dollars", type=float, default=5.0)
+    fair.add_argument("--max-loss-dollars", type=float, default=50.0)
+    fair.add_argument("--taker-fee-multiplier", type=float, default=0.07)
+    fair.add_argument("--output", default=None)
+
+    fair_walk = subparsers.add_parser(
+        "fair-value-walk-forward",
+        help="Walk-forward fair-value replay with rolling selection/holdout windows",
+    )
+    fair_walk.add_argument("--rows", required=True)
+    fair_walk.add_argument("--selection-market-count", type=int, required=True)
+    fair_walk.add_argument("--holdout-market-count", type=int, required=True)
+    fair_walk.add_argument("--step-market-count", type=int, default=None)
+    fair_walk.add_argument("--min-edge-values", default="0.0")
+    fair_walk.add_argument("--probability-column", default="p_yes")
+    fair_walk.add_argument("--max-order-dollars", type=float, default=5.0)
+    fair_walk.add_argument("--max-loss-dollars", type=float, default=50.0)
+    fair_walk.add_argument("--taker-fee-multiplier", type=float, default=0.07)
+    fair_walk.add_argument("--output", default=None)
+
+    fair_model = subparsers.add_parser(
+        "fair-value-model",
+        help="Score rows with the threshold/volatility fair-value model",
+    )
+    fair_model.add_argument("--rows", required=True)
+    fair_model.add_argument("--price-column", default="external_close")
+    fair_model.add_argument("--threshold-column", default="payout_threshold")
+    fair_model.add_argument("--probability-column", default="p_yes")
+    fair_model.add_argument("--output", default=None)
+
+    fair_collect = subparsers.add_parser(
+        "fair-value-collect-live-rows",
+        help="Collect live-data fair-value decision rows without submitting orders",
+    )
+    fair_collect.add_argument("--source", choices=("fixture", "kalshi-public"), default="fixture")
+    fair_collect.add_argument(
+        "--coinbase-source",
+        choices=("fixture", "coinbase-live"),
+        default="fixture",
+    )
+    fair_collect.add_argument("--max-markets", type=int, default=5)
+    fair_collect.add_argument("--run-id", default=None)
+    fair_collect.add_argument("--output", default=None)
+
+    fair_live = subparsers.add_parser(
+        "fair-value-live-trading-job",
+        help="Run capped live-money fair-value canary with PnL/settlement artifacts",
+    )
+    fair_live.add_argument("--output-root", default="artifacts/fair-value-live")
+    fair_live.add_argument("--source", choices=("fixture", "kalshi-public"), default="fixture")
+    fair_live.add_argument(
+        "--coinbase-source",
+        choices=("fixture", "coinbase-live"),
+        default="fixture",
+    )
+    fair_live.add_argument("--max-markets", type=int, default=20)
+    fair_live.add_argument("--min-edge", type=float, default=0.0)
+    fair_live.add_argument("--min-edge-values", default="0.0,0.05,0.10")
+    fair_live.add_argument("--max-order-dollars", type=float, default=None)
+    fair_live.add_argument("--max-ticker-exposure-dollars", type=float, default=None)
+    fair_live.add_argument("--max-daily-loss-dollars", type=float, default=None)
+    fair_live.add_argument("--selection-market-count", type=int, default=1)
+    fair_live.add_argument("--holdout-market-count", type=int, default=1)
+    fair_live.add_argument("--step-market-count", type=int, default=None)
+    fair_live.add_argument("--s3-prefix", default=None)
+    fair_live.add_argument("--submit-live-orders", action="store_true")
+    fair_live.add_argument(
+        "--runtime-config-source",
+        choices=("auto", "postgres", "cli"),
+        default="auto",
+        help="Read dashboard-owned Postgres config, use CLI/env values, or choose by environment.",
+    )
+    fair_live.add_argument("--output", default=None)
+
     return parser
 
 
@@ -265,6 +368,78 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.command == "live-attribution":
         payload = summarize_live_attribution(args.report).as_dict()
+    elif args.command == "fair-value-replay":
+        payload = build_fair_value_replay_report(
+            load_tabular_rows(Path(args.rows)),
+            config=FairValueReplayConfig(
+                probability_column=args.probability_column,
+                min_edge=args.min_edge,
+                max_order_dollars=args.max_order_dollars,
+                max_loss_dollars=args.max_loss_dollars,
+                taker_fee_multiplier=args.taker_fee_multiplier,
+            ),
+        )
+    elif args.command == "fair-value-walk-forward":
+        payload = build_fair_value_walk_forward_report(
+            load_tabular_rows(Path(args.rows)),
+            selection_market_count=args.selection_market_count,
+            holdout_market_count=args.holdout_market_count,
+            step_market_count=args.step_market_count,
+            min_edge_values=parse_min_edge_values(args.min_edge_values),
+            max_order_dollars=args.max_order_dollars,
+            max_loss_dollars=args.max_loss_dollars,
+            probability_column=args.probability_column,
+            taker_fee_multiplier=args.taker_fee_multiplier,
+        )
+    elif args.command == "fair-value-model":
+        payload = build_threshold_volatility_fair_value_report(
+            load_tabular_rows(Path(args.rows)),
+            config=ThresholdVolatilityFairValueConfig(
+                price_column=args.price_column,
+                threshold_column=args.threshold_column,
+                probability_column=args.probability_column,
+            ),
+        )
+    elif args.command == "fair-value-collect-live-rows":
+        settings = settings_from_env()
+        payload = FairValueDecisionRowCollector(
+            kalshi_client=make_kalshi_client(args.source, settings),
+            coinbase_client=make_coinbase_client(args.coinbase_source),
+            settings=settings,
+            config=FairValueDecisionRowCollectorConfig(
+                max_markets=args.max_markets,
+                run_id=args.run_id,
+                source_mode=args.source,
+                coinbase_source_mode=args.coinbase_source,
+            ),
+        ).collect().as_dict()
+    elif args.command == "fair-value-live-trading-job":
+        settings = settings_from_env()
+        payload = FairValueLiveTradingJob(
+            config=FairValueLiveTradingJobConfig(
+                output_root=Path(args.output_root),
+                source=args.source,
+                coinbase_source=args.coinbase_source,
+                max_markets=args.max_markets,
+                min_edge=args.min_edge,
+                min_edge_values=parse_live_job_min_edge_values(args.min_edge_values),
+                max_order_dollars=args.max_order_dollars
+                if args.max_order_dollars is not None
+                else settings.live_stake_cap_dollars,
+                max_ticker_exposure_dollars=args.max_ticker_exposure_dollars
+                if args.max_ticker_exposure_dollars is not None
+                else settings.max_ticker_exposure_dollars,
+                max_daily_loss_dollars=args.max_daily_loss_dollars
+                if args.max_daily_loss_dollars is not None
+                else settings.max_daily_loss_dollars,
+                selection_market_count=args.selection_market_count,
+                holdout_market_count=args.holdout_market_count,
+                step_market_count=args.step_market_count,
+                s3_prefix=args.s3_prefix,
+                submit_live_orders=args.submit_live_orders,
+                runtime_config_source=args.runtime_config_source,
+            )
+        ).run()
     else:
         raise AssertionError(f"unhandled command: {args.command}")
     if args.output:

@@ -25,7 +25,7 @@ paper-trading
 backtesting
 python
 postgresql
-streamlit
+operator-dashboard
 pydantic
 docker-compose
 aws
@@ -74,7 +74,7 @@ Do not present AlphaDB as:
 The public implementation narrative should emphasize these active slices:
 
 - Platform foundation health path: local install, tests, Docker Compose
-  Postgres, and a dashboard shell.
+  Postgres, and a Live-first dashboard shell.
 - `MarketSpec` registry: explicit market-family assumptions with `KXBTC15M` as
   the first concrete market family.
 - Operational-state tracer: Postgres-backed records for market instances,

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from alphadb.config import Settings, settings_from_env
 from alphadb.dashboard.auth import DashboardAuthConfig
 from alphadb.health import HealthReport, collect_health
+from alphadb.live_runtime import LiveRuntimeConfigRepository
 from alphadb.markets.registry import default_market_registry
 from alphadb.runtime import RuntimeGuardError, evaluate_runtime_guard
 from alphadb.state.repository import OperationalStateRepository
@@ -56,11 +57,14 @@ def settings_summary(settings: Settings) -> dict[str, Any]:
         "environment": settings.environment,
         "aws_region": settings.aws_region,
         "database": database_location(settings.database_url),
-        "streamlit_port": settings.streamlit_port,
+        "dashboard_port": settings.dashboard_port,
         "runtime_mode": settings.runtime_mode,
         "live_orders_explicitly_enabled": settings.enable_live_orders,
         "human_cutover_approved": settings.human_cutover_approved,
         "dashboard_auth_configured": settings.dashboard_auth_configured,
+        "live_stake_cap_dollars": settings.live_stake_cap_dollars,
+        "max_ticker_exposure_dollars": settings.max_ticker_exposure_dollars,
+        "max_daily_loss_dollars": settings.max_daily_loss_dollars,
     }
 
 
@@ -151,8 +155,27 @@ def runtime_guard_status(
     }
 
 
+def runtime_config_status(settings: Settings) -> dict[str, Any]:
+    try:
+        revision = LiveRuntimeConfigRepository(settings.database_url).seed_defaults()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "detail": f"runtime config unavailable: {exc}",
+        }
+    return {
+        "ok": True,
+        "detail": "active dashboard-owned live runtime config is readable",
+        "config_id": revision.config_id,
+        "version": revision.version,
+        "strategy": revision.strategy,
+        "snapshot": revision.config.as_dict(),
+    }
+
+
 MigrationStatusProvider = Callable[[OperationalStateRepository], MigrationStatus]
 HealthCollector = Callable[[Settings], HealthReport]
+RuntimeConfigStatusProvider = Callable[[Settings], dict[str, Any]]
 
 
 def build_smoke_report(
@@ -160,6 +183,7 @@ def build_smoke_report(
     *,
     health_collector: HealthCollector = collect_health,
     migration_status_provider: MigrationStatusProvider = collect_migration_status,
+    runtime_config_status_provider: RuntimeConfigStatusProvider = runtime_config_status,
     allow_pending_migrations: bool = False,
     require_dashboard_auth: bool | None = None,
     allow_live_orders: bool = False,
@@ -169,8 +193,9 @@ def build_smoke_report(
     migrations = migration_status_provider(repository)
     auth = dashboard_auth_status(settings, require_dashboard_auth=require_dashboard_auth)
     runtime = runtime_guard_status(settings, allow_live_orders=allow_live_orders)
+    runtime_config = runtime_config_status_provider(settings)
     migrations_ok = migrations.ok or (allow_pending_migrations and bool(migrations.pending))
-    ok = health.ok and migrations_ok and auth["ok"] and runtime["ok"]
+    ok = health.ok and migrations_ok and auth["ok"] and runtime["ok"] and runtime_config["ok"]
     return {
         "ok": ok,
         "generated_at_utc": datetime.now(UTC).isoformat(),
@@ -183,6 +208,7 @@ def build_smoke_report(
         },
         "dashboard_auth": auth,
         "runtime_guard": runtime,
+        "runtime_config": runtime_config,
     }
 
 

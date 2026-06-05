@@ -17,6 +17,7 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Target platform operational state**: Transactional Postgres state used by the target platform for runs, decisions, risk decisions, orders, fills, positions, reconciliation, and model registry records.
 - **Model registry**: Target-platform operational registry that records which model artifacts, feature versions, calibration versions, dataset ids, and promotion states are approved or available for use.
 - **Model evaluation report**: Generated research artifact that compares model artifacts, feature schemas, dataset ids, probability metrics, calibration, policy metrics, stress scenarios, and live/paper attribution context without by itself authorizing promotion or live trading.
+- **Fair-value policy replay**: Model evaluation run that applies a fair-value policy to decision-time rows, executable quotes, fee assumptions, and settlement labels to produce trades, skips, PnL, and settlement reconciliation without reconstructing raw events.
 - **Edge verdict**: Fast research conclusion about whether a feature or model branch has tradable promise. An edge verdict must consider probability quality and taker-policy outcomes after fees and spread stress on holdout or walk-forward slices; better probability metrics alone are not enough. Edge verdicts do not authorize model promotion, live trading, Current MVP changes, or target-platform cutover.
 - **External signal source**: Third-party observable information source, such as X API counts, X News metadata, RSS feeds, GDELT, or exchange status feeds, used to create decision-time context features. External signal sources are feature inputs only; they are not settlement truth sources and do not by themselves authorize model promotion or live trading.
 - **External signal research dataset**: Generated private or ignored research artifact that captures historical external signals for a tested time range, including source timestamps, retrieval timestamps, query catalog version, cost metadata, payload hashes, and no-lookahead fields. Initial X work should produce this kind of dataset before any target-platform live ingestion is introduced.
@@ -42,8 +43,8 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Live platform cutover**: The moment the target platform becomes authoritative for live trading after shadow runs prove equivalence or intentionally documented differences.
 - **Taker-only execution policy**: Initial execution policy that submits immediate-or-cancel style orders at observed executable prices and does not intentionally rest maker/post-only orders.
 - **Maker execution policy**: Future execution policy that may rest post-only orders and therefore requires order-book replay, fill modeling, adverse-selection analysis, cancellation maturity, and explicit risk enablement.
-- **Target platform dashboard**: Streamlit-first target-platform UI for research, replay diagnostics, paper trading, live operations, risk state, PnL, latency, and model registry visibility.
-- **Target platform dev environment**: Dev Container backed by Docker Compose that provides the reproducible local runtime for Postgres, target-platform services, and Streamlit.
+- **Target platform dashboard**: Live-first operator console for live operations, dashboard-owned non-secret runtime config, curated risk/status panels, recent attempts, research/replay diagnostics, and model registry visibility.
+- **Target platform dev environment**: Dev Container backed by Docker Compose that provides the reproducible local runtime for Postgres, target-platform services, and the dashboard.
 
 ## Relationships
 
@@ -56,6 +57,7 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Target platform operational state** lives in Postgres from the start.
 - The **Model registry** lives in Postgres, while model binaries, feature schemas, reports, and dataset manifests remain immutable file or object-storage artifacts referenced by hash.
 - **Model evaluation reports** may inform model registry promotion decisions, but promotion still requires explicit policy gates and human approval where required by the target-platform milestone.
+- **Fair-value policy replay** is a kind of **Model evaluation report**, not an **Event-driven replay**; it consumes decision rows and settlement labels rather than raw event logs.
 - An **Edge verdict** may justify the next research branch, but it is not a model promotion gate and cannot authorize live trading or target-platform cutover.
 - The public repo may include data schemas, validation code, synthetic fixtures, and artifact manifests, but official/licensed market data and full generated research datasets remain outside Git.
 - Initial X API work should create an **External signal research dataset** and **External signal feature-set manifest** for offline model evaluation before X becomes an operational raw event source for shadow, paper, or live runs.
@@ -74,5 +76,5 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - Settlement-state readiness outputs should be manifest-first: downstream fair-value and edge research should depend on dataset manifests and hashes rather than implicit local files.
 - **REST-first target ingestion** may prove target-platform boundaries and shadow comparison, but authenticated Kalshi WebSocket ingestion is required before serious paper/live promotion.
 - The target platform should preserve **Taker-only execution policy** as the first paper/live execution mode; **Maker execution policy** belongs in a later milestone and must be explicitly enabled by risk config.
-- The **Target platform dashboard** should be Streamlit-first.
+- The **Target platform dashboard** should open on the Live operator workspace.
 - The **Target platform dev environment** is part of the first target-platform milestone.
