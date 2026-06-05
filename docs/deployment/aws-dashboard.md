@@ -217,6 +217,12 @@ managed Postgres secret. The worker task security group/subnets must be able to
 reach the database, and the task command should include
 `--runtime-config-source postgres`.
 
+The fair-value live worker uses a single S3 live-run lock under the configured
+artifact prefix to prevent overlapping scheduled ECS tasks from submitting
+duplicate orders. A task that cannot acquire that lock should leave auditable
+run artifacts, but it must not replace the dashboard's latest actionable live
+status with `live_run_lock_held` / `not_submitted`.
+
 Use `docs/deployment/live-money-cutover-checklist.md` as the ALP-157 checklist
 and evidence template before any live-money authority change.
 

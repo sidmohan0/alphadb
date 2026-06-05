@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -35,8 +36,10 @@ from alphadb.model_evaluation.fair_value_replay import (
 from alphadb.config import settings_from_env
 from alphadb.live_runtime import (
     DEFAULT_FAIR_VALUE_LIVE_CONFIG,
+    LiveRunStatusRepository,
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
+    build_fair_value_live_status,
 )
 from alphadb.state.repository import OperationalStateRepository
 
@@ -251,11 +254,15 @@ def test_live_fair_value_collector_records_skip_reasons() -> None:
         orderbooks={ticker: {"orderbook_fp": {"yes_dollars": [], "no_dollars": []}}},
     )
 
-    payload = FairValueDecisionRowCollector(
-        kalshi_client=kalshi,
-        coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
-        config=FairValueDecisionRowCollectorConfig(max_markets=1),
-    ).collect(now=now).as_dict()
+    payload = (
+        FairValueDecisionRowCollector(
+            kalshi_client=kalshi,
+            coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+            config=FairValueDecisionRowCollectorConfig(max_markets=1),
+        )
+        .collect(now=now)
+        .as_dict()
+    )
 
     assert payload["counts"]["skips"] == 1
     assert payload["skip_reasons"] == [{"reason": "unsupported_market_shape", "count": 1}]
@@ -553,6 +560,94 @@ def test_live_trading_job_skips_order_when_live_run_lock_is_held(
     assert attempts["skip_reasons"] == [{"reason": "live_run_lock_held", "count": 1}]
 
 
+def test_lock_held_duplicate_does_not_replace_latest_dashboard_status(
+    tmp_path: Path,
+    monkeypatch,
+    request,
+) -> None:
+    live_runtime_repository_or_skip()
+    settings = live_enabled_settings()
+    status_repository = LiveRunStatusRepository(settings.database_url)
+    delete_lock_duplicate_test_statuses(settings.database_url)
+    request.addfinalizer(lambda: delete_lock_duplicate_test_statuses(settings.database_url))
+    prior_run_id = f"fv_live_prior_{uuid4().hex[:8]}"
+    prior_status = build_fair_value_live_status(
+        manifest={
+            "run_id": prior_run_id,
+            "generated_at": "2099-06-04T15:00:00+00:00",
+            "runtime_config": {"config_id": "cfg_existing", "version": 1, "snapshot": {}},
+            "runtime_controls": {"live_orders_enabled": True, "orders_placed": 1},
+            "counts": {"live_attempts": 1, "replay_trades": 1},
+        },
+        attempts_payload={
+            "attempts": [
+                {
+                    "attempt_id": f"attempt_{prior_run_id}",
+                    "submitted_at": "2099-06-04T15:00:00+00:00",
+                    "market_ticker": "KXBTC15M-FV-PRIOR",
+                    "side": "yes",
+                    "status": "submitted",
+                    "reason": "submitted",
+                }
+            ]
+        },
+        reconciliation={
+            "rows": [
+                {
+                    "attempt_id": f"attempt_{prior_run_id}",
+                    "market_ticker": "KXBTC15M-FV-PRIOR",
+                    "filled_contracts": 0,
+                    "settlement_status": "no_fill",
+                }
+            ],
+            "per_market_exposure": {"markets": []},
+        },
+    )
+    status_repository.persist(prior_status)
+
+    now = datetime(2099, 6, 4, 15, 1, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-DUPLICATE-LOCK"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "public_market_result",
+        lambda *, settings, ticker: {"status": "active", "result": None},
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "acquire_live_run_lock",
+        lambda **kwargs: fair_value_live_job.LiveRunLock(
+            backend="test",
+            acquired=False,
+            token="existing-lock",
+            reason="live_run_lock_held",
+            existing={"run_id": prior_run_id},
+        ),
+    )
+    client = SequencedOrderClient([{"fill_count": 2, "cost": 0.8, "fees": 0.02}])
+
+    FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        settings=settings,
+        order_client=client,
+    ).run(now=now)
+
+    latest = status_repository.latest_status()
+    assert client.requests == []
+    assert latest.run_id == prior_run_id
+    assert latest.latest_attempt_reason == "submitted"
+    assert latest.fill_status == "no_fill"
+
+
 def test_live_trading_job_preserves_daily_cap_from_prior_exposure(
     tmp_path: Path,
     monkeypatch,
@@ -801,9 +896,7 @@ def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_o
     assert admission_accounting["same_live_risk_day_unsettled_rows"] == 1
     assert admission_accounting["daily_loss_used_dollars"] == 44.75
     assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 44.75
-    assert manifest["runtime_controls"]["daily_loss_accounting"][
-        "daily_loss_used_dollars"
-    ] == 45.16
+    assert manifest["runtime_controls"]["daily_loss_accounting"]["daily_loss_used_dollars"] == 45.16
 
 
 def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
@@ -1055,7 +1148,10 @@ def write_prior_attempt(
                 "reason": "submitted",
                 "order_id": order_id,
                 "fill_count": fill_count,
-                "response_payload": {"order_id": order_id, "fill_count": f"{float(fill_count):.2f}"},
+                "response_payload": {
+                    "order_id": order_id,
+                    "fill_count": f"{float(fill_count):.2f}",
+                },
             }
         ],
     }
@@ -1074,3 +1170,16 @@ def live_runtime_repository_or_skip() -> LiveRuntimeConfigRepository:
         pytest.skip(f"Postgres is not available: {exc}")
     repository.apply_migrations()
     return LiveRuntimeConfigRepository(database_url)
+
+
+def delete_lock_duplicate_test_statuses(database_url: str) -> None:
+    with OperationalStateRepository(database_url).connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                delete from live_run_statuses
+                where run_id like 'fv_live_prior_%'
+                   or run_id like 'fv_live_2099%'
+                """
+            )
+        connection.commit()
