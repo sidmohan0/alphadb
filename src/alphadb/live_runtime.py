@@ -533,7 +533,12 @@ def build_fair_value_live_status(
             default=_float(runtime_controls.get("max_ticker_exposure_dollars"), default=0.0),
         ),
     )
-    daily_used = _daily_loss_usage(reconciliation_rows)
+    full_history_daily_used = _daily_loss_usage(reconciliation_rows)
+    daily_loss_accounting = _mapping(runtime_controls.get("daily_loss_accounting"))
+    daily_used = _float(
+        daily_loss_accounting.get("daily_loss_used_dollars"),
+        default=full_history_daily_used,
+    )
     market_used = _market_exposure_for(latest_market, reconciliation)
     fill_status = _fill_status(latest_attempt, latest_reconciliation)
     decision_outcome = _decision_outcome(latest_status, manifest)
@@ -567,6 +572,8 @@ def build_fair_value_live_status(
         summary={
             "counts": dict(_mapping(manifest.get("counts"))),
             "report_summary": dict(_mapping(manifest.get("report_summary"))),
+            "daily_loss_accounting": dict(daily_loss_accounting),
+            "full_history_daily_loss_used_dollars": full_history_daily_used,
             "runtime_controls": {
                 key: runtime_controls.get(key)
                 for key in (

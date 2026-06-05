@@ -143,6 +143,67 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert no_recent.decision_outcome == "no_recent_run"
 
 
+def test_live_status_prefers_live_risk_day_accounting_over_full_history() -> None:
+    status = build_fair_value_live_status(
+        manifest={
+            "run_id": "fv_live_status_daily_accounting",
+            "generated_at": "2026-06-05T07:00:10+00:00",
+            "runtime_config": {
+                "config_id": "cfg_1",
+                "version": 3,
+                "snapshot": {
+                    "max_market_exposure_dollars": 5.0,
+                    "max_daily_loss_dollars": 50.0,
+                },
+            },
+            "runtime_controls": {
+                "live_orders_enabled": True,
+                "daily_loss_accounting": {
+                    "live_risk_day": "2026-06-05",
+                    "timezone": "America/Los_Angeles",
+                    "daily_loss_used_dollars": 0.41,
+                },
+            },
+            "counts": {"live_attempts": 1, "replay_trades": 1},
+        },
+        attempts_payload={
+            "attempts": [
+                {
+                    "attempt_id": "attempt_today",
+                    "submitted_at": "2026-06-05T07:00:10+00:00",
+                    "market_ticker": "KXBTC15M-TODAY",
+                    "side": "yes",
+                    "status": "submitted",
+                    "reason": "submitted",
+                }
+            ]
+        },
+        reconciliation={
+            "rows": [
+                {
+                    "attempt_id": "attempt_yesterday",
+                    "market_ticker": "KXBTC15M-YESTERDAY",
+                    "filled_contracts": 1,
+                    "settlement_status": "unsettled",
+                    "max_loss_dollars": 49.5,
+                },
+                {
+                    "attempt_id": "attempt_today",
+                    "market_ticker": "KXBTC15M-TODAY",
+                    "filled_contracts": 1,
+                    "settlement_status": "unsettled",
+                    "max_loss_dollars": 0.41,
+                },
+            ],
+            "per_market_exposure": {"markets": []},
+        },
+    )
+
+    assert status.daily_loss_used_dollars == 0.41
+    assert status.summary["daily_loss_accounting"]["live_risk_day"] == "2026-06-05"
+    assert status.summary["full_history_daily_loss_used_dollars"] == 49.91
+
+
 def test_live_run_status_repository_persists_dashboard_ready_summary() -> None:
     database_url = settings_from_env().database_url
     repository_or_skip()

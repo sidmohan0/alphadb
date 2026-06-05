@@ -6,11 +6,12 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib import parse, request
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from alphadb.config import Settings, settings_from_env
 from alphadb.live_orders import (
@@ -44,7 +45,11 @@ FAIR_VALUE_LIVE_JOB_SCHEMA = "kxbtc_fair_value_live_trading_job.v1"
 FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA = "kxbtc_fair_value_live_order_attempts.v1"
 FAIR_VALUE_LIVE_RECONCILIATION_SCHEMA = "kxbtc_fair_value_live_reconciliation.v1"
 FAIR_VALUE_LIVE_LOCK_SCHEMA = "kxbtc_fair_value_live_run_lock.v1"
+FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA = (
+    "kxbtc_fair_value_live_daily_loss_accounting.v1"
+)
 FAIR_VALUE_LIVE_LOCK_TTL_SECONDS = 180
+DEFAULT_LIVE_RISK_TIMEZONE = "America/Los_Angeles"
 RuntimeConfigSource = Literal["auto", "postgres", "cli"]
 AWS_LIKE_ENVIRONMENTS = {"aws", "prod", "production"}
 
@@ -66,6 +71,7 @@ class FairValueLiveTradingJobConfig:
     s3_prefix: str | None = None
     submit_live_orders: bool = False
     runtime_config_source: RuntimeConfigSource = "auto"
+    live_risk_timezone: str = DEFAULT_LIVE_RISK_TIMEZONE
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +90,7 @@ class FairValueLiveTradingJobConfig:
             "s3_prefix": self.s3_prefix,
             "submit_live_orders": self.submit_live_orders,
             "runtime_config_source": self.runtime_config_source,
+            "live_risk_timezone": self.live_risk_timezone,
         }
 
 
@@ -164,7 +171,12 @@ class FairValueLiveTradingJob:
                 generated_at=generated_at,
                 max_ticker_exposure_dollars=self.config.max_ticker_exposure_dollars,
             )
-            daily_loss_used = daily_loss_usage_dollars(prior_reconciliation["rows"])
+            admission_daily_loss_accounting = daily_loss_accounting_report(
+                prior_reconciliation["rows"],
+                generated_at=generated_at,
+                live_risk_timezone=self.config.live_risk_timezone,
+            )
+            daily_loss_used = float(admission_daily_loss_accounting["daily_loss_used_dollars"])
             market_exposure_by_ticker = per_market_exposure_dollars(prior_reconciliation["rows"])
             live_attempts = self._submit_live_attempts(
                 replay_decisions=replay["decisions"],
@@ -172,6 +184,7 @@ class FairValueLiveTradingJob:
                 run_id=run_id,
                 generated_at=generated_at,
                 starting_daily_loss_used=daily_loss_used,
+                daily_loss_accounting=admission_daily_loss_accounting,
                 market_exposure_by_ticker=market_exposure_by_ticker,
                 live_run_lock=live_run_lock,
             )
@@ -179,6 +192,7 @@ class FairValueLiveTradingJob:
                 "schema_version": FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA,
                 "run_id": run_id,
                 "generated_at": generated_at.isoformat(),
+                "admission_daily_loss_accounting": admission_daily_loss_accounting,
                 "skip_reasons": summarize_attempt_reasons(live_attempts),
                 "attempts": live_attempts,
             }
@@ -189,6 +203,12 @@ class FairValueLiveTradingJob:
                 generated_at=generated_at,
                 max_ticker_exposure_dollars=self.config.max_ticker_exposure_dollars,
             )
+            daily_loss_accounting = daily_loss_accounting_report(
+                live_reconciliation["rows"],
+                generated_at=generated_at,
+                live_risk_timezone=self.config.live_risk_timezone,
+            )
+            live_attempts_payload["daily_loss_accounting"] = daily_loss_accounting
 
             artifacts = {
                 "decision_rows": run_dir / "decision_rows.json",
@@ -222,6 +242,8 @@ class FairValueLiveTradingJob:
                     "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
                     "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
                     "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
+                    "admission_daily_loss_accounting": admission_daily_loss_accounting,
+                    "daily_loss_accounting": daily_loss_accounting,
                     "runtime_guard": guard.as_dict(),
                     "live_run_lock": live_run_lock.as_dict(),
                 },
@@ -236,10 +258,27 @@ class FairValueLiveTradingJob:
                         1 for attempt in live_attempts if attempt.get("status") == "skipped"
                     ),
                     "prior_live_attempts_reconciled": len(prior_attempts),
+                    "prior_reconciliation_rows_for_daily_loss": admission_daily_loss_accounting[
+                        "same_live_risk_day_rows"
+                    ],
+                    "live_reconciliation_rows_for_daily_loss": daily_loss_accounting[
+                        "same_live_risk_day_rows"
+                    ],
                 },
                 "report_summary": {
                     "simulated_replay_net_pnl_dollars": replay["pnl"]["net_pnl_dollars"],
                     "simulated_replay_settlement_status": replay["settlement"]["status"],
+                    "daily_loss_live_risk_day": daily_loss_accounting["live_risk_day"],
+                    "daily_loss_used_dollars": daily_loss_accounting[
+                        "daily_loss_used_dollars"
+                    ],
+                    "live_reconciliation_scope": "full_history_loaded_attempts",
+                    "live_full_history_net_pnl_dollars": live_reconciliation["pnl"][
+                        "net_pnl_dollars"
+                    ],
+                    "live_full_history_unsettled_exposure_dollars": live_reconciliation["pnl"][
+                        "unsettled_exposure_dollars"
+                    ],
                     "live_daily_net_pnl_dollars": live_reconciliation["pnl"]["net_pnl_dollars"],
                     "live_daily_unsettled_exposure_dollars": live_reconciliation["pnl"][
                         "unsettled_exposure_dollars"
@@ -278,6 +317,7 @@ class FairValueLiveTradingJob:
         run_id: str,
         generated_at: datetime,
         starting_daily_loss_used: float,
+        daily_loss_accounting: Mapping[str, Any],
         market_exposure_by_ticker: Mapping[str, float],
         live_run_lock: "LiveRunLock",
     ) -> list[dict[str, Any]]:
@@ -301,6 +341,7 @@ class FairValueLiveTradingJob:
                         "request_payload": {},
                         "max_loss_dollars": 0.0,
                         "daily_loss_used_before_dollars": round(daily_loss_used, 6),
+                        "daily_loss_accounting": dict(daily_loss_accounting),
                         "market_exposure": {
                             "market_ticker": market_ticker,
                             "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
@@ -365,6 +406,7 @@ class FairValueLiveTradingJob:
                 "request_payload": request_payload,
                 "max_loss_dollars": round(max_loss, 6),
                 "daily_loss_used_before_dollars": round(daily_loss_used, 6),
+                "daily_loss_accounting": dict(daily_loss_accounting),
                 "market_exposure": market_exposure_state,
                 "runtime_guard": guard.as_dict(),
                 "live_run_lock": live_run_lock.as_dict(),
@@ -940,6 +982,82 @@ def daily_loss_usage_dollars(rows: Sequence[Mapping[str, Any]]) -> float:
         else:
             usage += float(row.get("max_loss_dollars") or 0.0)
     return round(usage, 6)
+
+
+def daily_loss_accounting_report(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: datetime,
+    live_risk_timezone: str,
+) -> dict[str, Any]:
+    live_risk_day, window_start_utc, window_end_utc = live_risk_window(
+        generated_at=generated_at,
+        live_risk_timezone=live_risk_timezone,
+    )
+    same_day_rows = rows_for_live_risk_window(
+        rows,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+    )
+    filled_rows = [
+        row for row in same_day_rows if int(row.get("filled_contracts") or 0) > 0
+    ]
+    return {
+        "schema_version": FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA,
+        "basis": "submitted_at_in_live_risk_day",
+        "timezone": live_risk_timezone,
+        "live_risk_day": live_risk_day.isoformat(),
+        "window_start_utc": window_start_utc.isoformat(),
+        "window_end_utc": window_end_utc.isoformat(),
+        "prior_reconciliation_rows": len(rows),
+        "same_live_risk_day_rows": len(same_day_rows),
+        "same_live_risk_day_filled_rows": len(filled_rows),
+        "same_live_risk_day_no_fill_rows": sum(
+            1 for row in same_day_rows if row.get("settlement_status") == "no_fill"
+        ),
+        "same_live_risk_day_settled_rows": sum(
+            1 for row in filled_rows if row.get("settlement_status") == "settled"
+        ),
+        "same_live_risk_day_unsettled_rows": sum(
+            1 for row in filled_rows if row.get("settlement_status") != "settled"
+        ),
+        "daily_loss_used_dollars": daily_loss_usage_dollars(same_day_rows),
+    }
+
+
+def live_risk_window(
+    *,
+    generated_at: datetime,
+    live_risk_timezone: str,
+) -> tuple[date, datetime, datetime]:
+    timezone = ZoneInfo(live_risk_timezone)
+    generated_local = ensure_utc(generated_at).astimezone(timezone)
+    live_risk_day = generated_local.date()
+    window_start_local = datetime.combine(live_risk_day, datetime.min.time(), tzinfo=timezone)
+    window_end_local = window_start_local + timedelta(days=1)
+    return (
+        live_risk_day,
+        window_start_local.astimezone(UTC),
+        window_end_local.astimezone(UTC),
+    )
+
+
+def rows_for_live_risk_window(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+) -> list[Mapping[str, Any]]:
+    window_start = ensure_utc(window_start_utc)
+    window_end = ensure_utc(window_end_utc)
+    same_day_rows: list[Mapping[str, Any]] = []
+    for row in rows:
+        submitted_at = parse_datetime(row.get("submitted_at"))
+        if submitted_at is None:
+            continue
+        if window_start <= submitted_at < window_end:
+            same_day_rows.append(row)
+    return same_day_rows
 
 
 def per_market_exposure_dollars(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:

@@ -598,8 +598,212 @@ def test_live_trading_job_preserves_daily_cap_from_prior_exposure(
 
     assert client.requests == []
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    admission_accounting = attempts["admission_daily_loss_accounting"]
+    assert admission_accounting["timezone"] == "America/Los_Angeles"
+    assert admission_accounting["live_risk_day"] == "2026-06-04"
+    assert admission_accounting["same_live_risk_day_rows"] == 1
+    assert admission_accounting["same_live_risk_day_filled_rows"] == 1
+    assert admission_accounting["daily_loss_used_dollars"] == 49.5
     assert attempts["attempts"][0]["status"] == "skipped"
     assert attempts["attempts"][0]["reason"] == "daily_loss_cap_reached"
+    assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 49.5
+    assert attempts["attempts"][0]["daily_loss_accounting"] == admission_accounting
+
+
+def test_live_trading_job_does_not_reset_daily_cap_at_utc_midnight(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 5, 0, 0, 10, tzinfo=UTC)
+    current_ticker = "KXBTC15M-FV-UTC-MIDNIGHT-CURRENT"
+    prior_ticker = "KXBTC15M-FV-UTC-MIDNIGHT-PRIOR"
+    install_live_job_fixture(monkeypatch, now=now, ticker=current_ticker)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "public_market_result",
+        lambda *, settings, ticker: {"status": "active", "result": None},
+    )
+    write_prior_attempt(
+        tmp_path,
+        run_id="fv_live_20260604T235900Z",
+        order_id="prior_utc_midnight_order",
+        ticker=prior_ticker,
+        side="yes",
+        fill_count=1,
+        submitted_at="2026-06-04T23:59:00+00:00",
+    )
+    client = SequencedOrderClient(
+        [],
+        order_details={
+            "prior_utc_midnight_order": {"fill_count": 1, "cost": 49.0, "fees": 0.5},
+        },
+    )
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    assert client.requests == []
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    admission_accounting = attempts["admission_daily_loss_accounting"]
+    assert admission_accounting["live_risk_day"] == "2026-06-04"
+    assert admission_accounting["window_start_utc"] == "2026-06-04T07:00:00+00:00"
+    assert admission_accounting["window_end_utc"] == "2026-06-05T07:00:00+00:00"
+    assert admission_accounting["daily_loss_used_dollars"] == 49.5
+    assert attempts["attempts"][0]["status"] == "skipped"
+    assert attempts["attempts"][0]["reason"] == "daily_loss_cap_reached"
+
+
+def test_live_trading_job_resets_daily_cap_at_live_risk_day_boundary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 5, 7, 0, 10, tzinfo=UTC)
+    current_ticker = "KXBTC15M-FV-LA-RESET-CURRENT"
+    prior_ticker = "KXBTC15M-FV-LA-RESET-PRIOR"
+    install_live_job_fixture(monkeypatch, now=now, ticker=current_ticker)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "public_market_result",
+        lambda *, settings, ticker: {"status": "active", "result": None},
+    )
+    write_prior_attempt(
+        tmp_path,
+        run_id="fv_live_20260605T065900Z",
+        order_id="prior_la_midnight_order",
+        ticker=prior_ticker,
+        side="yes",
+        fill_count=1,
+        submitted_at="2026-06-05T06:59:00+00:00",
+    )
+    client = SequencedOrderClient(
+        [{"fill_count": 1, "cost": 0.4, "fees": 0.01}],
+        order_details={
+            "prior_la_midnight_order": {"fill_count": 1, "cost": 49.0, "fees": 0.5},
+        },
+    )
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    assert len(client.requests) == 1
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    admission_accounting = attempts["admission_daily_loss_accounting"]
+    post_run_accounting = manifest["runtime_controls"]["daily_loss_accounting"]
+    assert admission_accounting["live_risk_day"] == "2026-06-05"
+    assert admission_accounting["window_start_utc"] == "2026-06-05T07:00:00+00:00"
+    assert admission_accounting["same_live_risk_day_rows"] == 0
+    assert admission_accounting["daily_loss_used_dollars"] == 0.0
+    assert post_run_accounting["same_live_risk_day_filled_rows"] == 1
+    assert post_run_accounting["daily_loss_used_dollars"] == 0.41
+    assert attempts["attempts"][0]["status"] == "submitted"
+    assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 0.0
+
+
+def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 5, 16, 0, tzinfo=UTC)
+    current_ticker = "KXBTC15M-FV-DAILY-COUNT-CURRENT"
+    settled_ticker = "KXBTC15M-FV-DAILY-COUNT-SETTLED"
+    unsettled_ticker = "KXBTC15M-FV-DAILY-COUNT-UNSETTLED"
+    no_fill_ticker = "KXBTC15M-FV-DAILY-COUNT-NOFILL"
+    install_live_job_fixture(monkeypatch, now=now, ticker=current_ticker)
+
+    def market_result(*, settings, ticker):
+        if ticker == settled_ticker:
+            return {"status": "finalized", "result": "no"}
+        return {"status": "active", "result": None}
+
+    monkeypatch.setattr(fair_value_live_job, "public_market_result", market_result)
+    write_prior_attempt(
+        tmp_path,
+        run_id="fv_live_20260605T155500Z",
+        order_id="prior_settled_loss_order",
+        ticker=settled_ticker,
+        side="yes",
+        fill_count=1,
+        submitted_at="2026-06-05T15:55:00+00:00",
+    )
+    write_prior_attempt(
+        tmp_path,
+        run_id="fv_live_20260605T155600Z",
+        order_id="prior_unsettled_order",
+        ticker=unsettled_ticker,
+        side="yes",
+        fill_count=1,
+        submitted_at="2026-06-05T15:56:00+00:00",
+    )
+    write_prior_attempt(
+        tmp_path,
+        run_id="fv_live_20260605T155700Z",
+        order_id="prior_no_fill_order",
+        ticker=no_fill_ticker,
+        side="yes",
+        fill_count=0,
+        submitted_at="2026-06-05T15:57:00+00:00",
+    )
+    client = SequencedOrderClient(
+        [{"fill_count": 1, "cost": 0.4, "fees": 0.01}],
+        order_details={
+            "prior_settled_loss_order": {"fill_count": 1, "cost": 20.0, "fees": 0.5},
+            "prior_unsettled_order": {"fill_count": 1, "cost": 24.0, "fees": 0.25},
+            "prior_no_fill_order": {"fill_count": 0, "cost": 30.0, "fees": 0.0},
+        },
+    )
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    assert len(client.requests) == 1
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    admission_accounting = attempts["admission_daily_loss_accounting"]
+    assert admission_accounting["same_live_risk_day_rows"] == 3
+    assert admission_accounting["same_live_risk_day_filled_rows"] == 2
+    assert admission_accounting["same_live_risk_day_no_fill_rows"] == 1
+    assert admission_accounting["same_live_risk_day_settled_rows"] == 1
+    assert admission_accounting["same_live_risk_day_unsettled_rows"] == 1
+    assert admission_accounting["daily_loss_used_dollars"] == 44.75
+    assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 44.75
+    assert manifest["runtime_controls"]["daily_loss_accounting"][
+        "daily_loss_used_dollars"
+    ] == 45.16
 
 
 def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
@@ -822,18 +1026,20 @@ def write_prior_attempt(
     ticker: str,
     side: str,
     fill_count: int,
+    submitted_at: str = "2026-06-04T14:59:00+00:00",
+    generated_at: str | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
     payload = {
         "schema_version": "kxbtc_fair_value_live_order_attempts.v1",
         "run_id": run_id,
-        "generated_at": "2026-06-04T14:59:00+00:00",
+        "generated_at": generated_at or submitted_at,
         "attempts": [
             {
                 "attempt_id": f"attempt_{order_id}",
                 "run_id": run_id,
-                "submitted_at": "2026-06-04T14:59:00+00:00",
+                "submitted_at": submitted_at,
                 "market_ticker": ticker,
                 "side": side,
                 "decision": {
