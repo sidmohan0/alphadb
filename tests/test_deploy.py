@@ -176,16 +176,82 @@ def test_dashboard_auth_can_be_required_outside_aws_environment() -> None:
     assert status["required"] is True
 
 
-def test_dashboard_fargate_template_can_run_in_private_or_public_subnets() -> None:
+def test_dashboard_fargate_template_defines_public_cockpit_and_private_api() -> None:
     template = Path("deploy/aws/ecs-fargate-dashboard.yaml").read_text(encoding="utf-8")
+    cockpit_task = template.split("CockpitTaskDefinition:", maxsplit=1)[1].split(
+        "AlphaDbApiTaskDefinition:",
+        maxsplit=1,
+    )[0]
+    api_task = template.split("AlphaDbApiTaskDefinition:", maxsplit=1)[1].split(
+        "AlphaDbApiService:",
+        maxsplit=1,
+    )[0]
+    api_service = template.split("AlphaDbApiService:", maxsplit=1)[1].split(
+        "CockpitService:",
+        maxsplit=1,
+    )[0]
+    cockpit_service = template.split("CockpitService:", maxsplit=1)[1].split(
+        "Outputs:",
+        maxsplit=1,
+    )[0]
 
     assert "AssignPublicIp:" in template
     assert "Default: DISABLED" in template
     assert "AssignPublicIp: !Ref AssignPublicIp" in template
     assert "CpuArchitecture: ARM64" in template
+    assert "CockpitContainerImage" in template
+    assert "AlphaDbApiContainerImage" in template
     assert "DatabaseUrlSecretArn" in template
-    assert "DashboardPinSecretArn" in template
-    assert "DashboardCookieSecretArn" in template
+    assert "CockpitPinSecretArn" in template
+    assert "CockpitCookieSecretArn" in template
+    assert "AWS::ServiceDiscovery::PrivateDnsNamespace" in template
+    assert "AWS::ServiceDiscovery::Service" in template
+    assert "Name: ALPHADB_API_BASE_URL" in cockpit_task
+    assert "http://alphadb-api.${PrivateNamespaceName}:${AlphaDbApiPort}" in cockpit_task
+    assert "Name: ALPHADB_COCKPIT_PIN" in cockpit_task
+    assert "Name: ALPHADB_COCKPIT_COOKIE_SECRET" in cockpit_task
+    assert "DATABASE_URL" not in cockpit_task
+    assert "Name: DATABASE_URL" in api_task
+    assert "Name: ALPHADB_DASHBOARD_PIN" in api_task
+    assert "LoadBalancers:" not in api_service
+    assert "ServiceRegistries:" in api_service
+    assert "LoadBalancers:" in cockpit_service
+    assert "SourceSecurityGroupId: !Ref CockpitServiceSecurityGroup" in template
+    assert "AWS::Events::Rule" not in template
+
+
+def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secrets() -> None:
+    deploy_script = Path("deploy/aws/deploy-cockpit-stack.sh").read_text(encoding="utf-8")
+    smoke_script = Path("deploy/aws/smoke-cockpit-stack.sh").read_text(encoding="utf-8")
+    local_auth_smoke = Path("apps/dashboard/scripts/smoke-auth.sh").read_text(encoding="utf-8")
+
+    assert 'COCKPIT_IMAGE_TAG="${COCKPIT_IMAGE_TAG:-cockpit-' in deploy_script
+    assert 'ALPHADB_API_IMAGE_TAG="${ALPHADB_API_IMAGE_TAG:-api-' in deploy_script
+    assert "-f apps/dashboard/Dockerfile" in deploy_script
+    assert "apps/dashboard" in deploy_script
+    assert "CockpitContainerImage=\"$COCKPIT_IMAGE_URI\"" in deploy_script
+    assert "AlphaDbApiContainerImage=\"$ALPHADB_API_IMAGE_URI\"" in deploy_script
+    assert "require_env DATABASE_URL_SECRET_ARN" in deploy_script
+    assert "require_env COCKPIT_PIN_SECRET_ARN" in deploy_script
+    assert "require_env COCKPIT_COOKIE_SECRET_ARN" in deploy_script
+    assert "DATABASE_URL=" not in deploy_script
+    assert "run_api_command alphadb-deploy migrate" in deploy_script
+    assert "run_api_command alphadb-deploy seed-readiness --series KXBTC15M" in deploy_script
+    assert "run_api_command alphadb-deploy smoke" in deploy_script
+    assert "deploy/aws/smoke-cockpit-stack.sh" in deploy_script
+    assert "DRY_RUN" in deploy_script
+
+    assert "secretsmanager get-secret-value" in smoke_script
+    assert "$COCKPIT_URL/api/alphadb/health" in smoke_script
+    assert 'STATUS" != "401"' in smoke_script
+    assert "$COCKPIT_URL/api/auth/login" in smoke_script
+    assert '--data-urlencode "pin=$PIN"' in smoke_script
+    assert 'components.get("postgres") != "ok"' in smoke_script
+
+    assert "auth-disabled Cockpit opens" in local_auth_smoke
+    assert "wrong PIN is rejected" in local_auth_smoke
+    assert "correct PIN sets signed cookie" in local_auth_smoke
+    assert "signed cookie opens Cockpit" in local_auth_smoke
 
 
 def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> None:

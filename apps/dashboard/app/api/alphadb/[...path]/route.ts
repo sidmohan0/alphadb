@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server"
 
+import { createAlphaDbApiAuthCookieHeader } from "@/lib/cockpit-auth"
+
 const DEFAULT_API_BASE = "http://127.0.0.1:8501"
 
 type RouteContext = {
@@ -29,6 +31,10 @@ async function proxy(request: NextRequest, context: RouteContext) {
   const contentType = request.headers.get("Content-Type")
   if (contentType) {
     headers.set("Content-Type", contentType)
+  }
+  const apiAuthCookie = await createAlphaDbApiAuthCookieHeader()
+  if (apiAuthCookie) {
+    headers.set("Cookie", apiAuthCookie)
   }
 
   const response = await fetch(upstream, {

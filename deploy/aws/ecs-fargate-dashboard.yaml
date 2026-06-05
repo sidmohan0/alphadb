@@ -1,47 +1,63 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: AlphaDB live operator dashboard on ECS Fargate with managed Postgres dependency.
+Description: AlphaDB AWS Cockpit on ECS Fargate with private AlphaDB API and managed Postgres dependency.
 
 Parameters:
   ServiceName:
     Type: String
-    Default: alphadb-dashboard
-  ContainerImage:
+    Default: alphadb-cockpit
+  CockpitContainerImage:
     Type: String
-    Description: ECR image URI for the AlphaDB dashboard container.
+    Description: ECR image URI for the production-built Next.js Cockpit container.
+  AlphaDbApiContainerImage:
+    Type: String
+    Description: ECR image URI for the Python AlphaDB API container.
   VpcId:
     Type: AWS::EC2::VPC::Id
   PublicSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Public subnets for the load balancer.
+    Description: Public subnets for the Cockpit load balancer.
   PrivateSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Private subnets for Fargate tasks with egress to Postgres and the internet.
+    Description: Private subnets for Cockpit and AlphaDB API Fargate tasks.
   AssignPublicIp:
     Type: String
     Default: DISABLED
     AllowedValues:
       - ENABLED
       - DISABLED
-    Description: Set ENABLED only for public-subnet deployments without NAT.
+    Description: Set ENABLED only for smoke deployments in public subnets without NAT.
   DatabaseUrlSecretArn:
     Type: String
     Description: Secrets Manager ARN whose value is DATABASE_URL for the managed Postgres instance.
-  DashboardPinSecretArn:
+  CockpitPinSecretArn:
     Type: String
-    Description: Secrets Manager ARN whose value is the four-digit dashboard PIN.
-  DashboardCookieSecretArn:
+    Description: Secrets Manager ARN whose value is the four-digit Cockpit PIN.
+  CockpitCookieSecretArn:
     Type: String
-    Description: Secrets Manager ARN whose value signs dashboard remember-cookies.
-  DashboardPort:
+    Description: Secrets Manager ARN whose value signs Cockpit remember-cookies.
+  PrivateNamespaceName:
+    Type: String
+    Default: alphadb.local
+    Description: Private Cloud Map namespace used only inside the VPC.
+  CockpitPort:
+    Type: Number
+    Default: 3000
+  AlphaDbApiPort:
     Type: Number
     Default: 8501
   DesiredCount:
     Type: Number
     Default: 1
-  TaskCpu:
+  CockpitTaskCpu:
     Type: String
     Default: "512"
-  TaskMemory:
+  CockpitTaskMemory:
+    Type: String
+    Default: "1024"
+  AlphaDbApiTaskCpu:
+    Type: String
+    Default: "512"
+  AlphaDbApiTaskMemory:
     Type: String
     Default: "1024"
   RuntimeMode:
@@ -57,10 +73,16 @@ Parameters:
     Default: us-east-2
 
 Resources:
-  DashboardLogGroup:
+  CockpitLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /ecs/${ServiceName}
+      LogGroupName: !Sub /ecs/${ServiceName}/cockpit
+      RetentionInDays: 14
+
+  AlphaDbApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ServiceName}/alphadb-api
       RetentionInDays: 14
 
   DashboardCluster:
@@ -81,7 +103,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Policies:
-        - PolicyName: ReadDashboardSecrets
+        - PolicyName: ReadCockpitAndAlphaDbApiSecrets
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -90,10 +112,21 @@ Resources:
                   - secretsmanager:GetSecretValue
                 Resource:
                   - !Ref DatabaseUrlSecretArn
-                  - !Ref DashboardPinSecretArn
-                  - !Ref DashboardCookieSecretArn
+                  - !Ref CockpitPinSecretArn
+                  - !Ref CockpitCookieSecretArn
 
-  DashboardTaskRole:
+  CockpitTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  AlphaDbApiTaskRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -107,7 +140,7 @@ Resources:
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Public HTTP access to the AlphaDB dashboard load balancer.
+      GroupDescription: Public HTTP access to the AlphaDB Cockpit load balancer.
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -118,16 +151,30 @@ Resources:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  DashboardServiceSecurityGroup:
+  CockpitServiceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: AlphaDB dashboard tasks accept traffic only from the load balancer.
+      GroupDescription: Cockpit tasks accept traffic only from the load balancer.
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: !Ref DashboardPort
-          ToPort: !Ref DashboardPort
+          FromPort: !Ref CockpitPort
+          ToPort: !Ref CockpitPort
           SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  AlphaDbApiServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AlphaDB API tasks accept traffic only from Cockpit tasks.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AlphaDbApiPort
+          ToPort: !Ref AlphaDbApiPort
+          SourceSecurityGroupId: !Ref CockpitServiceSecurityGroup
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
@@ -142,7 +189,7 @@ Resources:
       Subnets: !Ref PublicSubnetIds
       Type: application
 
-  DashboardTargetGroup:
+  CockpitTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       HealthCheckEnabled: true
@@ -150,7 +197,7 @@ Resources:
       HealthCheckProtocol: HTTP
       Matcher:
         HttpCode: "200"
-      Port: !Ref DashboardPort
+      Port: !Ref CockpitPort
       Protocol: HTTP
       TargetType: ip
       VpcId: !Ref VpcId
@@ -160,17 +207,37 @@ Resources:
     Properties:
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref DashboardTargetGroup
+          TargetGroupArn: !Ref CockpitTargetGroup
       LoadBalancerArn: !Ref DashboardLoadBalancer
       Port: 80
       Protocol: HTTP
 
-  DashboardTaskDefinition:
+  PrivateDnsNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Ref PrivateNamespaceName
+      Vpc: !Ref VpcId
+
+  AlphaDbApiDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Description: Private AlphaDB API service discovery entry.
+      DnsConfig:
+        DnsRecords:
+          - TTL: 10
+            Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: alphadb-api
+      NamespaceId: !Ref PrivateDnsNamespace
+
+  CockpitTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: !Ref ServiceName
-      Cpu: !Ref TaskCpu
-      Memory: !Ref TaskMemory
+      Family: !Sub ${ServiceName}-cockpit
+      Cpu: !Ref CockpitTaskCpu
+      Memory: !Ref CockpitTaskMemory
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
@@ -178,13 +245,59 @@ Resources:
         CpuArchitecture: ARM64
         OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt DashboardExecutionRole.Arn
-      TaskRoleArn: !GetAtt DashboardTaskRole.Arn
+      TaskRoleArn: !GetAtt CockpitTaskRole.Arn
       ContainerDefinitions:
-        - Name: dashboard
-          Image: !Ref ContainerImage
+        - Name: cockpit
+          Image: !Ref CockpitContainerImage
           Essential: true
           PortMappings:
-            - ContainerPort: !Ref DashboardPort
+            - ContainerPort: !Ref CockpitPort
+              Protocol: tcp
+          Environment:
+            - Name: ALPHADB_ENV
+              Value: aws
+            - Name: NODE_ENV
+              Value: production
+            - Name: PORT
+              Value: !Sub "${CockpitPort}"
+            - Name: ALPHADB_API_BASE_URL
+              Value: !Sub http://alphadb-api.${PrivateNamespaceName}:${AlphaDbApiPort}
+            - Name: ALPHADB_COCKPIT_AUTH_REQUIRED
+              Value: "1"
+            - Name: ALPHADB_COCKPIT_COOKIE_TTL_SECONDS
+              Value: "604800"
+          Secrets:
+            - Name: ALPHADB_COCKPIT_PIN
+              ValueFrom: !Ref CockpitPinSecretArn
+            - Name: ALPHADB_COCKPIT_COOKIE_SECRET
+              ValueFrom: !Ref CockpitCookieSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CockpitLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: cockpit
+
+  AlphaDbApiTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ServiceName}-alphadb-api
+      Cpu: !Ref AlphaDbApiTaskCpu
+      Memory: !Ref AlphaDbApiTaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt DashboardExecutionRole.Arn
+      TaskRoleArn: !GetAtt AlphaDbApiTaskRole.Arn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref AlphaDbApiContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref AlphaDbApiPort
               Protocol: tcp
           Environment:
             - Name: ALPHADB_ENV
@@ -194,7 +307,7 @@ Resources:
             - Name: ALPHADB_AWS_REGION
               Value: !Ref AwsRegionValue
             - Name: ALPHADB_DASHBOARD_PORT
-              Value: !Sub "${DashboardPort}"
+              Value: !Sub "${AlphaDbApiPort}"
             - Name: ALPHADB_RUNTIME_MODE
               Value: !Ref RuntimeMode
             - Name: ALPHADB_ENABLE_LIVE_ORDERS
@@ -207,43 +320,73 @@ Resources:
             - Name: DATABASE_URL
               ValueFrom: !Ref DatabaseUrlSecretArn
             - Name: ALPHADB_DASHBOARD_PIN
-              ValueFrom: !Ref DashboardPinSecretArn
+              ValueFrom: !Ref CockpitPinSecretArn
             - Name: ALPHADB_DASHBOARD_COOKIE_SECRET
-              ValueFrom: !Ref DashboardCookieSecretArn
+              ValueFrom: !Ref CockpitCookieSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: !Ref DashboardLogGroup
+              awslogs-group: !Ref AlphaDbApiLogGroup
               awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: dashboard
+              awslogs-stream-prefix: alphadb-api
 
-  DashboardService:
+  AlphaDbApiService:
     Type: AWS::ECS::Service
     DependsOn:
-      - DashboardListener
+      - AlphaDbApiDiscoveryService
     Properties:
-      ServiceName: !Ref ServiceName
+      ServiceName: !Sub ${ServiceName}-alphadb-api
       Cluster: !Ref DashboardCluster
       DesiredCount: !Ref DesiredCount
       LaunchType: FARGATE
-      TaskDefinition: !Ref DashboardTaskDefinition
+      TaskDefinition: !Ref AlphaDbApiTaskDefinition
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: !Ref AssignPublicIp
           SecurityGroups:
-            - !Ref DashboardServiceSecurityGroup
+            - !Ref AlphaDbApiServiceSecurityGroup
+          Subnets: !Ref PrivateSubnetIds
+      ServiceRegistries:
+        - RegistryArn: !GetAtt AlphaDbApiDiscoveryService.Arn
+
+  CockpitService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - DashboardListener
+      - AlphaDbApiService
+    Properties:
+      ServiceName: !Sub ${ServiceName}-cockpit
+      Cluster: !Ref DashboardCluster
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      TaskDefinition: !Ref CockpitTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+          SecurityGroups:
+            - !Ref CockpitServiceSecurityGroup
           Subnets: !Ref PrivateSubnetIds
       LoadBalancers:
-        - ContainerName: dashboard
-          ContainerPort: !Ref DashboardPort
-          TargetGroupArn: !Ref DashboardTargetGroup
+        - ContainerName: cockpit
+          ContainerPort: !Ref CockpitPort
+          TargetGroupArn: !Ref CockpitTargetGroup
 
 Outputs:
   ClusterName:
     Value: !Ref DashboardCluster
-  ServiceName:
-    Value: !Ref DashboardService
+  CockpitServiceName:
+    Value: !Ref CockpitService
+  AlphaDbApiServiceName:
+    Value: !Ref AlphaDbApiService
+  AlphaDbApiTaskDefinitionArn:
+    Value: !Ref AlphaDbApiTaskDefinition
+  AlphaDbApiSecurityGroupId:
+    Value: !Ref AlphaDbApiServiceSecurityGroup
+  PrivateSubnetIds:
+    Value: !Join [",", !Ref PrivateSubnetIds]
   LoadBalancerDnsName:
     Value: !GetAtt DashboardLoadBalancer.DNSName
   DashboardUrl:
     Value: !Sub http://${DashboardLoadBalancer.DNSName}
+  ApiPrivateDnsName:
+    Value: !Sub alphadb-api.${PrivateNamespaceName}
