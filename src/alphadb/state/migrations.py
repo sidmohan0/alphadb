@@ -475,6 +475,134 @@ LIVE_RUN_STATUS = Migration(
 )
 
 
+AGENT_FIRST_DASHBOARD = Migration(
+    version="0011_agent_first_dashboard",
+    statements=(
+        """
+        create table if not exists dashboard_strategies (
+            strategy_id text primary key,
+            name text not null,
+            brief text not null default '',
+            spec jsonb not null default '{}'::jsonb,
+            status text not null check (status in ('draft', 'active', 'archived')),
+            promotion_stage text not null default 'draft',
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists dashboard_strategy_spec_snapshots (
+            snapshot_id text primary key,
+            strategy_id text not null references dashboard_strategies(strategy_id),
+            spec jsonb not null,
+            brief text not null default '',
+            source text not null default 'dashboard',
+            spec_hash text not null,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists dashboard_saved_dataset_snapshots (
+            dataset_snapshot_id text primary key,
+            name text not null,
+            view_name text not null,
+            filters jsonb not null default '{}'::jsonb,
+            sort jsonb not null default '{}'::jsonb,
+            row_limit integer not null check (row_limit >= 1),
+            row_count integer not null check (row_count >= 0),
+            schema jsonb not null default '[]'::jsonb,
+            query_hash text not null,
+            artifact_uri text,
+            artifact_format text,
+            metadata jsonb not null default '{}'::jsonb,
+            created_by text not null default 'dashboard',
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists lab_entries (
+            lab_entry_id text primary key,
+            kind text not null check (kind in ('research_idea', 'experiment')),
+            title text not null,
+            hypothesis text not null default '',
+            brief text not null default '',
+            status text not null default 'active',
+            verdict text check (verdict in ('continue', 'revise', 'kill') or verdict is null),
+            unsupported_reasons jsonb not null default '[]'::jsonb,
+            closest_templates jsonb not null default '[]'::jsonb,
+            missing_capabilities jsonb not null default '[]'::jsonb,
+            dataset_snapshot_id text references dashboard_saved_dataset_snapshots(dataset_snapshot_id),
+            strategy_snapshot_id text references dashboard_strategy_spec_snapshots(snapshot_id),
+            metrics jsonb not null default '{}'::jsonb,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists lab_entry_run_summaries (
+            run_summary_id text primary key,
+            lab_entry_id text not null references lab_entries(lab_entry_id),
+            run_id text,
+            run_mode text not null,
+            metrics jsonb not null default '{}'::jsonb,
+            summary jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists lab_entry_notes (
+            note_id text primary key,
+            lab_entry_id text not null references lab_entries(lab_entry_id),
+            note_type text not null check (note_type in ('human', 'agent')),
+            body text not null,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create table if not exists lab_semantic_insights (
+            insight_id text primary key,
+            insight_type text not null check (
+                insight_type in ('pattern', 'warning', 'similarity', 'suggestion')
+            ),
+            text text not null,
+            related_lab_entry_ids text[] not null default '{}',
+            related_dataset_snapshot_ids text[] not null default '{}',
+            related_strategy_snapshot_ids text[] not null default '{}',
+            confidence numeric not null check (confidence >= 0 and confidence <= 1),
+            source text not null default 'heuristic',
+            status text not null default 'active',
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists dashboard_strategies_updated_idx
+        on dashboard_strategies(updated_at desc)
+        """,
+        """
+        create index if not exists dashboard_strategy_snapshots_strategy_idx
+        on dashboard_strategy_spec_snapshots(strategy_id, created_at desc)
+        """,
+        """
+        create index if not exists dashboard_dataset_snapshots_view_idx
+        on dashboard_saved_dataset_snapshots(view_name, created_at desc)
+        """,
+        """
+        create index if not exists lab_entries_kind_updated_idx
+        on lab_entries(kind, updated_at desc)
+        """,
+        """
+        create index if not exists lab_insights_type_created_idx
+        on lab_semantic_insights(insight_type, created_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -486,4 +614,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     STRATEGY_RUNTIME,
     LIVE_RUNTIME_CONFIG,
     LIVE_RUN_STATUS,
+    AGENT_FIRST_DASHBOARD,
 )

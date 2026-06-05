@@ -10,10 +10,18 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from alphadb.config import Settings, settings_from_env
 from alphadb.dashboard.auth import DashboardAuthConfig, evaluate_access
+from alphadb.dashboard.data_explorer import DashboardDataExplorerRepository
+from alphadb.dashboard.lab import DashboardLabRepository, research_idea_from_compile_result
+from alphadb.dashboard.skills import (
+    capabilities_payload,
+    classify_terminal_request,
+    terminal_response,
+)
+from alphadb.dashboard.strategy import DashboardStrategyRepository, compile_strategy_brief
 from alphadb.health import HealthReport, collect_health
 from alphadb.live_runtime import (
     FAIR_VALUE_LIVE_STRATEGY,
@@ -25,6 +33,9 @@ from alphadb.live_runtime import (
 
 ConfigRepositoryFactory = Callable[[str], LiveRuntimeConfigRepository]
 StatusRepositoryFactory = Callable[[str], LiveRunStatusRepository]
+StrategyRepositoryFactory = Callable[[str], DashboardStrategyRepository]
+DataExplorerRepositoryFactory = Callable[[str], DashboardDataExplorerRepository]
+LabRepositoryFactory = Callable[[str], DashboardLabRepository]
 HealthCollector = Callable[[Settings], HealthReport]
 
 
@@ -33,7 +44,19 @@ class DashboardService:
     settings: Settings
     config_repository_factory: ConfigRepositoryFactory = LiveRuntimeConfigRepository
     status_repository_factory: StatusRepositoryFactory = LiveRunStatusRepository
+    strategy_repository_factory: StrategyRepositoryFactory = DashboardStrategyRepository
+    data_explorer_repository_factory: DataExplorerRepositoryFactory = DashboardDataExplorerRepository
+    lab_repository_factory: LabRepositoryFactory = DashboardLabRepository
     health_collector: HealthCollector = collect_health
+
+    def api_health(self) -> dict[str, Any]:
+        report = self.health_collector(self.settings)
+        return {
+            "ok": report.ok,
+            "environment": report.environment,
+            "generated_at_utc": report.generated_at_utc.isoformat(),
+            "components": report.as_rows(),
+        }
 
     def live_payload(self) -> dict[str, Any]:
         config_repository = self.config_repository_factory(self.settings.database_url)
@@ -81,9 +104,295 @@ class DashboardService:
             ],
         }
 
+    def compile_strategy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        brief = str(payload.get("brief") or payload.get("ideaBrief") or "")
+        title = payload.get("title")
+        result = compile_strategy_brief(brief, title=str(title) if title else None).as_dict()
+        if payload.get("route_unsupported_to_lab") and result["status"] == "unsupported":
+            lab_entry = self._lab_repository().save_entry(**research_idea_from_compile_result(result))
+            result["lab_entry"] = lab_entry.as_dict()
+        return result
+
+    def list_strategies(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return [strategy.as_dict() for strategy in self._strategy_repository().list_strategies(limit=limit)]
+
+    def get_strategy(self, strategy_id: str) -> dict[str, Any]:
+        return self._strategy_repository().get_strategy(strategy_id).as_dict()
+
+    def save_strategy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        name = str(payload.get("name") or payload.get("title") or "Untitled strategy")
+        brief = str(payload.get("brief") or payload.get("ideaBrief") or "")
+        spec = payload.get("spec")
+        compile_result: dict[str, Any] | None = None
+        if not isinstance(spec, Mapping):
+            compile_result = compile_strategy_brief(brief, title=name).as_dict()
+            if compile_result["status"] == "unsupported":
+                lab_entry = self._lab_repository().save_entry(
+                    **research_idea_from_compile_result(compile_result)
+                )
+                return {
+                    "strategy": None,
+                    "lab_entry": lab_entry.as_dict(),
+                    "compile": compile_result,
+                    "routed_to_lab": True,
+                }
+            spec = compile_result["spec"]
+        if not isinstance(spec, Mapping):
+            raise ValueError("strategy requires a spec or compilable brief")
+        strategy = self._strategy_repository().save_strategy(
+            strategy_id=_optional_text(payload.get("strategy_id")),
+            name=name,
+            brief=brief,
+            spec=spec,
+            status=str(payload.get("status") or "draft"),
+            promotion_stage=str(payload.get("promotion_stage") or "draft"),
+            metadata=_mapping_or_empty(payload.get("metadata")),
+        )
+        return {"strategy": strategy.as_dict(), "compile": compile_result}
+
+    def create_strategy_snapshot(
+        self,
+        strategy_id: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = payload or {}
+        snapshot = self._strategy_repository().create_snapshot(
+            strategy_id=strategy_id,
+            source=str(payload.get("source") or "dashboard"),
+            metadata=_mapping_or_empty(payload.get("metadata")),
+        )
+        return snapshot.as_dict()
+
+    def list_data_views(self) -> list[dict[str, Any]]:
+        return self._data_repository().list_views()
+
+    def query_data_view(self, view_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._data_repository().query_view(
+            view_name,
+            filters=_mapping_or_empty(payload.get("filters")),
+            sort=_mapping_or_empty(payload.get("sort")),
+            limit=_int_payload(payload.get("limit"), default=100),
+        )
+
+    def list_dataset_snapshots(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return [snapshot.as_dict() for snapshot in self._data_repository().list_snapshots(limit=limit)]
+
+    def save_dataset_snapshot(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        snapshot = self._data_repository().save_snapshot(
+            name=str(payload.get("name") or "Dataset snapshot"),
+            view_name=str(payload.get("view_name") or payload.get("view") or ""),
+            filters=_mapping_or_empty(payload.get("filters")),
+            sort=_mapping_or_empty(payload.get("sort")),
+            limit=_int_payload(payload.get("limit"), default=100),
+            created_by=str(payload.get("created_by") or "dashboard"),
+            metadata=_mapping_or_empty(payload.get("metadata")),
+        )
+        return snapshot.as_dict()
+
+    def export_data_view(self, view_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._data_repository().export_view(
+            view_name,
+            export_format=str(payload.get("format") or "csv"),
+            filters=_mapping_or_empty(payload.get("filters")),
+            sort=_mapping_or_empty(payload.get("sort")),
+            limit=_int_payload(payload.get("limit"), default=100),
+        )
+
+    def list_lab_entries(self, *, kind: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        return [
+            entry.as_dict()
+            for entry in self._lab_repository().list_entries(kind=kind or None, limit=limit)
+        ]
+
+    def get_lab_entry(self, lab_entry_id: str) -> dict[str, Any]:
+        return self._lab_repository().get_entry(lab_entry_id)
+
+    def save_lab_entry(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        entry = self._lab_repository().save_entry(
+            lab_entry_id=_optional_text(payload.get("lab_entry_id")),
+            title=str(payload.get("title") or "Untitled lab entry"),
+            kind=str(payload.get("kind") or "experiment"),
+            hypothesis=str(payload.get("hypothesis") or ""),
+            brief=str(payload.get("brief") or ""),
+            status=str(payload.get("status") or "active"),
+            verdict=_optional_text(payload.get("verdict")),
+            unsupported_reasons=_sequence_of_text(payload.get("unsupported_reasons")),
+            closest_templates=_sequence_of_text(payload.get("closest_templates")),
+            missing_capabilities=_sequence_of_text(payload.get("missing_capabilities")),
+            dataset_snapshot_id=_optional_text(payload.get("dataset_snapshot_id")),
+            strategy_snapshot_id=_optional_text(payload.get("strategy_snapshot_id")),
+            metrics=_mapping_or_empty(payload.get("metrics")),
+            metadata=_mapping_or_empty(payload.get("metadata")),
+        )
+        return entry.as_dict()
+
+    def add_lab_note(self, lab_entry_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        note = self._lab_repository().add_note(
+            lab_entry_id=lab_entry_id,
+            note_type=str(payload.get("note_type") or payload.get("author_role") or "human"),
+            body=str(payload.get("body") or ""),
+            metadata=_mapping_or_empty(payload.get("metadata")),
+        )
+        return note.as_dict()
+
+    def add_lab_run_summary(self, lab_entry_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        run = self._lab_repository().add_run_summary(
+            lab_entry_id=lab_entry_id,
+            run_id=_optional_text(payload.get("run_id")),
+            run_mode=str(payload.get("run_mode") or "unknown"),
+            metrics=_mapping_or_empty(payload.get("metrics")),
+            summary=_mapping_or_empty(payload.get("summary")),
+        )
+        return run.as_dict()
+
+    def set_lab_verdict(self, lab_entry_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._lab_repository().set_verdict(
+            lab_entry_id=lab_entry_id,
+            verdict=str(payload.get("verdict") or ""),
+        ).as_dict()
+
+    def list_lab_insights(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        return [insight.as_dict() for insight in self._lab_repository().list_insights(limit=limit)]
+
+    def generate_lab_insights(self) -> list[dict[str, Any]]:
+        return [insight.as_dict() for insight in self._lab_repository().generate_and_save_insights()]
+
+    def capabilities(self) -> dict[str, Any]:
+        return capabilities_payload()
+
+    def ask_agent(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        skill, params = classify_terminal_request(payload)
+        note = _optional_text(params.pop("note", None))
+        if skill == "capabilities.list":
+            result: Any = self.capabilities()
+        elif skill == "live.summary":
+            result = self.live_payload()
+        elif skill == "strategy.compile":
+            result = self.compile_strategy(params)
+        elif skill == "strategy.list":
+            result = self.list_strategies(limit=_int_payload(params.get("limit"), default=25))
+        elif skill == "data.views.list":
+            result = self.list_data_views()
+        elif skill == "data.view.query":
+            view_name = str(params.get("view_name") or params.get("view") or "decisions")
+            result = self.query_data_view(view_name, params)
+        elif skill == "data.snapshots.list":
+            result = self.list_dataset_snapshots(limit=_int_payload(params.get("limit"), default=25))
+        elif skill == "lab.entries.list":
+            result = self.list_lab_entries(
+                kind=_optional_text(params.get("kind")),
+                limit=_int_payload(params.get("limit"), default=25),
+            )
+        elif skill == "lab.insights.generate":
+            result = self.generate_lab_insights()
+        else:
+            raise KeyError(f"unknown skill: {skill}")
+        return terminal_response(skill=skill, result=result, note=note)
+
+    def _strategy_repository(self) -> DashboardStrategyRepository:
+        return self.strategy_repository_factory(self.settings.database_url)
+
+    def _data_repository(self) -> DashboardDataExplorerRepository:
+        return self.data_explorer_repository_factory(self.settings.database_url)
+
+    def _lab_repository(self) -> DashboardLabRepository:
+        return self.lab_repository_factory(self.settings.database_url)
+
 
 def dashboard_auth_config(settings: Settings) -> DashboardAuthConfig:
     return DashboardAuthConfig.from_settings(settings).validate()
+
+
+def _path_parts(path: str) -> list[str]:
+    return [part for part in path.split("/") if part]
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _sequence_of_text(value: Any) -> Sequence[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [str(item) for item in value if str(item).strip()]
+    return []
+
+
+def _int_payload(value: Any, *, default: int) -> int:
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _query_text(query: Mapping[str, Sequence[str]], key: str) -> str | None:
+    values = query.get(key)
+    if not values:
+        return None
+    text = str(values[0]).strip()
+    return text or None
+
+
+def _query_int(query: Mapping[str, Sequence[str]], key: str, default: int) -> int:
+    value = _query_text(query, key)
+    return default if value is None else int(value)
+
+
+def _query_filters(query: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+    filter_keys = {
+        "run_id",
+        "market_ticker",
+        "status",
+        "outcome",
+        "source",
+        "strategy",
+        "model_id",
+        "dataset_id",
+        "promotion_state",
+        "decision_outcome",
+        "created_after",
+        "created_before",
+        "decision_after",
+        "decision_before",
+    }
+    filters: dict[str, Any] = {}
+    for key in filter_keys:
+        value = _query_text(query, key)
+        if value is not None:
+            filters[key] = value
+    return filters
+
+
+def _query_sort(query: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+    sort: dict[str, Any] = {}
+    column = _query_text(query, "sort")
+    direction = _query_text(query, "direction")
+    if column:
+        sort["column"] = column
+    if direction:
+        sort["direction"] = direction
+    return sort
+
+
+def _error_code(exc: Exception) -> str:
+    if isinstance(exc, KeyError):
+        return "not_found"
+    if isinstance(exc, ValueError):
+        return "bad_request"
+    return "server_error"
+
+
+def _error_status(exc: Exception) -> HTTPStatus:
+    if isinstance(exc, KeyError):
+        return HTTPStatus.NOT_FOUND
+    if isinstance(exc, ValueError):
+        return HTTPStatus.BAD_REQUEST
+    return HTTPStatus.INTERNAL_SERVER_ERROR
 
 
 def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
@@ -93,32 +402,42 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
         server_version = "AlphaDBDashboard/1.0"
 
         def do_GET(self) -> None:
-            if self.path == "/healthz":
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == "/healthz":
                 self._json({"ok": True})
                 return
-            if self.path == "/favicon.ico":
+            if path == "/favicon.ico":
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self.end_headers()
                 return
-            if self.path.startswith("/api/live"):
+            if path == "/api/live":
                 if not self._authenticated():
                     self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                     return
                 self._json(service.live_payload())
                 return
-            if self.path == "/" or self.path.startswith("/?"):
+            if path.startswith("/api/"):
+                if not self._authenticated():
+                    self._json_error("unauthorized", status=HTTPStatus.UNAUTHORIZED)
+                    return
+                self._dispatch_api_get(path, parse_qs(parsed.query))
+                return
+            if path == "/":
                 if not self._authenticated():
                     self._html(login_html(), status=HTTPStatus.UNAUTHORIZED)
                     return
                 self._html(DASHBOARD_HTML)
                 return
-            self._json({"ok": False, "error": "not_found"}, status=HTTPStatus.NOT_FOUND)
+            self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:
-            if self.path == "/auth/login":
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == "/auth/login":
                 self._login()
                 return
-            if self.path == "/api/live/config":
+            if path == "/api/live/config":
                 if not self._authenticated():
                     self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
                     return
@@ -133,7 +452,22 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                         status=HTTPStatus.BAD_REQUEST,
                     )
                 return
-            self._json({"ok": False, "error": "not_found"}, status=HTTPStatus.NOT_FOUND)
+            if path.startswith("/api/"):
+                if not self._authenticated():
+                    self._json_error("unauthorized", status=HTTPStatus.UNAUTHORIZED)
+                    return
+                try:
+                    payload = self._json_body()
+                    self._dispatch_api_post(path, payload)
+                except Exception as exc:
+                    self._json_error(str(exc), code=_error_code(exc), status=_error_status(exc))
+                return
+            self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
+
+        def do_OPTIONS(self) -> None:
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self._cors_headers()
+            self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -167,6 +501,131 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
             size = int(self.headers.get("Content-Length", "0"))
             return self.rfile.read(size)
 
+        def _json_body(self) -> Mapping[str, Any]:
+            body = self._body()
+            if not body:
+                return {}
+            payload = json.loads(body.decode("utf-8"))
+            if not isinstance(payload, Mapping):
+                raise ValueError("request body must be a JSON object")
+            return payload
+
+        def _dispatch_api_get(self, path: str, query: Mapping[str, Sequence[str]]) -> None:
+            try:
+                if path == "/api/health":
+                    self._json_ok(service.api_health())
+                    return
+                if path == "/api/strategies":
+                    self._json_ok(
+                        {"strategies": service.list_strategies(limit=_query_int(query, "limit", 50))}
+                    )
+                    return
+                if path.startswith("/api/strategies/"):
+                    parts = _path_parts(path)
+                    if len(parts) == 3:
+                        self._json_ok({"strategy": service.get_strategy(parts[2])})
+                        return
+                if path == "/api/data/views":
+                    self._json_ok({"views": service.list_data_views()})
+                    return
+                if path.startswith("/api/data/views/"):
+                    parts = _path_parts(path)
+                    if len(parts) == 4:
+                        self._json_ok(
+                            service.query_data_view(
+                                parts[3],
+                                {
+                                    "filters": _query_filters(query),
+                                    "sort": _query_sort(query),
+                                    "limit": _query_int(query, "limit", 100),
+                                },
+                            )
+                        )
+                        return
+                if path == "/api/data/datasets":
+                    self._json_ok(
+                        {
+                            "datasets": service.list_dataset_snapshots(
+                                limit=_query_int(query, "limit", 50)
+                            )
+                        }
+                    )
+                    return
+                if path == "/api/lab/entries":
+                    self._json_ok(
+                        {
+                            "entries": service.list_lab_entries(
+                                kind=_query_text(query, "kind"),
+                                limit=_query_int(query, "limit", 50),
+                            )
+                        }
+                    )
+                    return
+                if path.startswith("/api/lab/entries/"):
+                    parts = _path_parts(path)
+                    if len(parts) == 4:
+                        self._json_ok(service.get_lab_entry(parts[3]))
+                        return
+                if path == "/api/lab/insights":
+                    self._json_ok(
+                        {
+                            "insights": service.list_lab_insights(
+                                limit=_query_int(query, "limit", 20)
+                            )
+                        }
+                    )
+                    return
+                if path == "/api/capabilities":
+                    self._json_ok(service.capabilities())
+                    return
+                self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self._json_error(str(exc), code=_error_code(exc), status=_error_status(exc))
+
+        def _dispatch_api_post(self, path: str, payload: Mapping[str, Any]) -> None:
+            if path == "/api/strategies/compile":
+                self._json_ok(service.compile_strategy(payload))
+                return
+            if path == "/api/strategies":
+                data = service.save_strategy(payload)
+                status = HTTPStatus.ACCEPTED if data.get("routed_to_lab") else HTTPStatus.OK
+                self._json_ok(data, status=status)
+                return
+            if path.startswith("/api/strategies/"):
+                parts = _path_parts(path)
+                if len(parts) == 4 and parts[3] == "snapshots":
+                    self._json_ok({"snapshot": service.create_strategy_snapshot(parts[2], payload)})
+                    return
+            if path == "/api/data/datasets":
+                self._json_ok({"dataset": service.save_dataset_snapshot(payload)})
+                return
+            if path.startswith("/api/data/views/"):
+                parts = _path_parts(path)
+                if len(parts) == 5 and parts[4] == "export":
+                    self._json_ok({"export": service.export_data_view(parts[3], payload)})
+                    return
+            if path == "/api/lab/entries":
+                self._json_ok({"entry": service.save_lab_entry(payload)})
+                return
+            if path.startswith("/api/lab/entries/"):
+                parts = _path_parts(path)
+                if len(parts) == 5 and parts[4] == "notes":
+                    self._json_ok({"note": service.add_lab_note(parts[3], payload)})
+                    return
+                if len(parts) == 5 and parts[4] == "runs":
+                    self._json_ok({"run": service.add_lab_run_summary(parts[3], payload)})
+                    return
+                if len(parts) == 5 and parts[4] == "verdict":
+                    self._json_ok({"entry": service.set_lab_verdict(parts[3], payload)})
+                    return
+            if path == "/api/lab/insights/generate":
+                self._json_ok({"insights": service.generate_lab_insights()})
+                return
+            if path == "/api/ask":
+                self._json_ok(service.ask_agent(payload))
+                return
+            self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
+
         def _json(
             self,
             payload: Mapping[str, Any],
@@ -175,18 +634,45 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
         ) -> None:
             body = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
             self.send_response(status)
+            self._cors_headers()
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def _json_ok(
+            self,
+            data: Any,
+            *,
+            status: HTTPStatus = HTTPStatus.OK,
+        ) -> None:
+            self._json({"ok": True, "data": data}, status=status)
+
+        def _json_error(
+            self,
+            message: str,
+            *,
+            code: str = "error",
+            status: HTTPStatus = HTTPStatus.BAD_REQUEST,
+        ) -> None:
+            self._json(
+                {"ok": False, "error": {"code": code, "message": message}},
+                status=status,
+            )
+
         def _html(self, html: str, *, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = html.encode("utf-8")
             self.send_response(status)
+            self._cors_headers()
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _cors_headers(self) -> None:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     return DashboardRequestHandler
 
