@@ -53,19 +53,19 @@ SKILLS: tuple[DashboardSkill, ...] = (
         parameters={"view_name": "string", "filters": "object?", "limit": "integer?"},
     ),
     DashboardSkill(
-        name="data.snapshots.list",
-        description="List saved dataset snapshots.",
-        parameters={"limit": "integer?"},
+        name="data.view.save_to_lab",
+        description="Save bounded Data Explorer evidence into a Lab Entry.",
+        parameters={"view_name": "string", "filters": "object?", "limit": "integer?", "title": "string?"},
     ),
     DashboardSkill(
         name="lab.entries.list",
-        description="List Lab Research Ideas and Experiments.",
-        parameters={"kind": "research_idea|experiment?", "limit": "integer?"},
+        description="List Lab Entries.",
+        parameters={"limit": "integer?"},
     ),
     DashboardSkill(
-        name="lab.insights.generate",
-        description="Generate heuristic Lab insights from experiment history.",
-        parameters={},
+        name="lab.insights.list",
+        description="List advisory Lab insights from saved entries.",
+        parameters={"limit": "integer?"},
     ),
 )
 
@@ -100,12 +100,12 @@ def classify_terminal_request(payload: Mapping[str, Any]) -> tuple[str, dict[str
         return "strategy.compile", {"brief": message}
     if "strategy" in lowered:
         return "strategy.list", {}
-    if "data view" in lowered or "views" in lowered:
+    if "save" in lowered and "lab" in lowered and "data" in lowered:
+        return "data.view.save_to_lab", {"view_name": "decisions"}
+    if "data view" in lowered or "views" in lowered or "dataset" in lowered or "snapshot" in lowered:
         return "data.views.list", {}
-    if "dataset" in lowered or "snapshot" in lowered:
-        return "data.snapshots.list", {}
     if "insight" in lowered:
-        return "lab.insights.generate", {}
+        return "lab.insights.list", {}
     if "lab" in lowered or "experiment" in lowered or "research idea" in lowered:
         return "lab.entries.list", {}
     return "live.summary", {"note": "No exact skill match; returned live summary as default."}

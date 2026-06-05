@@ -69,13 +69,15 @@ export default function StrategyStudioPage() {
     setBusy(true)
     setError(null)
     try {
-      setCompile(
-        await apiPost<CompileResult>("/strategies/compile", {
-          title,
-          brief,
-          route_unsupported_to_lab: true,
-        })
-      )
+      const data = await apiPost<CompileResult>("/strategies/compile", {
+        title,
+        brief,
+        route_unsupported_to_lab: true,
+      })
+      setCompile(data)
+      if (data.lab_entry) {
+        setSaved({ lab_entry: data.lab_entry, routed_to_lab: true })
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lab routing failed")
     } finally {
@@ -105,7 +107,7 @@ export default function StrategyStudioPage() {
             </Button>
             <Button size="sm" onClick={saveDraft} disabled={busy || !brief.trim()}>
               <Save className="h-4 w-4" />
-              Save
+              {compile?.status === "unsupported" ? "Save to Lab" : "Save"}
             </Button>
           </div>
         </div>
@@ -122,7 +124,7 @@ export default function StrategyStudioPage() {
         )}
         {saved?.routed_to_lab && (
           <div className="border border-warning/40 bg-warning/10 rounded-lg p-3 text-sm text-warning">
-            Routed to Lab as {String(saved.lab_entry?.title || "Research Idea")}.
+            Saved to Lab as {String(saved.lab_entry?.title || "Lab Entry")}.
           </div>
         )}
 
@@ -165,12 +167,12 @@ export default function StrategyStudioPage() {
                   <ListBlock title="Questions" items={compile.questions} />
                 )}
                 {!!compile.unsupported_reasons.length && (
-                  <ListBlock title="Unsupported" items={compile.unsupported_reasons} />
+                  <ListBlock title="Blockers" items={compile.unsupported_reasons} />
                 )}
                 {compile.status === "unsupported" && (
                   <Button variant="outline" size="sm" onClick={routeToLab} disabled={busy}>
                     <FlaskConical className="h-4 w-4" />
-                    Save Research Idea
+                    Save to Lab
                   </Button>
                 )}
                 {compile.spec && (
@@ -196,7 +198,9 @@ function StatusBadge({ status }: { status: CompileResult["status"] }) {
       : status === "unsupported"
         ? "text-destructive border-destructive/40"
         : "text-warning border-warning/40"
-  return <span className={`rounded-md border px-2 py-0.5 text-xs ${className}`}>{status}</span>
+  const label =
+    status === "supported" ? "Ready" : status === "unsupported" ? "Blocked" : "Needs details"
+  return <span className={`rounded-md border px-2 py-0.5 text-xs ${className}`}>{label}</span>
 }
 
 function Value({ label, value }: { label: string; value: string }) {

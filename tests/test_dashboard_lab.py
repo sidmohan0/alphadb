@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from alphadb.dashboard.lab import LabEntry, generate_heuristic_insights, research_idea_from_compile_result
+from alphadb.dashboard.lab import LabEntry, generate_heuristic_insights, lab_entry_from_compile_result
 
 
 def entry(
@@ -15,17 +15,17 @@ def entry(
     now = datetime(2026, 6, 5, 12, tzinfo=UTC)
     return LabEntry(
         lab_entry_id=lab_entry_id,
-        kind="experiment",
         title=title,
         hypothesis=title,
         brief=title,
         status=verdict or "active",
         verdict=verdict,
-        unsupported_reasons=(),
-        closest_templates=(),
-        missing_capabilities=missing_capabilities,
-        dataset_snapshot_id=None,
-        strategy_snapshot_id=None,
+        blockers=tuple({"type": "missing_capability", "name": item} for item in missing_capabilities),
+        evidence=(),
+        strategy={},
+        runs=(),
+        notes=(),
+        insights=(),
         metrics={},
         metadata={},
         created_at=now,
@@ -33,8 +33,8 @@ def entry(
     )
 
 
-def test_research_idea_from_compile_result_preserves_blockers() -> None:
-    idea = research_idea_from_compile_result(
+def test_lab_entry_from_compile_result_preserves_blockers() -> None:
+    entry_payload = lab_entry_from_compile_result(
         {
             "title": "Portfolio branch",
             "brief": "Try a portfolio optimizer",
@@ -47,10 +47,10 @@ def test_research_idea_from_compile_result_preserves_blockers() -> None:
         }
     )
 
-    assert idea["kind"] == "research_idea"
-    assert idea["title"] == "Portfolio branch"
-    assert idea["missing_capabilities"] == ["portfolio_optimizer"]
-    assert idea["metadata"]["source"] == "spec_compiler"
+    assert entry_payload["title"] == "Portfolio branch"
+    assert {"type": "missing_capability", "name": "portfolio_optimizer"} in entry_payload["blockers"]
+    assert entry_payload["strategy"]["compile_result"]["status"] == "unsupported"
+    assert entry_payload["metadata"]["source"] == "spec_compiler"
 
 
 def test_heuristic_insights_find_repeated_topics_and_capability_blocks() -> None:

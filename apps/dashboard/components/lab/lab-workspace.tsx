@@ -3,22 +3,23 @@
 import { useEffect, useState } from "react"
 import { apiGet, apiPost } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
-import { FlaskConical, Lightbulb, RefreshCw, Save, Sparkles } from "lucide-react"
+import { Database, FlaskConical, Lightbulb, RefreshCw, Save } from "lucide-react"
 
 interface LabEntry {
   lab_entry_id: string
-  kind: "research_idea" | "experiment"
   title: string
   hypothesis: string
   brief: string
   status: string
   verdict: string | null
-  unsupported_reasons: string[]
-  closest_templates: string[]
-  missing_capabilities: string[]
-  dataset_snapshot_id: string | null
-  strategy_snapshot_id: string | null
+  blockers: Array<Record<string, unknown>>
+  evidence: Array<Record<string, unknown>>
+  strategy: Record<string, unknown>
+  runs: Array<Record<string, unknown>>
+  notes: Array<Record<string, unknown>>
+  insights: Array<Record<string, unknown>>
   metrics: Record<string, unknown>
+  metadata: Record<string, unknown>
   updated_at: string
 }
 
@@ -55,7 +56,6 @@ export function LabWorkspace() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [title, setTitle] = useState("")
   const [hypothesis, setHypothesis] = useState("")
-  const [kind, setKind] = useState<LabEntry["kind"]>("experiment")
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(true)
@@ -88,7 +88,6 @@ export function LabWorkspace() {
     setMessage("")
     try {
       await apiPost("/lab/entries", {
-        kind,
         title,
         hypothesis,
         brief: hypothesis,
@@ -102,35 +101,17 @@ export function LabWorkspace() {
     }
   }
 
-  const generateInsights = async () => {
-    setError(null)
-    setMessage("")
-    try {
-      const data = await apiPost<InsightsResponse>("/lab/insights/generate", {})
-      setInsights(data.insights || [])
-      setMessage(`Generated ${data.insights?.length || 0} insights.`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Insight generation failed")
-    }
-  }
-
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold">Lab</h1>
-          <p className="text-sm text-muted-foreground">Research Ideas and Experiments</p>
+          <p className="text-sm text-muted-foreground">Hypotheses, evidence, and semantic memory</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={generateInsights}>
-            <Sparkles className="h-4 w-4" />
-            Insights
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </Button>
       </div>
 
       {error && <div className="border border-destructive/40 bg-destructive/10 rounded-lg p-3 text-sm text-destructive">{error}</div>}
@@ -149,10 +130,7 @@ export function LabWorkspace() {
                 className={`block w-full text-left px-4 py-3 hover:bg-muted/40 ${selected?.lab_entry_id === entry.lab_entry_id ? "bg-muted/50" : ""}`}
                 onClick={() => setSelectedId(entry.lab_entry_id)}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">{entry.title}</span>
-                  <span className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">{entry.kind}</span>
-                </div>
+                <div className="text-sm font-medium">{entry.title}</div>
                 <div className="mt-1 text-xs text-muted-foreground">{entry.status} · {shortTime(entry.updated_at)}</div>
               </button>
             )) : (
@@ -166,29 +144,16 @@ export function LabWorkspace() {
         <main className="space-y-4">
           <section className="border border-border rounded-lg bg-card p-4 space-y-3">
             <h2 className="text-sm font-medium">New Entry</h2>
-            <div className="grid gap-3 md:grid-cols-[180px_1fr]">
-              <label className="text-sm">
-                <span className="text-muted-foreground">Kind</span>
-                <select
-                  className="mt-2 h-9 w-full rounded-md border border-border bg-background px-2"
-                  value={kind}
-                  onChange={(event) => setKind(event.target.value as LabEntry["kind"])}
-                >
-                  <option value="experiment">Experiment</option>
-                  <option value="research_idea">Research Idea</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <span className="text-muted-foreground">Title</span>
-                <input
-                  className="mt-2 h-9 w-full rounded-md border border-border bg-background px-2"
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                />
-              </label>
-            </div>
             <label className="block text-sm">
-              <span className="text-muted-foreground">Hypothesis</span>
+              <span className="text-muted-foreground">Title</span>
+              <input
+                className="mt-2 h-9 w-full rounded-md border border-border bg-background px-2"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-muted-foreground">Hypothesis or note</span>
               <textarea
                 className="mt-2 min-h-28 w-full resize-y rounded-md border border-border bg-background px-3 py-2"
                 value={hypothesis}
@@ -206,20 +171,20 @@ export function LabWorkspace() {
               <div className="space-y-4">
                 <div>
                   <h2 className="text-base font-semibold">{selected.title}</h2>
-                  <p className="text-sm text-muted-foreground">{selected.kind} · {selected.status}</p>
+                  <p className="text-sm text-muted-foreground">{selected.status} · {shortTime(selected.updated_at)}</p>
                 </div>
                 <p className="whitespace-pre-wrap text-sm text-muted-foreground">{selected.hypothesis || selected.brief || "No hypothesis saved."}</p>
                 <div className="grid gap-3 md:grid-cols-2">
-                  <Value label="Dataset" value={selected.dataset_snapshot_id || "--"} />
-                  <Value label="Strategy snapshot" value={selected.strategy_snapshot_id || "--"} />
+                  <Value label="Evidence" value={String(selected.evidence.length)} />
+                  <Value label="Runs" value={String(selected.runs.length)} />
                   <Value label="Verdict" value={selected.verdict || "--"} />
                   <Value label="Updated" value={shortTime(selected.updated_at)} />
                 </div>
-                {!!selected.unsupported_reasons.length && (
-                  <ListBlock title="Unsupported" items={selected.unsupported_reasons} />
+                {!!selected.blockers.length && (
+                  <ListBlock title="Blockers" items={selected.blockers.map(blockerLabel)} />
                 )}
-                {!!selected.missing_capabilities.length && (
-                  <ListBlock title="Missing Capabilities" items={selected.missing_capabilities} />
+                {!!selected.evidence.length && (
+                  <EvidenceBlock evidence={selected.evidence} />
                 )}
               </div>
             ) : (
@@ -243,7 +208,7 @@ export function LabWorkspace() {
                 <p className="mt-2 text-sm">{insight.text}</p>
               </div>
             )) : (
-              <p className="text-sm text-muted-foreground">No insights saved.</p>
+              <p className="text-sm text-muted-foreground">No patterns yet.</p>
             )}
           </div>
         </aside>
@@ -261,6 +226,28 @@ function Value({ label, value }: { label: string; value: string }) {
   )
 }
 
+function EvidenceBlock({ evidence }: { evidence: Array<Record<string, unknown>> }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground mb-2">Evidence</div>
+      <div className="space-y-2">
+        {evidence.map((item, index) => (
+          <div key={`${String(item.evidence_id || index)}`} className="rounded-md border border-border p-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-muted-foreground" />
+              <span>{String(item.view_label || item.view_name || item.source || "Evidence")}</span>
+            </div>
+            <div className="mt-2 grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
+              <span>Rows: {String(item.row_count ?? "--")}</span>
+              <span className="truncate">Hash: {String(item.query_hash || "--").slice(0, 12)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ListBlock({ title, items }: { title: string; items: string[] }) {
   return (
     <div>
@@ -272,4 +259,8 @@ function ListBlock({ title, items }: { title: string; items: string[] }) {
       </ul>
     </div>
   )
+}
+
+function blockerLabel(blocker: Record<string, unknown>) {
+  return String(blocker.text || blocker.name || blocker.type || "Blocker")
 }

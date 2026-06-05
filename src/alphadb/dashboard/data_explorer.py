@@ -1,4 +1,4 @@
-"""Curated Data Explorer views and saved dataset snapshots."""
+"""Curated Data Explorer views and Lab evidence helpers."""
 
 from __future__ import annotations
 
@@ -8,14 +8,12 @@ import io
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from uuid import uuid4
 
 import psycopg
 from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
 
 from alphadb.state.repository import OperationalStateRepository
 
@@ -58,42 +56,6 @@ class DataQuery:
             "limit": self.limit,
             "schema": [dict(row) for row in schema],
             "row_count": row_count,
-        }
-
-
-@dataclass(frozen=True)
-class SavedDatasetSnapshot:
-    dataset_snapshot_id: str
-    name: str
-    view_name: str
-    filters: Mapping[str, Any]
-    sort: Mapping[str, Any]
-    row_limit: int
-    row_count: int
-    schema: Sequence[Mapping[str, Any]]
-    query_hash: str
-    artifact_uri: str | None
-    artifact_format: str | None
-    metadata: Mapping[str, Any]
-    created_by: str
-    created_at: datetime
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "dataset_snapshot_id": self.dataset_snapshot_id,
-            "name": self.name,
-            "view_name": self.view_name,
-            "filters": dict(self.filters),
-            "sort": dict(self.sort),
-            "row_limit": self.row_limit,
-            "row_count": self.row_count,
-            "schema": [dict(row) for row in self.schema],
-            "query_hash": self.query_hash,
-            "artifact_uri": self.artifact_uri,
-            "artifact_format": self.artifact_format,
-            "metadata": dict(self.metadata),
-            "created_by": self.created_by,
-            "created_at": self.created_at.isoformat(),
         }
 
 
@@ -346,17 +308,15 @@ class DashboardDataExplorerRepository:
             "row_count": len(rows),
         }
 
-    def save_snapshot(
+    def evidence_from_view(
         self,
         *,
-        name: str,
         view_name: str,
         filters: Mapping[str, Any] | None = None,
         sort: Mapping[str, Any] | None = None,
         limit: int = DEFAULT_ROWS,
-        created_by: str = "dashboard",
         metadata: Mapping[str, Any] | None = None,
-    ) -> SavedDatasetSnapshot:
+    ) -> dict[str, Any]:
         result = self.query_view(view_name, filters=filters or {}, sort=sort or {}, limit=limit)
         view = DATA_VIEW_MAP[view_name]
         query = DataQuery(
@@ -368,63 +328,21 @@ class DashboardDataExplorerRepository:
         schema = result["schema"]
         row_count = int(result["row_count"])
         query_hash = _query_hash(query.fingerprint_payload(schema=schema, row_count=row_count))
-        snapshot_id = f"dsnap_{uuid4().hex[:12]}"
-        OperationalStateRepository(self.database_url).apply_migrations()
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    insert into dashboard_saved_dataset_snapshots (
-                        dataset_snapshot_id,
-                        name,
-                        view_name,
-                        filters,
-                        sort,
-                        row_limit,
-                        row_count,
-                        schema,
-                        query_hash,
-                        metadata,
-                        created_by
-                    )
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    returning *
-                    """,
-                    (
-                        snapshot_id,
-                        str(name or f"{view.label} snapshot")[:160],
-                        view.name,
-                        Jsonb(dict(result["filters"])),
-                        Jsonb(dict(result["sort"])),
-                        query.limit,
-                        row_count,
-                        Jsonb(schema),
-                        query_hash,
-                        Jsonb(dict(metadata or {})),
-                        created_by,
-                    ),
-                )
-                row = cursor.fetchone()
-            connection.commit()
-        if row is None:
-            raise RuntimeError("dataset snapshot insert returned no row")
-        return _snapshot_from_row(row)
-
-    def list_snapshots(self, *, limit: int = 50) -> list[SavedDatasetSnapshot]:
-        OperationalStateRepository(self.database_url).apply_migrations()
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    select *
-                    from dashboard_saved_dataset_snapshots
-                    order by created_at desc, dataset_snapshot_id
-                    limit %s
-                    """,
-                    (_bounded_limit(limit),),
-                )
-                rows = cursor.fetchall()
-        return [_snapshot_from_row(row) for row in rows]
+        return {
+            "evidence_id": f"evid_{query_hash[:12]}",
+            "source": "data_explorer",
+            "view_name": view.name,
+            "view_label": view.label,
+            "filters": dict(result["filters"]),
+            "sort": dict(result["sort"]),
+            "row_limit": query.limit,
+            "row_count": row_count,
+            "schema": schema,
+            "query_hash": query_hash,
+            "rows_preview": result["rows"][:10],
+            "metadata": dict(metadata or {}),
+            "created_at": datetime.now(UTC).isoformat(),
+        }
 
     def export_view(
         self,
@@ -553,49 +471,6 @@ def _query_hash(payload: Mapping[str, Any]) -> str:
 
 def _bounded_limit(limit: int) -> int:
     return max(1, min(int(limit or DEFAULT_ROWS), MAX_ROWS))
-
-
-def _snapshot_from_row(row: Mapping[str, Any]) -> SavedDatasetSnapshot:
-    return SavedDatasetSnapshot(
-        dataset_snapshot_id=str(row["dataset_snapshot_id"]),
-        name=str(row["name"]),
-        view_name=str(row["view_name"]),
-        filters=_json_mapping(row["filters"]),
-        sort=_json_mapping(row["sort"]),
-        row_limit=int(row["row_limit"]),
-        row_count=int(row["row_count"]),
-        schema=_json_sequence(row["schema"]),
-        query_hash=str(row["query_hash"]),
-        artifact_uri=None if row["artifact_uri"] is None else str(row["artifact_uri"]),
-        artifact_format=None if row["artifact_format"] is None else str(row["artifact_format"]),
-        metadata=_json_mapping(row["metadata"]),
-        created_by=str(row["created_by"]),
-        created_at=row["created_at"],
-    )
-
-
-def _json_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if value is None:
-        return {}
-    if isinstance(value, str):
-        parsed = json.loads(value)
-        if isinstance(parsed, Mapping):
-            return dict(parsed)
-    raise ValueError("expected JSON object from dataset snapshot repository")
-
-
-def _json_sequence(value: Any) -> Sequence[Mapping[str, Any]]:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [dict(row) for row in value if isinstance(row, Mapping)]
-    if value is None:
-        return []
-    if isinstance(value, str):
-        parsed = json.loads(value)
-        if isinstance(parsed, Sequence) and not isinstance(parsed, (str, bytes)):
-            return [dict(row) for row in parsed if isinstance(row, Mapping)]
-    raise ValueError("expected JSON array from dataset snapshot repository")
 
 
 def json_ready(value: Any) -> Any:

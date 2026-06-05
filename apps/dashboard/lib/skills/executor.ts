@@ -35,7 +35,7 @@ export async function executeSkill(input: string): Promise<{
 }
 
 function nextSuggestions(skill: string) {
-  if (skill.startsWith("data.")) return ["list datasets", "status", "lab insights"]
+  if (skill.startsWith("data.")) return ["show data views", "save data to lab", "status"]
   if (skill.startsWith("lab.")) return ["lab entries", "lab insights", "status"]
   if (skill.startsWith("strategy.")) return ["list strategies", "compile strategy brief", "status"]
   return ["status", "list strategies", "show data views"]

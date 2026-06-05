@@ -5,8 +5,8 @@ import { useParams } from "next/navigation"
 import Link from "next/link"
 import { AppShell } from "@/components/app-shell"
 import { Button } from "@/components/ui/button"
-import { apiGet, apiPost } from "@/lib/alphadb-api"
-import { ArrowLeft, FileLock2, RefreshCw } from "lucide-react"
+import { apiGet } from "@/lib/alphadb-api"
+import { ArrowLeft, RefreshCw } from "lucide-react"
 
 interface StrategyRecord {
   strategy_id: string
@@ -30,7 +30,6 @@ export default function StrategyDetailPage() {
   const [strategy, setStrategy] = useState<StrategyRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [snapshot, setSnapshot] = useState<Record<string, unknown> | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -48,15 +47,6 @@ export default function StrategyDetailPage() {
   useEffect(() => {
     load()
   }, [strategyId])
-
-  const createSnapshot = async () => {
-    setSnapshot(null)
-    const data = await apiPost<{ snapshot: Record<string, unknown> }>(
-      `/strategies/${strategyId}/snapshots`,
-      { source: "dashboard" }
-    )
-    setSnapshot(data.snapshot)
-  }
 
   return (
     <AppShell>
@@ -78,10 +68,6 @@ export default function StrategyDetailPage() {
               <RefreshCw className="h-4 w-4" />
               Refresh
             </Button>
-            <Button variant="outline" size="sm" onClick={createSnapshot} disabled={!strategy}>
-              <FileLock2 className="h-4 w-4" />
-              Snapshot
-            </Button>
           </div>
         </div>
 
@@ -90,12 +76,6 @@ export default function StrategyDetailPage() {
             {error}
           </div>
         )}
-        {snapshot && (
-          <div className="border border-success/40 bg-success/10 rounded-lg p-3 text-sm text-success">
-            Snapshot {String(snapshot.snapshot_id)} created.
-          </div>
-        )}
-
         {strategy ? (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
             <section className="border border-border rounded-lg bg-card p-4 space-y-3">

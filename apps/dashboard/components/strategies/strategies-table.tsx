@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { apiGet, apiPost } from "@/lib/alphadb-api"
+import { apiGet } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
-import { FileLock2, Plus, RefreshCw } from "lucide-react"
+import { Plus, RefreshCw } from "lucide-react"
 
 interface StrategyRecord {
   strategy_id: string
@@ -40,7 +40,6 @@ export function StrategiesTable() {
   const [strategies, setStrategies] = useState<StrategyRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [snapshotting, setSnapshotting] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -58,15 +57,6 @@ export function StrategiesTable() {
   useEffect(() => {
     load()
   }, [])
-
-  const createSnapshot = async (strategyId: string) => {
-    setSnapshotting(strategyId)
-    try {
-      await apiPost(`/strategies/${strategyId}/snapshots`, { source: "dashboard" })
-    } finally {
-      setSnapshotting(null)
-    }
-  }
 
   return (
     <div className="space-y-4">
@@ -101,7 +91,6 @@ export function StrategiesTable() {
               <th className="text-left font-medium text-muted-foreground px-4 py-2">Market</th>
               <th className="text-left font-medium text-muted-foreground px-4 py-2">Stage</th>
               <th className="text-left font-medium text-muted-foreground px-4 py-2">Updated</th>
-              <th className="text-right font-medium text-muted-foreground px-4 py-2">Snapshot</th>
             </tr>
           </thead>
           <tbody>
@@ -119,22 +108,11 @@ export function StrategiesTable() {
                   <td className="px-4 py-3 font-mono text-xs">{text(market?.series)}</td>
                   <td className="px-4 py-3">{text(strategy.promotion_stage || strategy.status)}</td>
                   <td className="px-4 py-3 text-muted-foreground">{shortTime(strategy.updated_at)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <Button
-                      variant="outline"
-                      size="icon-sm"
-                      onClick={() => createSnapshot(strategy.strategy_id)}
-                      disabled={snapshotting === strategy.strategy_id}
-                      title="Create Strategy Spec snapshot"
-                    >
-                      <FileLock2 className="h-4 w-4" />
-                    </Button>
-                  </td>
                 </tr>
               )
             }) : (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
+                <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
                   {loading ? "Loading strategies..." : "No saved Strategy Specs."}
                 </td>
               </tr>

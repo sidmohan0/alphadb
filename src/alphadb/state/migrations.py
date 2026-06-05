@@ -492,49 +492,19 @@ AGENT_FIRST_DASHBOARD = Migration(
         )
         """,
         """
-        create table if not exists dashboard_strategy_spec_snapshots (
-            snapshot_id text primary key,
-            strategy_id text not null references dashboard_strategies(strategy_id),
-            spec jsonb not null,
-            brief text not null default '',
-            source text not null default 'dashboard',
-            spec_hash text not null,
-            metadata jsonb not null default '{}'::jsonb,
-            created_at timestamptz not null default now()
-        )
-        """,
-        """
-        create table if not exists dashboard_saved_dataset_snapshots (
-            dataset_snapshot_id text primary key,
-            name text not null,
-            view_name text not null,
-            filters jsonb not null default '{}'::jsonb,
-            sort jsonb not null default '{}'::jsonb,
-            row_limit integer not null check (row_limit >= 1),
-            row_count integer not null check (row_count >= 0),
-            schema jsonb not null default '[]'::jsonb,
-            query_hash text not null,
-            artifact_uri text,
-            artifact_format text,
-            metadata jsonb not null default '{}'::jsonb,
-            created_by text not null default 'dashboard',
-            created_at timestamptz not null default now()
-        )
-        """,
-        """
         create table if not exists lab_entries (
             lab_entry_id text primary key,
-            kind text not null check (kind in ('research_idea', 'experiment')),
             title text not null,
             hypothesis text not null default '',
             brief text not null default '',
             status text not null default 'active',
             verdict text check (verdict in ('continue', 'revise', 'kill') or verdict is null),
-            unsupported_reasons jsonb not null default '[]'::jsonb,
-            closest_templates jsonb not null default '[]'::jsonb,
-            missing_capabilities jsonb not null default '[]'::jsonb,
-            dataset_snapshot_id text references dashboard_saved_dataset_snapshots(dataset_snapshot_id),
-            strategy_snapshot_id text references dashboard_strategy_spec_snapshots(snapshot_id),
+            blockers jsonb not null default '[]'::jsonb,
+            evidence jsonb not null default '[]'::jsonb,
+            strategy jsonb not null default '{}'::jsonb,
+            runs jsonb not null default '[]'::jsonb,
+            notes jsonb not null default '[]'::jsonb,
+            insights jsonb not null default '[]'::jsonb,
             metrics jsonb not null default '{}'::jsonb,
             metadata jsonb not null default '{}'::jsonb,
             created_at timestamptz not null default now(),
@@ -542,62 +512,51 @@ AGENT_FIRST_DASHBOARD = Migration(
         )
         """,
         """
-        create table if not exists lab_entry_run_summaries (
-            run_summary_id text primary key,
-            lab_entry_id text not null references lab_entries(lab_entry_id),
-            run_id text,
-            run_mode text not null,
-            metrics jsonb not null default '{}'::jsonb,
-            summary jsonb not null default '{}'::jsonb,
-            created_at timestamptz not null default now()
-        )
+        alter table lab_entries
+        add column if not exists blockers jsonb not null default '[]'::jsonb
         """,
         """
-        create table if not exists lab_entry_notes (
-            note_id text primary key,
-            lab_entry_id text not null references lab_entries(lab_entry_id),
-            note_type text not null check (note_type in ('human', 'agent')),
-            body text not null,
-            metadata jsonb not null default '{}'::jsonb,
-            created_at timestamptz not null default now()
-        )
+        alter table lab_entries
+        add column if not exists evidence jsonb not null default '[]'::jsonb
         """,
         """
-        create table if not exists lab_semantic_insights (
-            insight_id text primary key,
-            insight_type text not null check (
-                insight_type in ('pattern', 'warning', 'similarity', 'suggestion')
-            ),
-            text text not null,
-            related_lab_entry_ids text[] not null default '{}',
-            related_dataset_snapshot_ids text[] not null default '{}',
-            related_strategy_snapshot_ids text[] not null default '{}',
-            confidence numeric not null check (confidence >= 0 and confidence <= 1),
-            source text not null default 'heuristic',
-            status text not null default 'active',
-            metadata jsonb not null default '{}'::jsonb,
-            created_at timestamptz not null default now()
-        )
+        alter table lab_entries
+        add column if not exists strategy jsonb not null default '{}'::jsonb
+        """,
+        """
+        alter table lab_entries
+        add column if not exists runs jsonb not null default '[]'::jsonb
+        """,
+        """
+        alter table lab_entries
+        add column if not exists notes jsonb not null default '[]'::jsonb
+        """,
+        """
+        alter table lab_entries
+        add column if not exists insights jsonb not null default '[]'::jsonb
+        """,
+        """
+        do $$
+        begin
+            if exists (
+                select 1
+                from information_schema.columns
+                where table_schema = 'public'
+                  and table_name = 'lab_entries'
+                  and column_name = 'kind'
+            ) then
+                alter table lab_entries alter column kind set default 'experiment';
+            end if;
+        end
+        $$;
         """,
         """
         create index if not exists dashboard_strategies_updated_idx
         on dashboard_strategies(updated_at desc)
         """,
         """
-        create index if not exists dashboard_strategy_snapshots_strategy_idx
-        on dashboard_strategy_spec_snapshots(strategy_id, created_at desc)
-        """,
-        """
-        create index if not exists dashboard_dataset_snapshots_view_idx
-        on dashboard_saved_dataset_snapshots(view_name, created_at desc)
-        """,
-        """
-        create index if not exists lab_entries_kind_updated_idx
-        on lab_entries(kind, updated_at desc)
-        """,
-        """
-        create index if not exists lab_insights_type_created_idx
-        on lab_semantic_insights(insight_type, created_at desc)
+        create index if not exists lab_entries_status_updated_idx
+        on lab_entries(status, updated_at desc)
         """,
     ),
 )

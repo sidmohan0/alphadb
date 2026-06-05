@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from alphadb.config import Settings, settings_from_env
 from alphadb.dashboard.auth import DashboardAuthConfig, evaluate_access
 from alphadb.dashboard.data_explorer import DashboardDataExplorerRepository
-from alphadb.dashboard.lab import DashboardLabRepository, research_idea_from_compile_result
+from alphadb.dashboard.lab import DashboardLabRepository, lab_entry_from_compile_result
 from alphadb.dashboard.skills import (
     capabilities_payload,
     classify_terminal_request,
@@ -109,7 +109,7 @@ class DashboardService:
         title = payload.get("title")
         result = compile_strategy_brief(brief, title=str(title) if title else None).as_dict()
         if payload.get("route_unsupported_to_lab") and result["status"] == "unsupported":
-            lab_entry = self._lab_repository().save_entry(**research_idea_from_compile_result(result))
+            lab_entry = self._lab_repository().save_entry(**lab_entry_from_compile_result(result))
             result["lab_entry"] = lab_entry.as_dict()
         return result
 
@@ -128,7 +128,7 @@ class DashboardService:
             compile_result = compile_strategy_brief(brief, title=name).as_dict()
             if compile_result["status"] == "unsupported":
                 lab_entry = self._lab_repository().save_entry(
-                    **research_idea_from_compile_result(compile_result)
+                    **lab_entry_from_compile_result(compile_result)
                 )
                 return {
                     "strategy": None,
@@ -150,19 +150,6 @@ class DashboardService:
         )
         return {"strategy": strategy.as_dict(), "compile": compile_result}
 
-    def create_strategy_snapshot(
-        self,
-        strategy_id: str,
-        payload: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        payload = payload or {}
-        snapshot = self._strategy_repository().create_snapshot(
-            strategy_id=strategy_id,
-            source=str(payload.get("source") or "dashboard"),
-            metadata=_mapping_or_empty(payload.get("metadata")),
-        )
-        return snapshot.as_dict()
-
     def list_data_views(self) -> list[dict[str, Any]]:
         return self._data_repository().list_views()
 
@@ -174,20 +161,31 @@ class DashboardService:
             limit=_int_payload(payload.get("limit"), default=100),
         )
 
-    def list_dataset_snapshots(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        return [snapshot.as_dict() for snapshot in self._data_repository().list_snapshots(limit=limit)]
-
-    def save_dataset_snapshot(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        snapshot = self._data_repository().save_snapshot(
-            name=str(payload.get("name") or "Dataset snapshot"),
-            view_name=str(payload.get("view_name") or payload.get("view") or ""),
+    def save_data_view_to_lab(self, view_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        evidence = self._data_repository().evidence_from_view(
+            view_name=view_name,
             filters=_mapping_or_empty(payload.get("filters")),
             sort=_mapping_or_empty(payload.get("sort")),
             limit=_int_payload(payload.get("limit"), default=100),
-            created_by=str(payload.get("created_by") or "dashboard"),
             metadata=_mapping_or_empty(payload.get("metadata")),
         )
-        return snapshot.as_dict()
+        title = str(payload.get("title") or f"{evidence['view_label']} evidence")
+        hypothesis = str(
+            payload.get("hypothesis")
+            or f"Saved evidence from {evidence['view_label']} for later strategy work."
+        )
+        entry = self._lab_repository().save_entry(
+            title=title,
+            hypothesis=hypothesis,
+            brief=str(payload.get("brief") or ""),
+            evidence=[evidence],
+            metadata={
+                "source": "data_explorer",
+                "view_name": view_name,
+                **_mapping_or_empty(payload.get("entry_metadata")),
+            },
+        )
+        return {"entry": entry.as_dict(), "evidence": evidence}
 
     def export_data_view(self, view_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._data_repository().export_view(
@@ -198,64 +196,38 @@ class DashboardService:
             limit=_int_payload(payload.get("limit"), default=100),
         )
 
-    def list_lab_entries(self, *, kind: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-        return [
-            entry.as_dict()
-            for entry in self._lab_repository().list_entries(kind=kind or None, limit=limit)
-        ]
+    def list_lab_entries(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return [entry.as_dict() for entry in self._lab_repository().list_entries(limit=limit)]
 
     def get_lab_entry(self, lab_entry_id: str) -> dict[str, Any]:
-        return self._lab_repository().get_entry(lab_entry_id)
+        return {"entry": self._lab_repository().get_entry(lab_entry_id).as_dict()}
 
     def save_lab_entry(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        blockers = list(_sequence_of_mappings(payload.get("blockers")))
+        for reason in _sequence_of_text(payload.get("unsupported_reasons")):
+            blockers.append({"type": "unsupported_reason", "text": reason})
+        for capability in _sequence_of_text(payload.get("missing_capabilities")):
+            blockers.append({"type": "missing_capability", "name": capability})
         entry = self._lab_repository().save_entry(
             lab_entry_id=_optional_text(payload.get("lab_entry_id")),
             title=str(payload.get("title") or "Untitled lab entry"),
-            kind=str(payload.get("kind") or "experiment"),
             hypothesis=str(payload.get("hypothesis") or ""),
             brief=str(payload.get("brief") or ""),
             status=str(payload.get("status") or "active"),
             verdict=_optional_text(payload.get("verdict")),
-            unsupported_reasons=_sequence_of_text(payload.get("unsupported_reasons")),
-            closest_templates=_sequence_of_text(payload.get("closest_templates")),
-            missing_capabilities=_sequence_of_text(payload.get("missing_capabilities")),
-            dataset_snapshot_id=_optional_text(payload.get("dataset_snapshot_id")),
-            strategy_snapshot_id=_optional_text(payload.get("strategy_snapshot_id")),
+            blockers=blockers,
+            evidence=_sequence_of_mappings(payload.get("evidence")),
+            strategy=_mapping_or_empty(payload.get("strategy")),
+            runs=_sequence_of_mappings(payload.get("runs")),
+            notes=_sequence_of_mappings(payload.get("notes")),
+            insights=_sequence_of_mappings(payload.get("insights")),
             metrics=_mapping_or_empty(payload.get("metrics")),
             metadata=_mapping_or_empty(payload.get("metadata")),
         )
         return entry.as_dict()
 
-    def add_lab_note(self, lab_entry_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        note = self._lab_repository().add_note(
-            lab_entry_id=lab_entry_id,
-            note_type=str(payload.get("note_type") or payload.get("author_role") or "human"),
-            body=str(payload.get("body") or ""),
-            metadata=_mapping_or_empty(payload.get("metadata")),
-        )
-        return note.as_dict()
-
-    def add_lab_run_summary(self, lab_entry_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        run = self._lab_repository().add_run_summary(
-            lab_entry_id=lab_entry_id,
-            run_id=_optional_text(payload.get("run_id")),
-            run_mode=str(payload.get("run_mode") or "unknown"),
-            metrics=_mapping_or_empty(payload.get("metrics")),
-            summary=_mapping_or_empty(payload.get("summary")),
-        )
-        return run.as_dict()
-
-    def set_lab_verdict(self, lab_entry_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return self._lab_repository().set_verdict(
-            lab_entry_id=lab_entry_id,
-            verdict=str(payload.get("verdict") or ""),
-        ).as_dict()
-
     def list_lab_insights(self, *, limit: int = 20) -> list[dict[str, Any]]:
         return [insight.as_dict() for insight in self._lab_repository().list_insights(limit=limit)]
-
-    def generate_lab_insights(self) -> list[dict[str, Any]]:
-        return [insight.as_dict() for insight in self._lab_repository().generate_and_save_insights()]
 
     def capabilities(self) -> dict[str, Any]:
         return capabilities_payload()
@@ -276,15 +248,13 @@ class DashboardService:
         elif skill == "data.view.query":
             view_name = str(params.get("view_name") or params.get("view") or "decisions")
             result = self.query_data_view(view_name, params)
-        elif skill == "data.snapshots.list":
-            result = self.list_dataset_snapshots(limit=_int_payload(params.get("limit"), default=25))
+        elif skill == "data.view.save_to_lab":
+            view_name = str(params.get("view_name") or params.get("view") or "decisions")
+            result = self.save_data_view_to_lab(view_name, params)
         elif skill == "lab.entries.list":
-            result = self.list_lab_entries(
-                kind=_optional_text(params.get("kind")),
-                limit=_int_payload(params.get("limit"), default=25),
-            )
-        elif skill == "lab.insights.generate":
-            result = self.generate_lab_insights()
+            result = self.list_lab_entries(limit=_int_payload(params.get("limit"), default=25))
+        elif skill == "lab.insights.list":
+            result = self.list_lab_insights(limit=_int_payload(params.get("limit"), default=20))
         else:
             raise KeyError(f"unknown skill: {skill}")
         return terminal_response(skill=skill, result=result, note=note)
@@ -321,6 +291,12 @@ def _mapping_or_empty(value: Any) -> Mapping[str, Any]:
 def _sequence_of_text(value: Any) -> Sequence[str]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [str(item) for item in value if str(item).strip()]
+    return []
+
+
+def _sequence_of_mappings(value: Any) -> Sequence[Mapping[str, Any]]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [dict(item) for item in value if isinstance(item, Mapping)]
     return []
 
 
@@ -542,22 +518,10 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                             )
                         )
                         return
-                if path == "/api/data/datasets":
-                    self._json_ok(
-                        {
-                            "datasets": service.list_dataset_snapshots(
-                                limit=_query_int(query, "limit", 50)
-                            )
-                        }
-                    )
-                    return
                 if path == "/api/lab/entries":
                     self._json_ok(
                         {
-                            "entries": service.list_lab_entries(
-                                kind=_query_text(query, "kind"),
-                                limit=_query_int(query, "limit", 50),
-                            )
+                            "entries": service.list_lab_entries(limit=_query_int(query, "limit", 50))
                         }
                     )
                     return
@@ -591,35 +555,16 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                 status = HTTPStatus.ACCEPTED if data.get("routed_to_lab") else HTTPStatus.OK
                 self._json_ok(data, status=status)
                 return
-            if path.startswith("/api/strategies/"):
-                parts = _path_parts(path)
-                if len(parts) == 4 and parts[3] == "snapshots":
-                    self._json_ok({"snapshot": service.create_strategy_snapshot(parts[2], payload)})
-                    return
-            if path == "/api/data/datasets":
-                self._json_ok({"dataset": service.save_dataset_snapshot(payload)})
-                return
             if path.startswith("/api/data/views/"):
                 parts = _path_parts(path)
                 if len(parts) == 5 and parts[4] == "export":
                     self._json_ok({"export": service.export_data_view(parts[3], payload)})
                     return
+                if len(parts) == 5 and parts[4] == "save-to-lab":
+                    self._json_ok(service.save_data_view_to_lab(parts[3], payload))
+                    return
             if path == "/api/lab/entries":
                 self._json_ok({"entry": service.save_lab_entry(payload)})
-                return
-            if path.startswith("/api/lab/entries/"):
-                parts = _path_parts(path)
-                if len(parts) == 5 and parts[4] == "notes":
-                    self._json_ok({"note": service.add_lab_note(parts[3], payload)})
-                    return
-                if len(parts) == 5 and parts[4] == "runs":
-                    self._json_ok({"run": service.add_lab_run_summary(parts[3], payload)})
-                    return
-                if len(parts) == 5 and parts[4] == "verdict":
-                    self._json_ok({"entry": service.set_lab_verdict(parts[3], payload)})
-                    return
-            if path == "/api/lab/insights/generate":
-                self._json_ok({"insights": service.generate_lab_insights()})
                 return
             if path == "/api/ask":
                 self._json_ok(service.ask_agent(payload))

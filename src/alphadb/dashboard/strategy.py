@@ -192,30 +192,6 @@ class DashboardStrategy:
         }
 
 
-@dataclass(frozen=True)
-class StrategySpecSnapshot:
-    snapshot_id: str
-    strategy_id: str
-    spec: Mapping[str, Any]
-    brief: str
-    source: str
-    spec_hash: str
-    metadata: Mapping[str, Any]
-    created_at: datetime
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "snapshot_id": self.snapshot_id,
-            "strategy_id": self.strategy_id,
-            "spec": dict(self.spec),
-            "brief": self.brief,
-            "source": self.source,
-            "spec_hash": self.spec_hash,
-            "metadata": dict(self.metadata),
-            "created_at": self.created_at.isoformat(),
-        }
-
-
 def compile_strategy_brief(brief: str, *, title: str | None = None) -> SpecCompileResult:
     clean_brief = _clean_brief(brief)
     text = clean_brief.lower()
@@ -456,43 +432,6 @@ class DashboardStrategyRepository:
             raise RuntimeError("strategy save returned no row")
         return _strategy_from_row(row)
 
-    def create_snapshot(
-        self,
-        *,
-        strategy_id: str,
-        source: str = "dashboard",
-        metadata: Mapping[str, Any] | None = None,
-    ) -> StrategySpecSnapshot:
-        strategy = self.get_strategy(strategy_id)
-        spec_hash = strategy_spec_hash(strategy.spec)
-        snapshot_id = f"specsnap_{uuid4().hex[:12]}"
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    insert into dashboard_strategy_spec_snapshots (
-                        snapshot_id, strategy_id, spec, brief, source, spec_hash, metadata
-                    )
-                    values (%s, %s, %s, %s, %s, %s, %s)
-                    returning *
-                    """,
-                    (
-                        snapshot_id,
-                        strategy.strategy_id,
-                        Jsonb(dict(strategy.spec)),
-                        strategy.brief,
-                        source,
-                        spec_hash,
-                        Jsonb(dict(metadata or {})),
-                    ),
-                )
-                row = cursor.fetchone()
-            connection.commit()
-        if row is None:
-            raise RuntimeError("strategy snapshot insert returned no row")
-        return _snapshot_from_row(row)
-
-
 def _build_spec(
     template: StrategyTemplate,
     *,
@@ -654,19 +593,6 @@ def _strategy_from_row(row: Mapping[str, Any]) -> DashboardStrategy:
         metadata=_json_mapping(row["metadata"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
-    )
-
-
-def _snapshot_from_row(row: Mapping[str, Any]) -> StrategySpecSnapshot:
-    return StrategySpecSnapshot(
-        snapshot_id=str(row["snapshot_id"]),
-        strategy_id=str(row["strategy_id"]),
-        spec=_json_mapping(row["spec"]),
-        brief=str(row["brief"]),
-        source=str(row["source"]),
-        spec_hash=str(row["spec_hash"]),
-        metadata=_json_mapping(row["metadata"]),
-        created_at=row["created_at"],
     )
 
 

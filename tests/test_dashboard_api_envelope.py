@@ -16,4 +16,7 @@ def test_dashboard_capabilities_expose_agent_terminal_skills() -> None:
     assert "live.summary" in names
     assert "strategy.compile" in names
     assert "data.view.query" in names
-    assert "lab.insights.generate" in names
+    assert "data.view.save_to_lab" in names
+    assert "lab.insights.list" in names
+    assert "data.snapshots.list" not in names
+    assert "lab.insights.generate" not in names
