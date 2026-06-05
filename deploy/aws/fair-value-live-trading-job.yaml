@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AlphaDB capped live-money fair-value trading job for KXBTC15M.
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: alphadb-fair-value-live
+  ContainerImage:
+    Type: String
+    Description: ECR image URI for the AlphaDB container.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for Fargate tasks with internet egress.
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+  ReportBucketName:
+    Type: String
+    Description: S3 bucket where immutable fair-value live artifacts are written.
+  ReportPrefix:
+    Type: String
+    Default: fair-value-live
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is DATABASE_URL for shared runtime config.
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 minute)
+  ScheduleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+  TaskCpu:
+    Type: String
+    Default: "512"
+  TaskMemory:
+    Type: String
+    Default: "1024"
+  MinEdgeValues:
+    Type: String
+    Default: "0.0,0.05,0.10"
+  KalshiApiKeyIdSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is KALSHI_API_KEY_ID.
+  KalshiPrivateKeyPemSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is the Kalshi private key PEM.
+  AwsRegionValue:
+    Type: String
+    Default: us-east-2
+
+Resources:
+  LiveLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ServiceName}
+      RetentionInDays: 14
+
+  LiveCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ServiceName
+
+  LiveTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AlphaDB fair-value live tasks with egress only.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  LiveExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadFairValueLiveSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseUrlSecretArn
+                  - !Ref KalshiApiKeyIdSecretArn
+                  - !Ref KalshiPrivateKeyPemSecretArn
+
+  LiveTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadWriteFairValueLiveArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub arn:aws:s3:::${ReportBucketName}
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - !Sub ${ReportPrefix}/*
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub arn:aws:s3:::${ReportBucketName}/${ReportPrefix}/*
+
+  LiveTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ServiceName
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt LiveExecutionRole.Arn
+      TaskRoleArn: !GetAtt LiveTaskRole.Arn
+      ContainerDefinitions:
+        - Name: fair-value-live
+          Image: !Ref ContainerImage
+          Essential: true
+          Command:
+            - alphadb-model-eval
+            - fair-value-live-trading-job
+            - --source
+            - kalshi-public
+            - --coinbase-source
+            - coinbase-live
+            - --output-root
+            - /tmp/alphadb-fair-value-live
+            - --s3-prefix
+            - !Sub s3://${ReportBucketName}/${ReportPrefix}
+            - --min-edge-values
+            - !Ref MinEdgeValues
+            - --runtime-config-source
+            - postgres
+            - --submit-live-orders
+          Environment:
+            - Name: ALPHADB_ENV
+              Value: aws
+            - Name: AWS_REGION
+              Value: !Ref AwsRegionValue
+            - Name: ALPHADB_AWS_REGION
+              Value: !Ref AwsRegionValue
+            - Name: ALPHADB_RUNTIME_MODE
+              Value: gated-live
+            - Name: ALPHADB_ENABLE_LIVE_ORDERS
+              Value: "1"
+            - Name: ALPHADB_HUMAN_CUTOVER_APPROVED
+              Value: "1"
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+            - Name: KALSHI_API_KEY_ID
+              ValueFrom: !Ref KalshiApiKeyIdSecretArn
+            - Name: KALSHI_PRIVATE_KEY_PEM
+              ValueFrom: !Ref KalshiPrivateKeyPemSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LiveLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: fair-value-live
+
+  EventBridgeRunRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunFairValueLiveTask
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource: !Ref LiveTaskDefinition
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt LiveExecutionRole.Arn
+                  - !GetAtt LiveTaskRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+
+  LiveSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Ref ServiceName
+      Description: Run AlphaDB fair-value live-money canary from dashboard-owned config.
+      ScheduleExpression: !Ref ScheduleExpression
+      State: !Ref ScheduleState
+      Targets:
+        - Id: FairValueLiveTask
+          Arn: !GetAtt LiveCluster.Arn
+          RoleArn: !GetAtt EventBridgeRunRole.Arn
+          EcsParameters:
+            LaunchType: FARGATE
+            TaskCount: 1
+            TaskDefinitionArn: !Ref LiveTaskDefinition
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: !Ref AssignPublicIp
+                SecurityGroups:
+                  - !Ref LiveTaskSecurityGroup
+                Subnets: !Ref SubnetIds
+
+Outputs:
+  ClusterName:
+    Value: !Ref LiveCluster
+  TaskDefinitionArn:
+    Value: !Ref LiveTaskDefinition
+  ScheduleName:
+    Value: !Ref LiveSchedule
+  ArtifactPrefix:
+    Value: !Sub s3://${ReportBucketName}/${ReportPrefix}
+  LogGroupName:
+    Value: !Ref LiveLogGroup

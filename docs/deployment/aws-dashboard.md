@@ -1,11 +1,10 @@
 # AlphaDB AWS Dashboard Deployment
 
 This runbook showcases AlphaDB's AWS-ready deployment path for a public
-prediction-market trading platform. The deployed dashboard is an operations and
-research surface backed by explicit secret management, managed infrastructure,
-and fail-closed runtime defaults. Live order submission remains
-operator-controlled and requires explicit runtime settings outside the default
-dashboard readiness path.
+prediction-market trading platform. The deployed dashboard is a Live-first
+operator console backed by explicit secret management, managed infrastructure,
+and fail-closed runtime defaults. It is also the exclusive control plane for
+non-secret fair-value live runtime parameters.
 
 ## Region Decision
 
@@ -51,8 +50,8 @@ ALPHADB_ENV=aws
 AWS_REGION=us-east-2
 ALPHADB_AWS_REGION=us-east-2
 DATABASE_URL=<Secrets Manager value>
-ALPHADB_STREAMLIT_PORT=8501
-ALPHADB_RUNTIME_MODE=paper
+ALPHADB_DASHBOARD_PORT=8501
+ALPHADB_RUNTIME_MODE=gated-live
 ALPHADB_ENABLE_LIVE_ORDERS=0
 ALPHADB_HUMAN_CUTOVER_APPROVED=0
 ALPHADB_DASHBOARD_PIN=<Secrets Manager value: exactly four digits>
@@ -60,11 +59,27 @@ ALPHADB_DASHBOARD_COOKIE_SECRET=<Secrets Manager value: random 32+ bytes>
 ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS=604800
 ```
 
-`ALPHADB_RUNTIME_MODE=paper` is the intended public dashboard readiness mode.
-`fixture` is acceptable for pure container smoke tests. `gated-live`, live
-credentials, `ALPHADB_ENABLE_LIVE_ORDERS=1`, and
-`ALPHADB_HUMAN_CUTOVER_APPROVED=1` are operator-controlled settings and are out
-of scope for this public deployment path.
+`ALPHADB_RUNTIME_MODE=gated-live` keeps the dashboard environment aligned with
+the live control plane. The dashboard web task still cannot submit orders because
+`ALPHADB_ENABLE_LIVE_ORDERS=0`, `ALPHADB_HUMAN_CUTOVER_APPROVED=0`, and Kalshi
+live credentials are not attached to the dashboard service. `fixture`, `shadow`,
+and `paper` are acceptable only for local/container readiness checks, not the AWS
+operator console.
+
+The dashboard-owned runtime config stored in Postgres contains only non-secret
+MVP knobs:
+
+- Max order dollars.
+- Max market exposure dollars.
+- Max daily loss dollars.
+- Min edge.
+- Max markets.
+
+Database URLs, Kalshi credentials, private keys, dashboard PINs, cookie secrets,
+subnets, security groups, and task wiring stay in Secrets Manager or AWS
+infrastructure configuration. The live worker reads the latest active Postgres
+config at run start and records the config id/version/snapshot in each run
+manifest.
 
 ## Local AWS-Shaped Readiness
 
@@ -106,11 +121,12 @@ docker compose --profile dashboard-runtime up --build dashboard-runtime
 ```
 
 Open `http://localhost:8501`, enter the four-digit PIN, and confirm the dashboard
-shows health, state counts, runtime guard status, run monitor, and signal and
-execution rows. The smoke command should report:
+opens on the Live workspace with status panels, runtime config, recent attempts,
+and config history. The smoke command should report:
 
 - `dashboard_auth.ok=true`
 - `migrations.ok=true`
+- `runtime_config.ok=true`
 - `runtime_guard.can_submit_live_orders=false`
 - `ok=true`
 
@@ -134,7 +150,8 @@ The CloudFormation skeleton in
 
 - VPC with public subnets for an ALB.
 - Private subnets for Fargate tasks.
-- Managed Postgres reachable from those private subnets.
+- Managed Postgres reachable from those private subnets by both dashboard tasks
+  and live worker tasks.
 - `DATABASE_URL`, dashboard PIN, and dashboard cookie secret stored in Secrets
   Manager.
 - ECR image built from this repository's `Dockerfile`.
@@ -169,12 +186,17 @@ aws cloudformation deploy \
     VpcId=<vpc-id> \
     PublicSubnetIds=<public-subnet-a>,<public-subnet-b> \
     PrivateSubnetIds=<private-subnet-a>,<private-subnet-b> \
+    AssignPublicIp=DISABLED \
     DatabaseUrlSecretArn=<database-url-secret-arn> \
     DashboardPinSecretArn=<dashboard-pin-secret-arn> \
     DashboardCookieSecretArn=<dashboard-cookie-secret-arn> \
     AwsRegionValue=us-east-2 \
-    RuntimeMode=paper
+    RuntimeMode=gated-live
 ```
+
+Use `AssignPublicIp=ENABLED` only for a public-subnet smoke deployment without
+NAT egress. The production preference remains private task subnets with managed
+egress.
 
 Before enabling the service for users, run one-off tasks from the same task
 definition:
@@ -188,6 +210,15 @@ alphadb-deploy smoke
 When running those commands through ECS, override the container command to the
 desired `alphadb-deploy ...` command and use the same private subnets and service
 security group as the dashboard service.
+
+For ALP-156, the human deployment verifier should also run or schedule the
+fair-value live worker template with `DatabaseUrlSecretArn` pointing to this same
+managed Postgres secret. The worker task security group/subnets must be able to
+reach the database, and the task command should include
+`--runtime-config-source postgres`.
+
+Use `docs/deployment/live-money-cutover-checklist.md` as the ALP-157 checklist
+and evidence template before any live-money authority change.
 
 ## Rollback
 
@@ -204,8 +235,11 @@ Rollback is image and service oriented:
 
 - Docker image builds from the repository root.
 - `alphadb-deploy migrate` applies all operational-state migrations.
+- `alphadb-deploy smoke` verifies the live runtime config table exists and an
+  active config can be read.
 - `alphadb-deploy seed-readiness` creates a tracer run visible in the dashboard.
-- `alphadb-deploy smoke` passes in AWS-shaped paper mode.
+- `alphadb-deploy smoke` passes in AWS-shaped dashboard mode without live-order
+  credentials on the dashboard service.
 - Dashboard login requires a four-digit PIN in `ALPHADB_ENV=aws`.
 - Runtime guard reports `can_submit_live_orders=false`.
 - ECS/Fargate service uses `us-east-2`, private task subnets, managed Postgres

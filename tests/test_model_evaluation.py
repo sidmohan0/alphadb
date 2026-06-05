@@ -14,6 +14,11 @@ from alphadb.model_evaluation.features import (
     engineer_kxbtc_features,
     resolve_feature_groups,
 )
+from alphadb.model_evaluation.fair_value_replay import (
+    FairValueReplayConfig,
+    build_fair_value_replay_report,
+    build_fair_value_walk_forward_report,
+)
 from alphadb.model_evaluation.live_attribution import summary_from_payload
 from alphadb.model_evaluation.metrics import simulate_policy
 from alphadb.model_evaluation.models import (
@@ -54,6 +59,24 @@ def prediction_rows(markets: int = 8) -> list[dict]:
                         "no_ask": 0.55 if yes else 0.45,
                     }
                 )
+    return rows
+
+
+def fair_value_rows(markets: int = 8) -> list[dict]:
+    rows = []
+    for index in range(markets):
+        yes_wins = index % 2 == 0
+        rows.append(
+            {
+                "ticker": f"KXBTC15M-FV-{index:03d}",
+                "market_open_time": f"2026-06-04T{index:02d}:00:00Z",
+                "decision_timestamp": f"2026-06-04T{index:02d}:10:00Z",
+                "p_yes": 0.82 if yes_wins else 0.18,
+                "yes_ask": 0.40 if yes_wins else 0.60,
+                "no_ask": 0.60 if yes_wins else 0.40,
+                "result": "yes" if yes_wins else "no",
+            }
+        )
     return rows
 
 
@@ -154,6 +177,86 @@ def test_walk_forward_report_aggregates_complete_windows() -> None:
     assert report["complete_window_count"] >= 2
     assert report["aggregate"]["net_pnl_total"] > 0
     assert report["aggregate"]["selected_candidate_counts"]["strong"] >= 1
+
+
+def test_fair_value_replay_reports_pnl_settlement_and_minimal_caps() -> None:
+    rows = fair_value_rows(4)
+    rows.append(
+        {
+            "ticker": "KXBTC15M-FV-unsettled",
+            "market_open_time": "2026-06-04T05:00:00Z",
+            "decision_timestamp": "2026-06-04T05:10:00Z",
+            "p_yes": 0.9,
+            "yes_ask": 0.20,
+            "no_ask": 0.80,
+        }
+    )
+
+    report = build_fair_value_replay_report(
+        rows,
+        config=FairValueReplayConfig(
+            min_edge=0.05,
+            max_order_dollars=5.0,
+            max_loss_dollars=50.0,
+        ),
+    )
+
+    assert report["schema_version"] == "kxbtc_fair_value_replay_report.v1"
+    assert report["settlement"]["default_reporting"] == "pnl_and_settlement_included"
+    assert report["settlement"]["status"] == "partial"
+    assert report["counts"]["trades"] == 5
+    assert report["counts"]["settled_trades"] == 4
+    assert report["counts"]["unsettled_trades"] == 1
+    assert report["pnl"]["net_pnl_dollars"] > 0
+    assert report["controls"]["max_order_dollars"] == 5.0
+    assert all(trade["cost_dollars"] <= 5.0 for trade in report["trades"])
+
+
+def test_fair_value_replay_honors_loss_cap() -> None:
+    rows = [
+        {
+            "ticker": f"KXBTC15M-FV-loss-{index:03d}",
+            "market_open_time": f"2026-06-04T{index:02d}:00:00Z",
+            "decision_timestamp": f"2026-06-04T{index:02d}:10:00Z",
+            "p_yes": 0.9,
+            "yes_ask": 0.20,
+            "no_ask": 0.80,
+            "result": "no",
+        }
+        for index in range(6)
+    ]
+
+    report = build_fair_value_replay_report(
+        rows,
+        config=FairValueReplayConfig(
+            min_edge=0.05,
+            max_order_dollars=5.0,
+            max_loss_dollars=8.0,
+        ),
+    )
+
+    assert report["pnl"]["net_pnl_dollars"] >= -8.5
+    assert report["controls"]["loss_cap_reached"] is True
+    assert any(reason == "loss_cap_reached" for reason, _count in report["skips"])
+
+
+def test_fair_value_walk_forward_selects_and_scores_holdout() -> None:
+    report = build_fair_value_walk_forward_report(
+        fair_value_rows(8),
+        selection_market_count=3,
+        holdout_market_count=2,
+        step_market_count=2,
+        min_edge_values=(0.0, 0.2),
+        max_order_dollars=5.0,
+        max_loss_dollars=50.0,
+    )
+
+    assert report["schema_version"] == "kxbtc_fair_value_walk_forward_report.v1"
+    assert report["complete_window_count"] >= 2
+    assert report["aggregate"]["holdout_trade_count"] > 0
+    assert report["aggregate"]["holdout_net_pnl_dollars"] > 0
+    assert "skip_reasons" in report["windows"][0]["holdout"]
+    assert "settlement" in report["windows"][0]["holdout"]
 
 
 def test_feature_engineering_adds_public_safe_features_and_rejects_lookahead() -> None:

@@ -6,7 +6,7 @@
 [![CI][ci-shield]][ci-url]
 [![Python][python-shield]][python-url]
 [![PostgreSQL][postgres-shield]][postgres-url]
-[![Streamlit][streamlit-shield]][streamlit-url]
+[![Dashboard][dashboard-shield]](#dashboard-and-deployment)
 [![Docker Compose][compose-shield]][compose-url]
 [![License][license-shield]](#license)
 
@@ -16,8 +16,7 @@
 [python-url]: https://www.python.org/
 [postgres-shield]: https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat&logo=postgresql&logoColor=white
 [postgres-url]: https://www.postgresql.org/
-[streamlit-shield]: https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?style=flat&logo=streamlit&logoColor=white
-[streamlit-url]: https://streamlit.io/
+[dashboard-shield]: https://img.shields.io/badge/Dashboard-Live%20Console-5EE2A0?style=flat
 [compose-shield]: https://img.shields.io/badge/Runtime-Docker%20Compose-2496ED?style=flat&logo=docker&logoColor=white
 [compose-url]: https://docs.docker.com/compose/
 [license-shield]: https://img.shields.io/badge/License-TBD-lightgrey?style=flat
@@ -69,15 +68,15 @@ docker compose run --rm app bash -lc "python -m pip install -e '.[dev,dashboard]
 
 ### Dashboard
 
-Run the Streamlit dashboard against local Postgres:
+Run the Live-first dashboard against local Postgres:
 
 ```bash
-docker compose --profile dashboard up streamlit
+docker compose --profile dashboard up dashboard
 ```
 
 Open `http://localhost:8501`. By default, Postgres is published on
-`localhost:55433` and Streamlit on `localhost:8501`. Override those with
-`ALPHADB_POSTGRES_PORT` and `ALPHADB_STREAMLIT_PORT`.
+`localhost:55433` and the dashboard on `localhost:8501`. Override those with
+`ALPHADB_POSTGRES_PORT` and `ALPHADB_DASHBOARD_PORT`.
 
 ### Configuration
 
@@ -105,7 +104,7 @@ under replay and fail closed around live money.
 | Risk gate | Fail-closed sizing, loss, mode, and live-order checks before execution. |
 | Paper execution | Taker-only IOC simulation and reconciliation without live exchange control. |
 | Shadow comparison | Decision-boundary parity checks against an external or current MVP export. |
-| Dashboard | Streamlit operations and research surface for state, runtime guard, signals, and runs. |
+| Dashboard | Live-first operator console for status, runtime config, recent attempts, and risk usage. |
 | AWS deployment | Secret-safe dashboard deployment path with managed infrastructure assumptions. |
 
 ## Architecture
@@ -370,11 +369,37 @@ ALPHADB_CURRENT_MVP_ARTIFACT_CONFIG=/path/to/private/artifacts/kxbtc15m.json \
 alphadb-strategy gated-live-loop --max-markets 3
 ```
 
+The fair-value live-money canary has separate ledger-style caps for each order,
+each market ticker, and the daily loss/exposure envelope. Locally, either pass
+the CLI flags explicitly or set env vars and omit the flags:
+
+```bash
+ALPHADB_RUNTIME_MODE=gated-live \
+ALPHADB_ENABLE_LIVE_ORDERS=0 \
+ALPHADB_LIVE_STAKE_CAP_DOLLARS=2.25 \
+ALPHADB_MAX_TICKER_EXPOSURE_DOLLARS=3.50 \
+ALPHADB_MAX_DAILY_LOSS_DOLLARS=12.00 \
+alphadb-model-eval fair-value-live-trading-job \
+  --source fixture \
+  --coinbase-source fixture \
+  --output-root /tmp/alphadb-fair-value-live \
+  --max-markets 1
+```
+
+Equivalent explicit flags are `--max-order-dollars`,
+`--max-ticker-exposure-dollars`, and `--max-daily-loss-dollars`. In AWS, the
+dashboard is the non-secret runtime config control plane. The live worker reads
+the latest Postgres-saved config at run start and records the config snapshot in
+the run manifest.
+
 ## Dashboard And Deployment
 
-The dashboard is a Streamlit-first operations and research surface backed by
-Postgres. In AWS-like environments, dashboard access requires a four-digit PIN
-and signed cookie secret supplied outside Git.
+The dashboard is a Live-first operator console backed by Postgres. It owns
+non-secret fair-value live runtime parameters: max order dollars, max market
+exposure dollars, max daily loss dollars, min edge, and max markets. Secrets and
+infrastructure values stay outside the dashboard. In AWS-like environments,
+dashboard access requires a four-digit PIN and signed cookie secret supplied
+outside Git.
 
 Run deployment-shaped local checks:
 
@@ -395,7 +420,7 @@ alphadb-deploy smoke
 ```
 
 See [docs/deployment/aws-dashboard.md](docs/deployment/aws-dashboard.md) for the
-ECS/Fargate and EC2 dashboard deployment paths.
+ECS/Fargate dashboard deployment path.
 
 ## Repository Layout
 

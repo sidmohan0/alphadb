@@ -8,7 +8,7 @@ def test_settings_default_database_url_uses_configurable_local_port() -> None:
 
     assert settings.database_url == "postgresql://alphadb:alphadb@localhost:55433/alphadb"
     assert settings.aws_region == "us-east-2"
-    assert settings.streamlit_port == "8501"
+    assert settings.dashboard_port == "8501"
     assert settings.runtime_mode == "fixture"
     assert settings.enable_live_orders is False
     assert settings.human_cutover_approved is False
@@ -28,6 +28,7 @@ def test_settings_default_database_url_uses_configurable_local_port() -> None:
     assert settings.x_api_daily_cap_usd is None
     assert settings.x_api_default_output_root == "artifacts"
     assert settings.live_stake_cap_dollars == 1.0
+    assert settings.max_ticker_exposure_dollars == 1.0
     assert settings.max_daily_loss_dollars == 10.0
     assert settings.min_ev_dollars == 0.0
     assert settings.strategy_poll_seconds == 60
@@ -43,7 +44,7 @@ def test_settings_database_url_can_be_overridden() -> None:
             "DATABASE_URL": "postgresql://user:pass@postgres:5432/custom",
             "ALPHADB_ENV": "test",
             "AWS_REGION": "us-east-2",
-            "ALPHADB_STREAMLIT_PORT": "18501",
+            "ALPHADB_DASHBOARD_PORT": "18501",
             "ALPHADB_RUNTIME_MODE": "paper",
             "ALPHADB_ENABLE_LIVE_ORDERS": "1",
             "ALPHADB_HUMAN_CUTOVER_APPROVED": "1",
@@ -63,6 +64,7 @@ def test_settings_database_url_can_be_overridden() -> None:
             "ALPHADB_X_API_DAILY_CAP_USD": "2.50",
             "ALPHADB_X_API_DEFAULT_OUTPUT_ROOT": "research/external-signals",
             "ALPHADB_LIVE_STAKE_CAP_DOLLARS": "2.5",
+            "ALPHADB_MAX_TICKER_EXPOSURE_DOLLARS": "7.5",
             "ALPHADB_MAX_DAILY_LOSS_DOLLARS": "25",
             "ALPHADB_MIN_EV_DOLLARS": "0.02",
             "ALPHADB_STRATEGY_POLL_SECONDS": "15",
@@ -76,7 +78,7 @@ def test_settings_database_url_can_be_overridden() -> None:
     assert settings.database_url == "postgresql://user:pass@postgres:5432/custom"
     assert settings.environment == "test"
     assert settings.aws_region == "us-east-2"
-    assert settings.streamlit_port == "18501"
+    assert settings.dashboard_port == "18501"
     assert settings.runtime_mode == "paper"
     assert settings.enable_live_orders is True
     assert settings.human_cutover_approved is True
@@ -96,6 +98,7 @@ def test_settings_database_url_can_be_overridden() -> None:
     assert settings.x_api_daily_cap_usd == 2.5
     assert settings.x_api_default_output_root == "research/external-signals"
     assert settings.live_stake_cap_dollars == 2.5
+    assert settings.max_ticker_exposure_dollars == 7.5
     assert settings.max_daily_loss_dollars == 25.0
     assert settings.min_ev_dollars == 0.02
     assert settings.strategy_poll_seconds == 15
@@ -108,6 +111,13 @@ def test_settings_database_url_can_be_overridden() -> None:
 def test_dashboard_pin_requires_cookie_secret() -> None:
     with pytest.raises(SettingsError, match="DASHBOARD_COOKIE_SECRET"):
         settings_from_env({"ALPHADB_DASHBOARD_PIN": "1234"})
+
+
+def test_max_ticker_exposure_defaults_to_live_stake_cap() -> None:
+    settings = settings_from_env({"ALPHADB_LIVE_STAKE_CAP_DOLLARS": "3.25"})
+
+    assert settings.live_stake_cap_dollars == 3.25
+    assert settings.max_ticker_exposure_dollars == 3.25
 
 
 def test_dashboard_pin_must_be_four_digits() -> None:

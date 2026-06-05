@@ -1,1 +1,1 @@
-"""Streamlit dashboard package for AlphaDB."""
+"""Dashboard package for the AlphaDB operator console."""

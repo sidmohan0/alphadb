@@ -2,8 +2,7 @@ import pytest
 
 from alphadb.config import settings_from_env
 
-pytest.importorskip("streamlit")
-from alphadb.dashboard.strategy_manager import (  # noqa: E402
+from alphadb.dashboard.strategy_manager import (
     LIVE_STRATEGIES,
     build_strategy_command,
     list_strategy_processes,
@@ -15,7 +14,7 @@ from alphadb.dashboard.strategy_manager import (  # noqa: E402
 def test_strategy_manager_parses_existing_alphadb_strategy_processes() -> None:
     rows = parse_strategy_processes(
         """
-          1     0 Ssl  /usr/local/bin/python /usr/local/bin/streamlit run src/alphadb/dashboard/app.py
+          1     0 Ssl  /usr/local/bin/python /usr/local/bin/alphadb-dashboard --host 0.0.0.0
         389     1 Ssl  /usr/local/bin/python /usr/local/bin/alphadb-strategy gated-live-loop --max-markets 3
         """
     )

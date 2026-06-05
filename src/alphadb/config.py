@@ -29,7 +29,7 @@ class Settings:
     environment: str
     aws_region: str
     database_url: str
-    streamlit_port: str
+    dashboard_port: str
     runtime_mode: str
     enable_live_orders: bool
     human_cutover_approved: bool
@@ -49,6 +49,7 @@ class Settings:
     x_api_daily_cap_usd: float | None = None
     x_api_default_output_root: str = DEFAULT_X_API_OUTPUT_ROOT
     live_stake_cap_dollars: float = 1.0
+    max_ticker_exposure_dollars: float = 1.0
     max_daily_loss_dollars: float = 10.0
     min_ev_dollars: float = 0.0
     strategy_poll_seconds: int = 60
@@ -100,8 +101,8 @@ def _optional_float(values: Mapping[str, str], key: str) -> float | None:
 
 
 def validate_settings(settings: Settings) -> Settings:
-    if not settings.streamlit_port.isdigit():
-        raise SettingsError(f"ALPHADB_STREAMLIT_PORT must be a port number: {settings.streamlit_port!r}")
+    if not settings.dashboard_port.isdigit():
+        raise SettingsError(f"ALPHADB_DASHBOARD_PORT must be a port number: {settings.dashboard_port!r}")
     if settings.dashboard_pin is not None:
         if not (settings.dashboard_pin.isdigit() and len(settings.dashboard_pin) == 4):
             raise SettingsError("ALPHADB_DASHBOARD_PIN must be exactly four digits")
@@ -117,6 +118,12 @@ def validate_settings(settings: Settings) -> Settings:
         raise SettingsError("ALPHADB_X_API_DAILY_CAP_USD must be positive when set")
     if not settings.x_api_default_output_root:
         raise SettingsError("ALPHADB_X_API_DEFAULT_OUTPUT_ROOT must not be empty")
+    if settings.live_stake_cap_dollars <= 0:
+        raise SettingsError("ALPHADB_LIVE_STAKE_CAP_DOLLARS must be positive")
+    if settings.max_ticker_exposure_dollars <= 0:
+        raise SettingsError("ALPHADB_MAX_TICKER_EXPOSURE_DOLLARS must be positive")
+    if settings.max_daily_loss_dollars <= 0:
+        raise SettingsError("ALPHADB_MAX_DAILY_LOSS_DOLLARS must be positive")
     return settings
 
 
@@ -128,11 +135,12 @@ def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
         f"postgresql://{DEFAULT_DATABASE_USER}:{DEFAULT_DATABASE_PASSWORD}"
         f"@{database_host}:{database_port}/{DEFAULT_DATABASE_NAME}"
     )
+    live_stake_cap_dollars = _float(values, "ALPHADB_LIVE_STAKE_CAP_DOLLARS", "1.0")
     settings = Settings(
         environment=values.get("ALPHADB_ENV", "local"),
         aws_region=values.get("AWS_REGION", values.get("ALPHADB_AWS_REGION", DEFAULT_AWS_REGION)),
         database_url=values.get("DATABASE_URL", default_database_url),
-        streamlit_port=values.get("ALPHADB_STREAMLIT_PORT", "8501"),
+        dashboard_port=values.get("ALPHADB_DASHBOARD_PORT", "8501"),
         runtime_mode=values.get("ALPHADB_RUNTIME_MODE", "fixture"),
         enable_live_orders=_bool(values, "ALPHADB_ENABLE_LIVE_ORDERS"),
         human_cutover_approved=_bool(values, "ALPHADB_HUMAN_CUTOVER_APPROVED"),
@@ -155,7 +163,12 @@ def settings_from_env(env: Mapping[str, str] | None = None) -> Settings:
             "ALPHADB_X_API_DEFAULT_OUTPUT_ROOT",
             DEFAULT_X_API_OUTPUT_ROOT,
         ),
-        live_stake_cap_dollars=_float(values, "ALPHADB_LIVE_STAKE_CAP_DOLLARS", "1.0"),
+        live_stake_cap_dollars=live_stake_cap_dollars,
+        max_ticker_exposure_dollars=_float(
+            values,
+            "ALPHADB_MAX_TICKER_EXPOSURE_DOLLARS",
+            str(live_stake_cap_dollars),
+        ),
         max_daily_loss_dollars=_float(values, "ALPHADB_MAX_DAILY_LOSS_DOLLARS", "10.0"),
         min_ev_dollars=_float(values, "ALPHADB_MIN_EV_DOLLARS", "0.0"),
         strategy_poll_seconds=_int(values, "ALPHADB_STRATEGY_POLL_SECONDS", "60"),

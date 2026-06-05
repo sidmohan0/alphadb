@@ -22,7 +22,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
-  streamlit:
+  dashboard:
     image: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
     profiles: ["dashboard"]
     working_dir: /workspaces/alphadb
@@ -33,6 +33,7 @@ services:
       ALPHADB_ENV: ${ALPHADB_ENV:-local}
       AWS_REGION: ${AWS_REGION:-us-east-2}
       ALPHADB_AWS_REGION: ${ALPHADB_AWS_REGION:-us-east-2}
+      ALPHADB_DASHBOARD_PORT: ${ALPHADB_DASHBOARD_PORT:-8501}
       ALPHADB_RUNTIME_MODE: ${ALPHADB_RUNTIME_MODE:-fixture}
       ALPHADB_ENABLE_LIVE_ORDERS: ${ALPHADB_ENABLE_LIVE_ORDERS:-0}
       ALPHADB_HUMAN_CUTOVER_APPROVED: ${ALPHADB_HUMAN_CUTOVER_APPROVED:-0}
@@ -40,10 +41,10 @@ services:
       ALPHADB_DASHBOARD_COOKIE_SECRET: ${ALPHADB_DASHBOARD_COOKIE_SECRET:-}
       ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS: ${ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS:-604800}
     ports:
-      - "${ALPHADB_STREAMLIT_PORT:-8501}:8501"
+      - "${ALPHADB_DASHBOARD_PORT:-8501}:8501"
     depends_on:
       - postgres
-    command: bash -lc "python -m pip install -e '.[dashboard]' && streamlit run src/alphadb/dashboard/app.py --server.address=0.0.0.0"
+    command: bash -lc "python -m pip install -e '.[dashboard]' && alphadb-dashboard --host 0.0.0.0 --port 8501"
 
   dashboard-runtime:
     build:
@@ -54,6 +55,7 @@ services:
       ALPHADB_ENV: ${ALPHADB_ENV:-local}
       AWS_REGION: ${AWS_REGION:-us-east-2}
       ALPHADB_AWS_REGION: ${ALPHADB_AWS_REGION:-us-east-2}
+      ALPHADB_DASHBOARD_PORT: ${ALPHADB_DASHBOARD_PORT:-8501}
       ALPHADB_RUNTIME_MODE: ${ALPHADB_RUNTIME_MODE:-fixture}
       ALPHADB_ENABLE_LIVE_ORDERS: ${ALPHADB_ENABLE_LIVE_ORDERS:-0}
       ALPHADB_HUMAN_CUTOVER_APPROVED: ${ALPHADB_HUMAN_CUTOVER_APPROVED:-0}
@@ -61,7 +63,7 @@ services:
       ALPHADB_DASHBOARD_COOKIE_SECRET: ${ALPHADB_DASHBOARD_COOKIE_SECRET:-}
       ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS: ${ALPHADB_DASHBOARD_COOKIE_TTL_SECONDS:-604800}
     ports:
-      - "${ALPHADB_STREAMLIT_PORT:-8501}:8501"
+      - "${ALPHADB_DASHBOARD_PORT:-8501}:8501"
     depends_on:
       - postgres
 

@@ -75,7 +75,7 @@ class BrokenStrategyRepository:
 def test_parse_strategy_processes_extracts_alphadb_strategy_processes() -> None:
     processes = parse_strategy_processes(
         """
-          1     0 Ssl  /usr/local/bin/python /usr/local/bin/streamlit run src/alphadb/dashboard/app.py
+          1     0 Ssl  /usr/local/bin/python /usr/local/bin/alphadb-dashboard --host 0.0.0.0
         389     1 Ssl  /usr/local/bin/python /usr/local/bin/alphadb-strategy gated-live-loop --max-markets 3
         401   389 S    alphadb-strategy status
         """

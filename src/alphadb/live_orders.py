@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -40,6 +41,14 @@ class KalshiLiveOrderClient(Protocol):
     ) -> Mapping[str, Any]:
         """Submit a Kalshi order request and return the exchange response."""
 
+    def get_order(
+        self,
+        *,
+        order_id: str,
+        settings: Settings,
+    ) -> Mapping[str, Any]:
+        """Return an authenticated Kalshi order detail response."""
+
 
 class HttpKalshiLiveOrderClient:
     path = "/portfolio/events/orders"
@@ -66,6 +75,29 @@ class HttpKalshiLiveOrderClient:
             payload = json.loads(response.read().decode("utf-8"))
         if not isinstance(payload, Mapping):
             raise LiveOrderError("Kalshi create-order response was not a JSON object")
+        return payload
+
+    def get_order(
+        self,
+        *,
+        order_id: str,
+        settings: Settings,
+    ) -> Mapping[str, Any]:
+        path = f"/portfolio/orders/{order_id}"
+        url = settings.kalshi_base_url.rstrip("/") + path
+        http_request = request.Request(
+            url,
+            headers=signed_kalshi_headers(
+                settings=settings,
+                method="GET",
+                path=path,
+            ),
+            method="GET",
+        )
+        with request.urlopen(http_request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, Mapping):
+            raise LiveOrderError("Kalshi get-order response was not a JSON object")
         return payload
 
 
@@ -382,6 +414,25 @@ def live_adapter_status_rows(settings: Settings | None = None) -> list[dict[str,
         {"metric": "live_order_block_reason", "value": guard.denial_reason or ""},
         {"metric": "kalshi_credentials_present", "value": guard.credentials_present},
     ]
+
+
+def materialize_private_key_from_env(
+    *,
+    pem_env_var: str = "KALSHI_PRIVATE_KEY_PEM",
+    path_env_var: str = "KALSHI_PRIVATE_KEY_PATH",
+    default_path: str = "/tmp/alphadb-kalshi-private-key.pem",
+) -> Path | None:
+    existing_path = os.environ.get(path_env_var)
+    if existing_path:
+        return Path(existing_path)
+    pem = os.environ.get(pem_env_var)
+    if not pem:
+        return None
+    path = Path(default_path)
+    path.write_text(pem.replace("\\n", "\n"), encoding="utf-8")
+    path.chmod(0o600)
+    os.environ[path_env_var] = str(path)
+    return path
 
 
 def build_parser() -> argparse.ArgumentParser:
