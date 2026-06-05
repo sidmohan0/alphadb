@@ -114,10 +114,10 @@ Capture these items before calling the cutover complete:
    - `aws --profile alphadb --region us-east-2 events describe-rule --name alphadb-fair-value-live`
    - `aws --profile alphadb --region us-east-2 ecs list-tasks --cluster alphadb-structural-live --desired-status RUNNING`
    - `aws --profile alphadb --region us-east-2 ecs list-tasks --cluster alphadb-fair-value-live --desired-status RUNNING`
-2. Deploy the dashboard and live worker wiring with both using the same managed
-   Postgres `DATABASE_URL` secret/source.
+2. Deploy the Cockpit/AlphaDB API and live worker wiring with both using the
+   same managed Postgres `DATABASE_URL` secret/source.
 3. Apply migrations and smoke checks from the deployed environment.
-4. Open the dashboard Live workspace and save the intended runtime config.
+4. Open the Cockpit Live workspace and save the intended runtime config.
 5. Verify the previous config revision is visible as the rollback target.
 6. Ask for explicit operator confirmation before pausing or changing live-money
    authority.

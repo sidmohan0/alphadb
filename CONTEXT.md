@@ -101,6 +101,9 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - The target platform should preserve **Taker-only execution policy** as the first paper/live execution mode; **Maker execution policy** belongs in a later milestone and must be explicitly enabled by risk config.
 - The preferred control-plane boundary stack is **Cockpit -> AlphaDB API -> Operational State -> Runtime / Replay / Research**.
 - The **Cockpit** should open on the Live operator workspace.
+- In local development, the **Cockpit** is the canonical operator surface; the **Legacy Python dashboard surface** is only an AlphaDB API and compatibility surface during the transition.
+- The **Target platform dev environment** should provide a one-command local path that starts Postgres, the Python **AlphaDB API**, and the Next.js **Cockpit** with Cockpit available at `localhost:3000`.
+- Default **Cockpit** screens should be API-backed and truthful. Sparse states, empty states, and API error states are acceptable for the MVP; implicit demo data, fake operational rows, and fake Lab insights are not. Explicit fixture mode is acceptable only when clearly labeled as local/dev fixture data.
 - The **Agent-first dashboard** should keep the MVP's security posture intentionally light: private Postgres plus existing dashboard access controls are sufficient for disposable live-trading capital, and new work should not add role systems, approval mazes, or other security friction unless explicitly reprioritized.
 - The **Cockpit** should use the supplied Next.js prototype as the committed user-facing UI surface, while Python target-platform services expose the AlphaDB API and keep ownership of trading, state, replay, and registry logic.
 - The **AlphaDB API** is the boundary between Cockpit and Python target-platform services; Next.js should not connect directly to target-platform Postgres for MVP features.

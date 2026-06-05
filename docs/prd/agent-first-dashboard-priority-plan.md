@@ -20,6 +20,12 @@ The product vocabulary is settled enough for the next implementation pass:
 - **Lab Entries** hold evidence, strategy JSON, runs, notes, metrics, verdicts,
   and **Semantic Lab insights**.
 - The **AlphaDB API** stays Python-owned. Next.js is the Cockpit.
+- Local development should have one documented command or Compose profile that
+  starts Postgres, the Python AlphaDB API, and the Next.js Cockpit, with the
+  Cockpit available at `localhost:3000`.
+- Cockpit screens should be truthful by default: API-backed data, useful empty
+  states, and clear API error states are acceptable; implicit fake rows,
+  operational activity, or Lab insights are not.
 
 ## Module Map
 
@@ -37,6 +43,10 @@ The product vocabulary is settled enough for the next implementation pass:
   persistent Agent Terminal surface.
 - `apps/dashboard/app/api/alphadb/[...path]/route.ts` proxies Cockpit calls to
   the Python AlphaDB API.
+- Local Cockpit verification should exercise that proxy against the Python API
+  rather than replacing the API with mocked TypeScript routes.
+- Any fixture mode used for development must be explicitly labeled as local/dev
+  fixture data.
 
 ### AlphaDB API Boundary
 

@@ -12,6 +12,8 @@ Cockpit -> AlphaDB API -> Operational State -> Runtime / Replay / Research
 ## Cockpit
 
 The Cockpit is the Next.js human-and-agent supervision UI.
+In local development, it is the canonical operator surface and should be
+available at `localhost:3000`.
 
 Owns:
 
@@ -31,6 +33,12 @@ Does not own:
 - Direct database access.
 
 Rule: Cockpit calls AlphaDB API. It does not become a second backend.
+The local development path should start Cockpit, AlphaDB API, and Postgres
+together so agents can verify the product surface without manually stitching
+services together.
+Cockpit should not fill sparse MVP screens with implicit demo data. Real API
+empty states and error states are preferable to fake operational activity.
+Fixture data is acceptable only in a clearly labeled local/dev fixture mode.
 
 ## AlphaDB API
 

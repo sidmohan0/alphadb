@@ -66,17 +66,30 @@ Run the same health path inside the Compose app container:
 docker compose run --rm app bash -lc "python -m pip install -e '.[dev,dashboard]' && pytest -q && alphadb-health"
 ```
 
-### Dashboard
+### Cockpit
 
-Run the Live-first dashboard against local Postgres:
+Run the Python AlphaDB API and legacy compatibility surface against local
+Postgres:
 
 ```bash
 docker compose --profile dashboard up dashboard
 ```
 
-Open `http://localhost:8501`. By default, Postgres is published on
-`localhost:55433` and the dashboard on `localhost:8501`. Override those with
-`ALPHADB_POSTGRES_PORT` and `ALPHADB_DASHBOARD_PORT`.
+Then run the canonical local Cockpit:
+
+```bash
+cd apps/dashboard
+corepack enable
+pnpm install
+pnpm dev
+```
+
+Open `http://localhost:3000`. By default, Postgres is published on
+`localhost:55433`, the Python AlphaDB API and legacy compatibility surface run
+on `localhost:8501`, and the Cockpit proxies API requests through
+`/api/alphadb/*`. Override the Python API port with `ALPHADB_DASHBOARD_PORT`
+and set `ALPHADB_API_BASE_URL` for the Cockpit when the API is not on
+`http://127.0.0.1:8501`.
 
 ### Configuration
 
@@ -106,7 +119,7 @@ under replay and fail closed around live money.
 | Shadow comparison | Decision-boundary parity checks against an external or current MVP export. |
 | Cockpit | Next.js human-and-agent supervision UI for live ops, Strategy Studio, Data Explorer, Lab, and Terminal. |
 | AlphaDB API | Python product API for Cockpit and external agents; owns strategy, data, Lab, skills, and runtime-config surfaces. |
-| AWS deployment | Secret-safe dashboard deployment path with managed infrastructure assumptions. |
+| AWS deployment | Secret-safe Cockpit and AlphaDB API deployment path with managed infrastructure assumptions. |
 
 ## Architecture
 
@@ -405,6 +418,10 @@ the Python service that owns strategy compilation, curated data access, Lab
 memory, agent skills, runtime config, and Postgres-backed operational state.
 Cockpit does not connect directly to Postgres or own trading logic.
 
+The canonical local operator URL is the Cockpit at `http://localhost:3000`.
+The Python service on `http://localhost:8501` is the local AlphaDB API target
+and legacy compatibility surface during the MVP transition.
+
 The current AWS dashboard deployment path still runs the legacy Python
 dashboard service from `alphadb-dashboard`. Serving the Next.js Cockpit at the
 public URL requires separate deployment wiring.
@@ -434,18 +451,19 @@ alphadb-deploy smoke
 ```
 
 See [docs/deployment/aws-dashboard.md](docs/deployment/aws-dashboard.md) for the
-ECS/Fargate dashboard deployment path.
+current ECS/Fargate Python API and legacy compatibility deployment path. The
+next AWS deployment milestone is serving Cockpit at the public dashboard URL.
 
 ## Repository Layout
 
 ```text
 .
 |-- CONTEXT.md              # Domain vocabulary and architecture boundary
-|-- deploy/aws/             # Dashboard deployment templates and helper scripts
+|-- deploy/aws/             # Cockpit/API deployment templates and helper scripts
 |-- docs/                   # Agent, deployment, public profile, and settlement notes
 |-- src/alphadb/            # Python package
 |-- tests/                  # Pytest suite
-|-- docker-compose.yml      # Local Postgres and dashboard services
+|-- docker-compose.yml      # Local Postgres and Python API/compat services
 `-- pyproject.toml          # Package metadata, scripts, and tool config
 ```
 

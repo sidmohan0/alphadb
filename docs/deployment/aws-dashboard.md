@@ -1,10 +1,11 @@
 # AlphaDB AWS Dashboard Deployment
 
-This runbook showcases AlphaDB's AWS-ready deployment path for a public
-prediction-market trading platform. The deployed dashboard is a Live-first
-operator console backed by explicit secret management, managed infrastructure,
-and fail-closed runtime defaults. It is also the exclusive control plane for
-non-secret fair-value live runtime parameters.
+This runbook captures the current AWS-ready deployment path for AlphaDB's
+legacy Python dashboard service and AlphaDB API compatibility surface. The
+canonical product UI is now the Next.js Cockpit. Local and future AWS operator
+work should treat Cockpit as the user-facing surface and the Python service as
+the API/runtime owner until the AWS deployment wiring serves Cockpit at the
+public dashboard URL.
 
 ## Region Decision
 
@@ -113,16 +114,26 @@ export ALPHADB_DASHBOARD_COOKIE_SECRET="$(openssl rand -hex 32)"
 .venv/bin/alphadb-deploy smoke
 ```
 
-Run the production-style container locally:
+Run the production-style Python API and legacy compatibility container locally:
 
 ```bash
 docker build -t alphadb-dashboard:local .
 docker compose --profile dashboard-runtime up --build dashboard-runtime
 ```
 
-Open `http://localhost:8501`, enter the four-digit PIN, and confirm the dashboard
-opens on the Live workspace with status panels, runtime config, recent attempts,
-and config history. The smoke command should report:
+For the canonical local operator surface, run Cockpit separately:
+
+```bash
+cd apps/dashboard
+corepack enable
+pnpm install
+ALPHADB_API_BASE_URL=http://127.0.0.1:8501 pnpm dev
+```
+
+Open `http://localhost:3000` and confirm the Cockpit opens on the Live workspace.
+The Python service remains available at `http://localhost:8501` for AlphaDB API
+proxying and legacy compatibility while the MVP transition is in progress. The
+smoke command should report:
 
 - `dashboard_auth.ok=true`
 - `migrations.ok=true`
