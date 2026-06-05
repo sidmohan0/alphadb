@@ -45,9 +45,7 @@ FAIR_VALUE_LIVE_JOB_SCHEMA = "kxbtc_fair_value_live_trading_job.v1"
 FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA = "kxbtc_fair_value_live_order_attempts.v1"
 FAIR_VALUE_LIVE_RECONCILIATION_SCHEMA = "kxbtc_fair_value_live_reconciliation.v1"
 FAIR_VALUE_LIVE_LOCK_SCHEMA = "kxbtc_fair_value_live_run_lock.v1"
-FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA = (
-    "kxbtc_fair_value_live_daily_loss_accounting.v1"
-)
+FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA = "kxbtc_fair_value_live_daily_loss_accounting.v1"
 FAIR_VALUE_LIVE_LOCK_TTL_SECONDS = 180
 DEFAULT_LIVE_RISK_TIMEZONE = "America/Los_Angeles"
 RuntimeConfigSource = Literal["auto", "postgres", "cli"]
@@ -246,6 +244,7 @@ class FairValueLiveTradingJob:
                     "daily_loss_accounting": daily_loss_accounting,
                     "runtime_guard": guard.as_dict(),
                     "live_run_lock": live_run_lock.as_dict(),
+                    "live_status_materialized": should_materialize_live_run_status(live_run_lock),
                 },
                 "counts": {
                     "collected_rows": collected["counts"]["rows"],
@@ -269,9 +268,7 @@ class FairValueLiveTradingJob:
                     "simulated_replay_net_pnl_dollars": replay["pnl"]["net_pnl_dollars"],
                     "simulated_replay_settlement_status": replay["settlement"]["status"],
                     "daily_loss_live_risk_day": daily_loss_accounting["live_risk_day"],
-                    "daily_loss_used_dollars": daily_loss_accounting[
-                        "daily_loss_used_dollars"
-                    ],
+                    "daily_loss_used_dollars": daily_loss_accounting["daily_loss_used_dollars"],
                     "live_reconciliation_scope": "full_history_loaded_attempts",
                     "live_full_history_net_pnl_dollars": live_reconciliation["pnl"][
                         "net_pnl_dollars"
@@ -288,13 +285,14 @@ class FairValueLiveTradingJob:
                 },
                 "artifacts": artifact_records(artifacts),
             }
-            materialize_live_run_status(
-                settings=settings,
-                manifest=manifest,
-                live_attempts_payload=live_attempts_payload,
-                live_reconciliation=live_reconciliation,
-                require_postgres=runtime_config.get("source") == "dashboard_postgres",
-            )
+            if should_materialize_live_run_status(live_run_lock):
+                materialize_live_run_status(
+                    settings=settings,
+                    manifest=manifest,
+                    live_attempts_payload=live_attempts_payload,
+                    live_reconciliation=live_reconciliation,
+                    require_postgres=runtime_config.get("source") == "dashboard_postgres",
+                )
             write_json(run_dir / "manifest.json", manifest)
             manifest["artifacts"]["manifest"] = artifact_record(run_dir / "manifest.json")
             if self.config.s3_prefix:
@@ -413,7 +411,9 @@ class FairValueLiveTradingJob:
                 "attempt_index": index,
             }
             if sized_order is None:
-                attempts.append({**base, "status": "skipped", "reason": "market_exposure_cap_reached"})
+                attempts.append(
+                    {**base, "status": "skipped", "reason": "market_exposure_cap_reached"}
+                )
                 continue
             if not live_run_lock.acquired:
                 attempts.append(
@@ -516,6 +516,10 @@ class LiveRunLock:
                 key=self.key,
                 token=self.token,
             )
+
+
+def should_materialize_live_run_status(live_run_lock: LiveRunLock) -> bool:
+    return live_run_lock.acquired or live_run_lock.reason != "live_run_lock_held"
 
 
 def acquire_live_run_lock(
@@ -917,7 +921,9 @@ def reconcile_live_attempt(
         "market_ticker": market_ticker,
         "side": side,
         "order_status": attempt.get("status"),
-        "order_id": attempt.get("order_id") or response.get("order_id") or detail_order.get("order_id"),
+        "order_id": attempt.get("order_id")
+        or response.get("order_id")
+        or detail_order.get("order_id"),
         "client_order_id": attempt.get("client_order_id")
         or response.get("client_order_id")
         or detail_order.get("client_order_id"),
@@ -941,7 +947,9 @@ def order_detail_for_attempt(
     settings: Settings,
     order_client: KalshiLiveOrderClient,
 ) -> Mapping[str, Any]:
-    order_id = attempt.get("order_id") or as_mapping(attempt.get("response_payload")).get("order_id")
+    order_id = attempt.get("order_id") or as_mapping(attempt.get("response_payload")).get(
+        "order_id"
+    )
     if not order_id:
         return {}
     try:
@@ -999,9 +1007,7 @@ def daily_loss_accounting_report(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
     )
-    filled_rows = [
-        row for row in same_day_rows if int(row.get("filled_contracts") or 0) > 0
-    ]
+    filled_rows = [row for row in same_day_rows if int(row.get("filled_contracts") or 0) > 0]
     return {
         "schema_version": FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA,
         "basis": "submitted_at_in_live_risk_day",
@@ -1125,7 +1131,9 @@ def load_prior_live_attempts(
     return attempts
 
 
-def load_prior_live_attempts_from_s3(*, s3_prefix: str, current_run_id: str) -> list[dict[str, Any]]:
+def load_prior_live_attempts_from_s3(
+    *, s3_prefix: str, current_run_id: str
+) -> list[dict[str, Any]]:
     bucket, prefix = parse_s3_prefix(s3_prefix)
     try:
         import boto3  # type: ignore[import-not-found]
