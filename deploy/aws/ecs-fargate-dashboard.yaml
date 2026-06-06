@@ -121,7 +121,9 @@ Resources:
                   - !Ref CockpitPinSecretArn
                   - !Ref CockpitCookieSecretArn
                   - !Ref KalshiApiKeyIdSecretArn
+                  - !Sub "${KalshiApiKeyIdSecretArn}-*"
                   - !Ref KalshiPrivateKeyPemSecretArn
+                  - !Sub "${KalshiPrivateKeyPemSecretArn}-*"
 
   CockpitTaskRole:
     Type: AWS::IAM::Role
@@ -304,6 +306,26 @@ Resources:
         - Name: api
           Image: !Ref AlphaDbApiContainerImage
           Essential: true
+          Command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ -n "${KALSHI_PRIVATE_KEY_PEM:-}" ] && [ -z "${KALSHI_PRIVATE_KEY_PATH:-}" ]; then
+                key_path="/tmp/alphadb-kalshi-private-key.pem"
+                umask 077
+                python3 - "$key_path" <<'PY'
+              import os
+              import pathlib
+              import sys
+
+              path = pathlib.Path(sys.argv[1])
+              path.write_text(os.environ["KALSHI_PRIVATE_KEY_PEM"].replace("\\n", "\n"), encoding="utf-8")
+              path.chmod(0o600)
+              PY
+                export KALSHI_PRIVATE_KEY_PATH="$key_path"
+              fi
+              exec alphadb-dashboard --host 0.0.0.0 --port "${ALPHADB_DASHBOARD_PORT:-8501}"
           PortMappings:
             - ContainerPort: !Ref AlphaDbApiPort
               Protocol: tcp

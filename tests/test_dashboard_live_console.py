@@ -4,15 +4,12 @@ import json
 from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
-from alphadb.config import DEFAULT_DATABASE_HOST, settings_from_env
-from alphadb.dashboard.app import DASHBOARD_HTML, DashboardService, load_dashboard_settings
+from alphadb.config import settings_from_env
+from alphadb.dashboard.app import DASHBOARD_HTML, DashboardService
 from alphadb.health import ComponentHealth, HealthReport, HealthStatus
 from alphadb.live_runtime import (
     LiveRunStatus,
@@ -135,31 +132,6 @@ def test_live_payload_does_not_expose_dashboard_process_guard() -> None:
     assert payload["portfolio_balance"]["assets_dollars"] == 55.56
 
 
-def test_dashboard_settings_materializes_aws_kalshi_private_key_pem(monkeypatch) -> None:
-    key_path = Path("/tmp/alphadb-kalshi-private-key.pem")
-    try:
-        key_path.unlink()
-    except FileNotFoundError:
-        pass
-    monkeypatch.setenv("KALSHI_API_KEY_ID", "key-id")
-    monkeypatch.setenv("KALSHI_PRIVATE_KEY_PEM", _private_key_pem())
-    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
-
-    try:
-        settings = load_dashboard_settings()
-
-        assert settings.kalshi_api_key_id == "key-id"
-        assert settings.kalshi_private_key_path == str(key_path)
-        assert key_path.exists()
-        assert DEFAULT_DATABASE_HOST in settings.database_url
-    finally:
-        monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
-        try:
-            key_path.unlink()
-        except FileNotFoundError:
-            pass
-
-
 def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:
     repository = FakeConfigRepository("postgresql://example.test/alphadb")
     status = replace(
@@ -191,15 +163,6 @@ def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:
     assert "summary" not in payload["live_status"]
     assert "simulated_replay" not in encoded
     assert "paper_orders" not in encoded
-
-
-def _private_key_pem() -> str:
-    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    return private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("ascii")
 
 
 def test_dashboard_service_saves_config_and_reloads_active_values() -> None:

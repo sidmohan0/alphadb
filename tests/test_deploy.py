@@ -212,6 +212,8 @@ def test_dashboard_fargate_template_defines_public_cockpit_and_private_api() -> 
     assert "CockpitCookieSecretArn" in template
     assert "KalshiApiKeyIdSecretArn" in template
     assert "KalshiPrivateKeyPemSecretArn" in template
+    assert '${KalshiApiKeyIdSecretArn}-*' in template
+    assert '${KalshiPrivateKeyPemSecretArn}-*' in template
     assert "AWS::ServiceDiscovery::PrivateDnsNamespace" in template
     assert "AWS::ServiceDiscovery::Service" in template
     assert "Name: ALPHADB_API_BASE_URL" in cockpit_task
@@ -223,6 +225,14 @@ def test_dashboard_fargate_template_defines_public_cockpit_and_private_api() -> 
     assert "Name: ALPHADB_DASHBOARD_PIN" in api_task
     assert "Name: KALSHI_API_KEY_ID" in api_task
     assert "Name: KALSHI_PRIVATE_KEY_PEM" in api_task
+    assert "Command:" in api_task
+    assert "/tmp/alphadb-kalshi-private-key.pem" in api_task
+    assert "KALSHI_PRIVATE_KEY_PATH" in api_task
+    assert 'os.environ["KALSHI_PRIVATE_KEY_PEM"].replace("\\\\n", "\\n")' in api_task
+    assert "path.chmod(0o600)" in api_task
+    assert "exec alphadb-dashboard" in api_task
+    assert "echo ${KALSHI_PRIVATE_KEY_PEM" not in api_task
+    assert "echo $KALSHI_PRIVATE_KEY_PEM" not in api_task
     assert "Name: KALSHI_API_KEY_ID" not in cockpit_task
     assert "Name: KALSHI_PRIVATE_KEY_PEM" not in cockpit_task
     assert "LoadBalancers:" not in api_service
@@ -266,11 +276,129 @@ def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secr
     assert "$COCKPIT_URL/api/auth/login" in smoke_script
     assert '--data-urlencode "pin=$PIN"' in smoke_script
     assert 'components.get("postgres") != "ok"' in smoke_script
+    assert "$COCKPIT_URL/api/alphadb/live" in smoke_script
+    assert "validate-cockpit-portfolio-smoke.py" in smoke_script
+    assert "portfolio_balance_dollars" not in smoke_script
+    assert "cash_dollars" not in smoke_script
+    assert "assets_dollars" not in smoke_script
 
     assert "auth-disabled Cockpit opens" in local_auth_smoke
     assert "wrong PIN is rejected" in local_auth_smoke
     assert "correct PIN sets signed cookie" in local_auth_smoke
     assert "signed cookie opens Cockpit" in local_auth_smoke
+
+
+def test_cockpit_portfolio_smoke_validator_reports_status_without_balances(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "portfolio_balance": {
+            "status": "ok",
+            "source": "kalshi",
+            "portfolio_balance_dollars": 191.34,
+            "cash_dollars": 67.89,
+            "assets_dollars": 123.45,
+            "observed_at_utc": "2026-06-06T22:00:00+00:00",
+            "stale": False,
+            "detail": None,
+        }
+    }
+
+    result = run_cockpit_portfolio_validator(tmp_path, payload)
+
+    assert result.returncode == 0
+    assert "portfolio credentials accepted" in result.stdout
+    assert "191.34" not in result.stdout
+    assert "67.89" not in result.stdout
+    assert "123.45" not in result.stdout
+    assert "portfolio_balance_dollars" not in result.stdout
+
+
+def test_cockpit_portfolio_smoke_validator_allows_noncredential_unavailable_reason(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "ok": True,
+        "data": {
+            "portfolio_balance": {
+                "status": "unavailable",
+                "source": "kalshi",
+                "portfolio_balance_dollars": None,
+                "cash_dollars": None,
+                "assets_dollars": None,
+                "observed_at_utc": None,
+                "stale": True,
+                "detail": "exchange API timeout",
+            }
+        },
+    }
+
+    result = run_cockpit_portfolio_validator(tmp_path, payload)
+
+    assert result.returncode == 0
+    assert "exchange API timeout" in result.stdout
+
+
+def test_cockpit_portfolio_smoke_validator_rejects_missing_credentials(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "portfolio_balance": {
+            "status": "unavailable",
+            "source": "kalshi",
+            "portfolio_balance_dollars": None,
+            "cash_dollars": None,
+            "assets_dollars": None,
+            "observed_at_utc": None,
+            "stale": True,
+            "detail": "missing_kalshi_credentials",
+        }
+    }
+
+    result = run_cockpit_portfolio_validator(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "missing_kalshi_credentials" in result.stderr
+
+
+def test_cockpit_portfolio_smoke_validator_rejects_unavailable_ui_text(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "portfolio_balance": {
+            "status": "unavailable",
+            "source": "kalshi",
+            "portfolio_balance_dollars": None,
+            "cash_dollars": None,
+            "assets_dollars": None,
+            "observed_at_utc": None,
+            "stale": True,
+            "detail": "Kalshi credentials unavailable",
+        }
+    }
+
+    result = run_cockpit_portfolio_validator(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "Kalshi credentials unavailable" in result.stderr
+
+
+def run_cockpit_portfolio_validator(
+    tmp_path: Path,
+    payload: dict[str, object],
+) -> subprocess.CompletedProcess[str]:
+    body = tmp_path / "portfolio.json"
+    body.write_text(json.dumps(payload), encoding="utf-8")
+    return subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate-cockpit-portfolio-smoke.py",
+            str(body),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> None:
