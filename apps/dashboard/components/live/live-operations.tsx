@@ -69,7 +69,19 @@ export function LiveOperations() {
     const raw = status.recent_attempts
     return Array.isArray(raw) ? raw.slice().reverse() : []
   }, [status.recent_attempts])
-  const liveOrdersEnabled = Boolean(status.live_orders_enabled)
+  const liveOrdersMetric = (() => {
+    if (typeof status.live_orders_enabled === "boolean") {
+      return status.live_orders_enabled
+        ? { value: "Enabled", tone: "good" as const }
+        : { value: "Disabled", tone: "warn" as const }
+    }
+    if (loading) return { value: "Checking", tone: "muted" as const }
+    return {
+      value: "Unknown",
+      tone: "muted" as const,
+      detail: error ? "API unavailable" : "No live status",
+    }
+  })()
 
   return (
     <div className="p-6 space-y-5">
@@ -100,7 +112,7 @@ export function LiveOperations() {
 
       <section className="grid gap-3 md:grid-cols-4">
         <Metric label="Health" value={payload?.health?.ok ? "OK" : "Unknown"} tone={payload?.health?.ok ? "good" : "muted"} />
-        <Metric label="Runner" value={liveOrdersEnabled ? "Active" : "Inactive"} tone={liveOrdersEnabled ? "good" : "warn"} />
+        <Metric label="Live Orders" value={liveOrdersMetric.value} tone={liveOrdersMetric.tone} detail={liveOrdersMetric.detail} />
         <Metric label="Market" value={text(status.current_market_ticker, "No recent run")} detail={text(status.run_id, "")} />
         <Metric label="Decision" value={text(status.decision_outcome)} detail={text(status.selected_side || status.skip_reason, "")} />
       </section>
