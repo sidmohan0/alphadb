@@ -497,6 +497,8 @@ def classify_exception(
     lowered = text.lower()
     if (
         "could not resolve" in lowered
+        or "failed to resolve" in lowered
+        or "nameresolutionerror" in lowered
         or "name or service not known" in lowered
         or "temporary failure in name resolution" in lowered
         or "nodename nor servname" in lowered
@@ -612,23 +614,80 @@ def main(argv: Sequence[str] | None = None) -> int:
         s3_prefix=args.s3_prefix,
         retry_delays_seconds=parse_retry_delays(args.retry_delays_seconds),
     )
-    client = Boto3FairValueLiveEvidenceClient(
-        aws_profile=config.aws_profile,
-        aws_region=config.aws_region,
-        ec2_metadata_disabled=config.ec2_metadata_disabled,
-    )
-    report = FairValueLiveReportGenerator(client=client, config=config).generate(
-        start=parse_required_datetime(args.start),
-        end=parse_required_datetime(args.end),
-    )
+    start = parse_required_datetime(args.start)
+    end = parse_required_datetime(args.end)
+    try:
+        client = Boto3FairValueLiveEvidenceClient(
+            aws_profile=config.aws_profile,
+            aws_region=config.aws_region,
+            ec2_metadata_disabled=config.ec2_metadata_disabled,
+        )
+    except Exception as exc:
+        report = blocked_report_for_entrypoint_failure(
+            start=start,
+            end=end,
+            config=config,
+            surface="aws_client_setup",
+            exc=exc,
+        )
+        emit_report(report, output=args.output)
+        return 0
+    try:
+        report = FairValueLiveReportGenerator(client=client, config=config).generate(
+            start=start,
+            end=end,
+        )
+    except Exception as exc:
+        report = blocked_report_for_entrypoint_failure(
+            start=start,
+            end=end,
+            config=config,
+            surface="report_entrypoint",
+            exc=exc,
+        )
+        emit_report(report, output=args.output)
+        return 0
+    emit_report(report, output=args.output)
+    return 0
+
+
+def blocked_report_for_entrypoint_failure(
+    *,
+    start: datetime,
+    end: datetime,
+    config: FairValueLiveReportConfig,
+    surface: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    failure = classify_exception(surface, exc)
+    surfaces = {surface: failed_surface(failure, attempts=1)}
+    return {
+        "schema_version": FAIR_VALUE_LIVE_REPORT_SCHEMA,
+        "interval": {
+            "start": ensure_utc(start).isoformat(),
+            "end": ensure_utc(end).isoformat(),
+        },
+        "status": "blocked",
+        "block_reason": failure.kind,
+        "aws_config": {
+            "profile": config.aws_profile,
+            "region": config.aws_region,
+            "ec2_metadata_disabled": config.ec2_metadata_disabled,
+        },
+        "surfaces": surfaces,
+        "summary": build_summary(values={}, runs=[]),
+        "runs": [],
+    }
+
+
+def emit_report(report: Mapping[str, Any], *, output: str | None) -> None:
     payload = json.dumps(report, indent=2, sort_keys=True, default=str)
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as handle:
+    if output:
+        with open(output, "w", encoding="utf-8") as handle:
             handle.write(payload)
             handle.write("\n")
     else:
         print(payload)
-    return 0
 
 
 def parse_retry_delays(value: str) -> tuple[float, ...]:

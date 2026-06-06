@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
-import tomllib
 import sys
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from alphadb.model_evaluation import fair_value_live_report as report_module
 from alphadb.model_evaluation.fair_value_live_report import (
     Boto3FairValueLiveEvidenceClient,
     FairValueLiveReportConfig,
@@ -325,6 +327,44 @@ def test_boto3_adapter_configures_local_aws_profile_region_and_metadata(monkeypa
     assert sessions == [{"profile": "alphadb", "region": "us-east-2"}]
     assert client.ec2_metadata_disabled is True
     assert os.environ["AWS_EC2_METADATA_DISABLED"] == "true"
+
+
+def test_cli_emits_blocked_json_when_sso_dns_fails_before_sts(monkeypatch, capsys) -> None:
+    class SsoDnsFailureClient:
+        def __init__(self, **kwargs: Any):
+            raise RuntimeError(
+                "NameResolutionError: Failed to resolve "
+                "'portal.sso.us-east-1.amazonaws.com'"
+            )
+
+    monkeypatch.setattr(report_module, "Boto3FairValueLiveEvidenceClient", SsoDnsFailureClient)
+
+    exit_code = report_module.main(
+        [
+            "--start",
+            "2026-06-06T17:30:00Z",
+            "--end",
+            "2026-06-06T17:45:00Z",
+            "--retry-delays-seconds",
+            "",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["status"] == "blocked"
+    assert payload["block_reason"] == "dns_resolution_failed"
+    assert payload["surfaces"]["aws_client_setup"] == {
+        "status": "failed",
+        "attempts": 1,
+        "failure_kind": "dns_resolution_failed",
+        "message": (
+            "NameResolutionError: Failed to resolve "
+            "'portal.sso.us-east-1.amazonaws.com'"
+        ),
+    }
+    assert payload["summary"]["run_count"] == 0
+    assert payload["summary"]["orders"]["submitted"] == 0
 
 
 def test_deployment_docs_name_report_command_as_scheduler_entrypoint() -> None:
