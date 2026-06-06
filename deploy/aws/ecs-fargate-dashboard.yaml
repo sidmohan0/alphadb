@@ -35,6 +35,12 @@ Parameters:
   CockpitCookieSecretArn:
     Type: String
     Description: Secrets Manager ARN whose value signs Cockpit remember-cookies.
+  KalshiApiKeyIdSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is KALSHI_API_KEY_ID.
+  KalshiPrivateKeyPemSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is the Kalshi private key PEM.
   PrivateNamespaceName:
     Type: String
     Default: alphadb.local
@@ -114,6 +120,10 @@ Resources:
                   - !Ref DatabaseUrlSecretArn
                   - !Ref CockpitPinSecretArn
                   - !Ref CockpitCookieSecretArn
+                  - !Ref KalshiApiKeyIdSecretArn
+                  - !Sub "${KalshiApiKeyIdSecretArn}-*"
+                  - !Ref KalshiPrivateKeyPemSecretArn
+                  - !Sub "${KalshiPrivateKeyPemSecretArn}-*"
 
   CockpitTaskRole:
     Type: AWS::IAM::Role
@@ -296,6 +306,26 @@ Resources:
         - Name: api
           Image: !Ref AlphaDbApiContainerImage
           Essential: true
+          Command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ -n "${KALSHI_PRIVATE_KEY_PEM:-}" ] && [ -z "${KALSHI_PRIVATE_KEY_PATH:-}" ]; then
+                key_path="/tmp/alphadb-kalshi-private-key.pem"
+                umask 077
+                python3 - "$key_path" <<'PY'
+              import os
+              import pathlib
+              import sys
+
+              path = pathlib.Path(sys.argv[1])
+              path.write_text(os.environ["KALSHI_PRIVATE_KEY_PEM"].replace("\\n", "\n"), encoding="utf-8")
+              path.chmod(0o600)
+              PY
+                export KALSHI_PRIVATE_KEY_PATH="$key_path"
+              fi
+              exec alphadb-dashboard --host 0.0.0.0 --port "${ALPHADB_DASHBOARD_PORT:-8501}"
           PortMappings:
             - ContainerPort: !Ref AlphaDbApiPort
               Protocol: tcp
@@ -323,6 +353,10 @@ Resources:
               ValueFrom: !Ref CockpitPinSecretArn
             - Name: ALPHADB_DASHBOARD_COOKIE_SECRET
               ValueFrom: !Ref CockpitCookieSecretArn
+            - Name: KALSHI_API_KEY_ID
+              ValueFrom: !Ref KalshiApiKeyIdSecretArn
+            - Name: KALSHI_PRIVATE_KEY_PEM
+              ValueFrom: !Ref KalshiPrivateKeyPemSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:

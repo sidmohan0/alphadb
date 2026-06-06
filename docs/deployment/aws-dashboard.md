@@ -40,7 +40,15 @@ PRIVATE_SUBNET_IDS=<private-subnet-a>,<private-subnet-b>
 DATABASE_URL_SECRET_ARN=<secret arn containing DATABASE_URL>
 COCKPIT_PIN_SECRET_ARN=<secret arn containing four-digit PIN>
 COCKPIT_COOKIE_SECRET_ARN=<secret arn containing random cookie secret>
+KALSHI_API_KEY_ID_SECRET_ARN=<secret arn containing KALSHI_API_KEY_ID>
+KALSHI_PRIVATE_KEY_PEM_SECRET_ARN=<secret arn containing Kalshi private key PEM>
 ```
+
+The AlphaDB API task receives the Kalshi private key as an ECS-injected PEM
+environment secret. Its task command materializes that PEM into a restrictive
+task-local `/tmp/alphadb-kalshi-private-key.pem` file and exports
+`KALSHI_PRIVATE_KEY_PATH` before starting `alphadb-dashboard`, so the Cockpit
+portfolio balance path can use the existing AlphaDB API image.
 
 Optional MVP knobs:
 
@@ -59,6 +67,17 @@ SKIP_SMOKE=1
 `ASSIGN_PUBLIC_IP=ENABLED` is only for smoke deployments in public subnets
 without NAT. The preferred shape is private task subnets with managed egress.
 
+To deploy only task-definition or parameter changes while reusing known-good
+images, set the existing image tags and skip build/push:
+
+```bash
+COCKPIT_IMAGE_TAG=<existing-cockpit-image-tag> \
+ALPHADB_API_IMAGE_TAG=<existing-api-image-tag> \
+SKIP_BUILD=1 \
+SKIP_PUSH=1 \
+deploy/aws/deploy-cockpit-stack.sh
+```
+
 ## Deploy
 
 Run one command from the repository root:
@@ -72,6 +91,8 @@ PRIVATE_SUBNET_IDS=<private-subnet-a>,<private-subnet-b> \
 DATABASE_URL_SECRET_ARN=<database-url-secret-arn> \
 COCKPIT_PIN_SECRET_ARN=<cockpit-pin-secret-arn> \
 COCKPIT_COOKIE_SECRET_ARN=<cockpit-cookie-secret-arn> \
+KALSHI_API_KEY_ID_SECRET_ARN=<kalshi-api-key-id-secret-arn> \
+KALSHI_PRIVATE_KEY_PEM_SECRET_ARN=<kalshi-private-key-pem-secret-arn> \
 deploy/aws/deploy-cockpit-stack.sh
 ```
 
@@ -96,6 +117,8 @@ PRIVATE_SUBNET_IDS=subnet-private-a,subnet-private-b \
 DATABASE_URL_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:database \
 COCKPIT_PIN_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:pin \
 COCKPIT_COOKIE_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:cookie \
+KALSHI_API_KEY_ID_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:kalshi-api-key-id \
+KALSHI_PRIVATE_KEY_PEM_SECRET_ARN=arn:aws:secretsmanager:us-east-2:123456789012:secret:kalshi-private-key-pem \
 deploy/aws/deploy-cockpit-stack.sh
 ```
 
@@ -129,6 +152,10 @@ The smoke verifies:
 - The signed cookie can open the Cockpit.
 - The signed cookie reaches proxied `/api/alphadb/health`.
 - The proxied Python health response reports Postgres as `ok`.
+- The signed cookie reaches proxied `/api/alphadb/live` and confirms the
+  portfolio path no longer reports missing Kalshi credentials. The smoke output
+  prints only redacted status/detail and does not log cash, assets, or portfolio
+  balance values.
 
 The API one-off `alphadb-deploy smoke` verifies migrations, runtime config, and
 that live order submission remains fail-closed.

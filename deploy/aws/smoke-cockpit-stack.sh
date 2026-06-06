@@ -110,4 +110,8 @@ if components.get("postgres") != "ok":
     raise SystemExit("proxied health did not report postgres ok")
 PY
 
+echo "smoke: signed cookie verifies portfolio credentials without logging balances"
+curl -fsS -b "$COOKIE_JAR" "$COCKPIT_URL/api/alphadb/live" -o "$BODY"
+python3 scripts/validate-cockpit-portfolio-smoke.py "$BODY"
+
 echo "smoke: ok"
