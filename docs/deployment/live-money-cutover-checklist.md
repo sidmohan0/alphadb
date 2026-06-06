@@ -313,7 +313,10 @@ worker projection, not the dashboard web process guard.
   `FREQ=HOURLY;BYMINUTE=2,17,32,47`. The report prompt requires
   `live_reconciliation_report.json` reconciled figures: settlement status,
   settled/unsettled counts, filled contracts, gross cost, fees, payout, net PnL,
-  unsettled exposure, and per-order/market reconciliation rows.
+  unsettled exposure, and per-order/market reconciliation rows. The scheduled
+  report entrypoint is the repo-owned `alphadb-fair-value-live-report` command,
+  which accepts explicit `--start` and `--end` interval timestamps and reports
+  AWS auth, DNS, endpoint, and per-surface read failures separately.
 
 ## ALP-162 Rollback Commands
 
