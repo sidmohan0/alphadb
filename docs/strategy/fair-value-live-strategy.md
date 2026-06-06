@@ -51,9 +51,11 @@ yes_edge = p_yes - yes_ask - taker_fee(yes_ask)
 no_edge = (1 - p_yes) - no_ask - taker_fee(no_ask)
 ```
 
-The strategy picks whichever side has larger edge. If the best edge is below
-`min_edge`, it skips. In AWS live operation, `min_edge` comes from the active
-dashboard-owned Postgres runtime config.
+The strategy picks the side with the larger edge. If the selected contract price
+is below `min_contract_price`, it skips with `price_below_min_contract`; if the
+selected edge is below `min_edge`, it skips with `edge_below_min`. In AWS live
+operation, both values come from the active dashboard-owned Postgres runtime
+config.
 
 Order sizing is configured by the dashboard-owned runtime config and recorded in
 each run manifest with config id, version, and full non-secret snapshot. The
@@ -63,6 +65,7 @@ seeded canary defaults are:
 - Max exposure per market: `$5`.
 - Max daily loss/exposure: `$50`.
 - Min edge: `0.0`.
+- Min contract price: `$0.25`.
 - Max markets: `20`.
 - Execution style: taker-only IOC.
 - No-fill attempts do not consume per-market exposure.
@@ -82,19 +85,23 @@ flowchart TD
     D --> E["Build decision row: asks, threshold, time left, volatility, momentum"]
     E --> F["Compute p_yes with threshold/volatility fair-value model"]
     F --> G["Compute YES edge and NO edge after taker fees"]
-    G --> H{"Best edge >= min_edge?"}
-    H -- "No" --> I["Skip: edge_below_min"]
-    H -- "Yes" --> J{"Caps allow order?"}
-    J -- "No" --> K["Skip: loss cap or market exposure cap"]
-    J -- "Yes" --> L["Submit taker IOC live order"]
-    L --> M{"Filled?"}
-    M -- "No" --> N["No fill; exposure unchanged; retry allowed next minute"]
-    M -- "Yes/partial" --> O["Record fill, cost, fees, exposure"]
-    N --> P["Write S3 report and Postgres live status"]
-    O --> P
-    I --> P
-    K --> P
-    P --> Q["Next minute repeats"]
+    G --> H["Pick side with larger edge"]
+    H --> I{"Selected price >= min_contract_price?"}
+    I -- "No" --> J["Skip: price_below_min_contract"]
+    I -- "Yes" --> K{"Selected edge >= min_edge?"}
+    K -- "No" --> L["Skip: edge_below_min"]
+    K -- "Yes" --> M{"Caps allow order?"}
+    M -- "No" --> N["Skip: loss cap or market exposure cap"]
+    M -- "Yes" --> O["Submit taker IOC live order"]
+    O --> P{"Filled?"}
+    P -- "No" --> Q["No fill; exposure unchanged; retry allowed next minute"]
+    P -- "Yes/partial" --> R["Record fill, cost, fees, exposure"]
+    Q --> S["Write S3 report and Postgres live status"]
+    R --> S
+    J --> S
+    L --> S
+    N --> S
+    S --> T["Next minute repeats"]
 ```
 
 ## What Replay Means Here

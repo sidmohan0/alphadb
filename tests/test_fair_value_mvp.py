@@ -164,6 +164,43 @@ def test_fair_value_replay_covers_missing_quote_edge_and_order_cap() -> None:
     assert report["orders"][0]["cost_dollars"] <= 1.0
 
 
+def test_fair_value_replay_applies_explicit_min_contract_price_floor() -> None:
+    report = build_fair_value_replay_report(
+        [
+            {
+                "ticker": "KXBTC15M-FV-CHEAP",
+                "decision_timestamp": "2026-06-04T15:00:00Z",
+                "p_yes": 0.9,
+                "yes_ask": 0.20,
+                "no_ask": 0.24,
+                "result": "yes",
+            },
+            {
+                "ticker": "KXBTC15M-FV-AT-FLOOR",
+                "decision_timestamp": "2026-06-04T15:01:00Z",
+                "p_yes": 0.9,
+                "yes_ask": 0.25,
+                "no_ask": 0.75,
+                "result": "yes",
+            },
+        ],
+        config=FairValueReplayConfig(
+            min_edge=0.0,
+            min_contract_price=0.25,
+            max_order_dollars=1.0,
+            max_loss_dollars=50,
+        ),
+    )
+
+    skip_reasons = {reason for reason, _count in report["skips"]}
+    assert "price_below_min_contract" in skip_reasons
+    assert report["counts"]["orders"] == 1
+    assert report["orders"][0]["ticker"] == "KXBTC15M-FV-AT-FLOOR"
+    assert report["orders"][0]["price"] == 0.25
+    assert report["config"]["min_edge"] == 0.0
+    assert report["config"]["min_contract_price"] == 0.25
+
+
 def test_fair_value_walk_forward_reports_insufficient_data_as_zero_windows() -> None:
     report = build_fair_value_walk_forward_report(
         [
@@ -911,6 +948,7 @@ def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
             max_daily_loss_dollars=50.0,
             min_edge=0.0,
             max_markets=1,
+            min_contract_price=0.25,
         )
     )
     try:
@@ -939,9 +977,12 @@ def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
         assert float(client.requests[0]["count"]) == 1.0
         assert manifest["config"]["max_order_dollars"] == 0.5
         assert manifest["config"]["max_markets"] == 1
+        assert manifest["config"]["min_contract_price"] == 0.25
         assert manifest["runtime_config"]["source"] == "dashboard_postgres"
         assert manifest["runtime_config"]["snapshot"]["max_market_exposure_dollars"] == 5.0
+        assert manifest["runtime_config"]["snapshot"]["min_contract_price"] == 0.25
         assert manifest["runtime_controls"]["max_order_dollars"] == 0.5
+        assert manifest["runtime_controls"]["min_contract_price"] == 0.25
     finally:
         repository.save_config(DEFAULT_FAIR_VALUE_LIVE_CONFIG)
 

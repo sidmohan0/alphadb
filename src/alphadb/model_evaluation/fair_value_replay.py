@@ -21,6 +21,7 @@ FAIR_VALUE_WALK_FORWARD_SCHEMA = "kxbtc_fair_value_walk_forward_report.v1"
 class FairValueReplayConfig:
     probability_column: str = "p_yes"
     min_edge: float = 0.0
+    min_contract_price: float = 0.0
     max_order_dollars: float = 5.0
     max_loss_dollars: float = 50.0
     taker_fee_multiplier: float = 0.07
@@ -30,6 +31,7 @@ class FairValueReplayConfig:
         return {
             "probability_column": self.probability_column,
             "min_edge": self.min_edge,
+            "min_contract_price": self.min_contract_price,
             "max_order_dollars": self.max_order_dollars,
             "max_loss_dollars": self.max_loss_dollars,
             "taker_fee_multiplier": self.taker_fee_multiplier,
@@ -106,7 +108,9 @@ def build_fair_value_replay_report(
             "settled_trades": len(settled_trades),
             "unsettled_trades": len(unsettled_trades),
             "skipped": len([decision for decision in decisions if decision["decision"] != "trade"]),
-            "tickers": len({str(row.get("ticker") or row.get("market_ticker")) for row in normalized}),
+            "tickers": len(
+                {str(row.get("ticker") or row.get("market_ticker")) for row in normalized}
+            ),
         },
         "pnl": pnl,
         "settlement": {
@@ -120,7 +124,10 @@ def build_fair_value_replay_report(
         "controls": {
             "max_order_dollars": config.max_order_dollars,
             "max_loss_dollars": config.max_loss_dollars,
-            "loss_cap_reached": any(decision["reason"] == "loss_cap_reached" for decision in decisions),
+            "min_contract_price": config.min_contract_price,
+            "loss_cap_reached": any(
+                decision["reason"] == "loss_cap_reached" for decision in decisions
+            ),
         },
         "skips": skipped_reasons.most_common(),
         "breakdowns": {
@@ -140,6 +147,7 @@ def build_fair_value_walk_forward_report(
     holdout_market_count: int,
     step_market_count: int | None = None,
     min_edge_values: Sequence[float] = (0.0,),
+    min_contract_price: float = 0.0,
     max_order_dollars: float = 5.0,
     max_loss_dollars: float = 50.0,
     probability_column: str = "p_yes",
@@ -155,7 +163,9 @@ def build_fair_value_walk_forward_report(
         selection_markets = tuple(ordered_markets[start : start + selection_market_count])
         holdout_markets = tuple(
             ordered_markets[
-                start + selection_market_count : start + selection_market_count + holdout_market_count
+                start + selection_market_count : start
+                + selection_market_count
+                + holdout_market_count
             ]
         )
         selection_rows = rows_for_markets(rows, selection_markets)
@@ -165,11 +175,14 @@ def build_fair_value_walk_forward_report(
             candidate_config = FairValueReplayConfig(
                 probability_column=probability_column,
                 min_edge=float(edge),
+                min_contract_price=min_contract_price,
                 max_order_dollars=max_order_dollars,
                 max_loss_dollars=max_loss_dollars,
                 taker_fee_multiplier=taker_fee_multiplier,
             )
-            candidate_report = build_fair_value_replay_report(selection_rows, config=candidate_config)
+            candidate_report = build_fair_value_replay_report(
+                selection_rows, config=candidate_config
+            )
             candidates.append(
                 {
                     "min_edge": float(edge),
@@ -182,6 +195,7 @@ def build_fair_value_walk_forward_report(
         selected_config = FairValueReplayConfig(
             probability_column=probability_column,
             min_edge=float(selected["min_edge"]),
+            min_contract_price=min_contract_price,
             max_order_dollars=max_order_dollars,
             max_loss_dollars=max_loss_dollars,
             taker_fee_multiplier=taker_fee_multiplier,
@@ -231,6 +245,7 @@ def build_fair_value_walk_forward_report(
             "holdout_market_count": holdout_market_count,
             "step_market_count": step,
             "min_edge_values": [float(value) for value in min_edge_values],
+            "min_contract_price": min_contract_price,
             "max_order_dollars": max_order_dollars,
             "max_loss_dollars": max_loss_dollars,
             "probability_column": probability_column,
@@ -271,9 +286,13 @@ def decide_trade(
         return {**base, "decision": "skip", "reason": "missing_executable_price"}
     if not 0.0 <= p_yes <= 1.0:
         return {**base, "decision": "skip", "reason": "invalid_fair_value"}
+    if not 0.0 <= config.min_contract_price <= 1.0:
+        raise ValueError("min_contract_price must be between 0 and 1")
     yes = side_ev("yes", p_yes, yes_ask, config.taker_fee_multiplier)
     no = side_ev("no", p_yes, no_ask, config.taker_fee_multiplier)
     choice = yes if yes["edge"] >= no["edge"] else no
+    if float(choice["price"]) < config.min_contract_price:
+        return {**base, "decision": "skip", "reason": "price_below_min_contract", **choice}
     if float(choice["edge"]) < config.min_edge:
         return {**base, "decision": "skip", "reason": "edge_below_min", **choice}
     remaining_loss = max(0.0, config.max_loss_dollars + min(0.0, cumulative_pnl))
@@ -300,7 +319,9 @@ def decide_trade(
         "decision": "trade",
         "reason": "edge_met",
         "order_type": "simulated_taker_ioc",
-        "order_status": "filled" if filled_contracts == intended_contracts else "partial_or_unfilled",
+        "order_status": "filled"
+        if filled_contracts == intended_contracts
+        else "partial_or_unfilled",
         "fill_status": fill_status(filled_contracts, intended_contracts),
         "settlement_status": "settled" if settled else "unsettled",
         "result": result,
@@ -377,7 +398,9 @@ def result_side(row: Mapping[str, Any]) -> str | None:
 
 
 def replay_sort_key(row: Mapping[str, Any]) -> tuple[str, str]:
-    timestamp = row.get("decision_timestamp") or row.get("timestamp") or row.get("market_open_time") or ""
+    timestamp = (
+        row.get("decision_timestamp") or row.get("timestamp") or row.get("market_open_time") or ""
+    )
     return str(timestamp), str(row.get("ticker") or row.get("market_ticker") or "")
 
 
@@ -389,7 +412,9 @@ def summarize_group(trades: Sequence[Mapping[str, Any]], key: str) -> list[dict[
             {
                 key: value,
                 "trades": len(group),
-                "settled_trades": sum(1 for trade in group if trade["settlement_status"] == "settled"),
+                "settled_trades": sum(
+                    1 for trade in group if trade["settlement_status"] == "settled"
+                ),
                 "unsettled_trades": sum(
                     1 for trade in group if trade["settlement_status"] != "settled"
                 ),
@@ -440,7 +465,9 @@ def rows_for_markets(
     market_tickers: Sequence[str],
 ) -> list[dict[str, Any]]:
     tickers = set(market_tickers)
-    return [dict(row) for row in rows if str(row.get("ticker") or row.get("market_ticker")) in tickers]
+    return [
+        dict(row) for row in rows if str(row.get("ticker") or row.get("market_ticker")) in tickers
+    ]
 
 
 def select_walk_forward_candidate(candidates: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:

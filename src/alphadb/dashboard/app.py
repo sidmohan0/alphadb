@@ -45,7 +45,9 @@ class DashboardService:
     config_repository_factory: ConfigRepositoryFactory = LiveRuntimeConfigRepository
     status_repository_factory: StatusRepositoryFactory = LiveRunStatusRepository
     strategy_repository_factory: StrategyRepositoryFactory = DashboardStrategyRepository
-    data_explorer_repository_factory: DataExplorerRepositoryFactory = DashboardDataExplorerRepository
+    data_explorer_repository_factory: DataExplorerRepositoryFactory = (
+        DashboardDataExplorerRepository
+    )
     lab_repository_factory: LabRepositoryFactory = DashboardLabRepository
     health_collector: HealthCollector = collect_health
 
@@ -114,7 +116,10 @@ class DashboardService:
         return result
 
     def list_strategies(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        return [strategy.as_dict() for strategy in self._strategy_repository().list_strategies(limit=limit)]
+        return [
+            strategy.as_dict()
+            for strategy in self._strategy_repository().list_strategies(limit=limit)
+        ]
 
     def get_strategy(self, strategy_id: str) -> dict[str, Any]:
         return self._strategy_repository().get_strategy(strategy_id).as_dict()
@@ -389,7 +394,9 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                 return
             if path == "/api/live":
                 if not self._authenticated():
-                    self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                    self._json(
+                        {"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED
+                    )
                     return
                 self._json(service.live_payload())
                 return
@@ -415,7 +422,9 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                 return
             if path == "/api/live/config":
                 if not self._authenticated():
-                    self._json({"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED)
+                    self._json(
+                        {"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED
+                    )
                     return
                 try:
                     payload = json.loads(self._body().decode("utf-8"))
@@ -493,7 +502,11 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                     return
                 if path == "/api/strategies":
                     self._json_ok(
-                        {"strategies": service.list_strategies(limit=_query_int(query, "limit", 50))}
+                        {
+                            "strategies": service.list_strategies(
+                                limit=_query_int(query, "limit", 50)
+                            )
+                        }
                     )
                     return
                 if path.startswith("/api/strategies/"):
@@ -520,9 +533,7 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                         return
                 if path == "/api/lab/entries":
                     self._json_ok(
-                        {
-                            "entries": service.list_lab_entries(limit=_query_int(query, "limit", 50))
-                        }
+                        {"entries": service.list_lab_entries(limit=_query_int(query, "limit", 50))}
                     )
                     return
                 if path.startswith("/api/lab/entries/"):
@@ -725,7 +736,9 @@ button, input { font: inherit; }
 """
 
 
-DASHBOARD_CSS = BASE_CSS + """
+DASHBOARD_CSS = (
+    BASE_CSS
+    + """
 .shell {
   display: grid;
   grid-template-columns: 212px minmax(0, 1fr);
@@ -867,6 +880,7 @@ th { color: var(--muted); font-weight: 700; }
   .form-grid { grid-template-columns: 1fr; }
 }
 """
+)
 
 
 DASHBOARD_HTML = f"""<!doctype html>
@@ -912,6 +926,7 @@ DASHBOARD_HTML = f"""<!doctype html>
                 <div class="field"><label for="max_market_exposure_dollars">Max market exposure dollars</label><input id="max_market_exposure_dollars" name="max_market_exposure_dollars" type="number" min="0.01" step="0.01"><div class="error" data-error-for="max_market_exposure_dollars"></div></div>
                 <div class="field"><label for="max_daily_loss_dollars">Max daily loss dollars</label><input id="max_daily_loss_dollars" name="max_daily_loss_dollars" type="number" min="0.01" step="0.01"><div class="error" data-error-for="max_daily_loss_dollars"></div></div>
                 <div class="field"><label for="min_edge">Min edge</label><input id="min_edge" name="min_edge" type="number" min="0" max="1" step="0.0001"><div class="error" data-error-for="min_edge"></div></div>
+                <div class="field"><label for="min_contract_price">Min contract price</label><input id="min_contract_price" name="min_contract_price" type="number" min="0" max="1" step="0.01"><div class="error" data-error-for="min_contract_price"></div></div>
                 <div class="field"><label for="max_markets">Max markets</label><input id="max_markets" name="max_markets" type="number" min="1" max="500" step="1"><div class="error" data-error-for="max_markets"></div></div>
               </div>
               <div class="save-row"><button class="save-button" type="submit">Save</button><span class="save-state" id="save-state"></span></div>
@@ -925,14 +940,14 @@ DASHBOARD_HTML = f"""<!doctype html>
           </section>
           <section class="panel">
             <h2>Config History</h2>
-            <table><thead><tr><th>Version</th><th>Order</th><th>Exposure</th><th>Daily</th><th>Saved</th></tr></thead><tbody id="history-body"></tbody></table>
+            <table><thead><tr><th>Version</th><th>Order</th><th>Exposure</th><th>Daily</th><th>Min price</th><th>Saved</th></tr></thead><tbody id="history-body"></tbody></table>
           </section>
         </div>
       </section>
     </main>
   </div>
   <script>
-const fields = ["max_order_dollars","max_market_exposure_dollars","max_daily_loss_dollars","min_edge","max_markets"];
+const fields = ["max_order_dollars","max_market_exposure_dollars","max_daily_loss_dollars","min_edge","min_contract_price","max_markets"];
 function text(id, value) {{ document.getElementById(id).textContent = value ?? "--"; }}
 function cls(id, name) {{ document.getElementById(id).className = name; }}
 function money(value) {{ const n = Number(value || 0); return "$" + n.toFixed(2); }}
@@ -955,6 +970,7 @@ function validate(payload) {{
     if (!Number.isFinite(payload[key]) || payload[key] <= 0) errors[key] = "Must be positive.";
   }});
   if (!Number.isFinite(payload.min_edge) || payload.min_edge < 0 || payload.min_edge > 1) errors.min_edge = "Use 0 through 1.";
+  if (!Number.isFinite(payload.min_contract_price) || payload.min_contract_price < 0 || payload.min_contract_price > 1) errors.min_contract_price = "Use 0 through 1.";
   if (!Number.isInteger(payload.max_markets) || payload.max_markets < 1 || payload.max_markets > 500) errors.max_markets = "Use 1 through 500.";
   return errors;
 }}
@@ -984,7 +1000,7 @@ function render(data) {{
   const attempts = status.recent_attempts || [];
   document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => `<tr><td>${{shortTime(row.submitted_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || ""}}</td><td>${{row.fill_status || ""}}</td></tr>`).join("") : "<tr><td colspan='5'>No recent attempts</td></tr>";
   const history = data.config_history || [];
-  document.getElementById("history-body").innerHTML = history.map(row => `<tr><td>${{row.version}}</td><td>${{money(row.max_order_dollars)}}</td><td>${{money(row.max_market_exposure_dollars)}}</td><td>${{money(row.max_daily_loss_dollars)}}</td><td>${{shortTime(row.created_at)}}</td></tr>`).join("");
+  document.getElementById("history-body").innerHTML = history.map(row => `<tr><td>${{row.version}}</td><td>${{money(row.max_order_dollars)}}</td><td>${{money(row.max_market_exposure_dollars)}}</td><td>${{money(row.max_daily_loss_dollars)}}</td><td>${{money(row.min_contract_price)}}</td><td>${{shortTime(row.created_at)}}</td></tr>`).join("");
 }}
 document.getElementById("config-form").addEventListener("submit", async event => {{
   event.preventDefault();

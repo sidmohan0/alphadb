@@ -103,7 +103,9 @@ def test_smoke_report_requires_dashboard_auth_for_aws_environment() -> None:
 
     assert report["ok"] is False
     assert report["dashboard_auth"]["required"] is True
-    assert report["dashboard_auth"]["detail"] == "dashboard auth is required for AWS-like environments"
+    assert (
+        report["dashboard_auth"]["detail"] == "dashboard auth is required for AWS-like environments"
+    )
 
 
 def test_smoke_report_accepts_aws_environment_with_pin_auth() -> None:
@@ -229,8 +231,8 @@ def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secr
     assert 'ALPHADB_API_IMAGE_TAG="${ALPHADB_API_IMAGE_TAG:-api-' in deploy_script
     assert "-f apps/dashboard/Dockerfile" in deploy_script
     assert "apps/dashboard" in deploy_script
-    assert "CockpitContainerImage=\"$COCKPIT_IMAGE_URI\"" in deploy_script
-    assert "AlphaDbApiContainerImage=\"$ALPHADB_API_IMAGE_URI\"" in deploy_script
+    assert 'CockpitContainerImage="$COCKPIT_IMAGE_URI"' in deploy_script
+    assert 'AlphaDbApiContainerImage="$ALPHADB_API_IMAGE_URI"' in deploy_script
     assert "require_env DATABASE_URL_SECRET_ARN" in deploy_script
     assert "require_env COCKPIT_PIN_SECRET_ARN" in deploy_script
     assert "require_env COCKPIT_COOKIE_SECRET_ARN" in deploy_script
@@ -274,6 +276,9 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "DATABASE_URL" in template
     assert "--runtime-config-source" in template
     assert "postgres" in template
+    assert "MinContractPrice" in template
+    assert "--min-contract-price" in template
+    assert 'MinContractPrice="${MIN_CONTRACT_PRICE:-0.25}"' in deploy_script
     assert "MaxOrderDollars" not in template
     assert "MaxTickerExposureDollars" not in template
     assert "--max-ticker-exposure-dollars" not in template
@@ -300,6 +305,7 @@ def test_runtime_config_status_reports_readable_active_config(monkeypatch) -> No
                     "max_market_exposure_dollars": 5.0,
                     "max_daily_loss_dollars": 50.0,
                     "min_edge": 0.0,
+                    "min_contract_price": 0.25,
                     "max_markets": 20,
                 }
 

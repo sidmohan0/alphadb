@@ -46,6 +46,9 @@ Parameters:
   MinEdgeValues:
     Type: String
     Default: "0.0,0.05,0.10"
+  MinContractPrice:
+    Type: String
+    Default: "0.25"
   KalshiApiKeyIdSecretArn:
     Type: String
     Description: Secrets Manager ARN whose value is KALSHI_API_KEY_ID.
@@ -163,6 +166,8 @@ Resources:
             - !Sub s3://${ReportBucketName}/${ReportPrefix}
             - --min-edge-values
             - !Ref MinEdgeValues
+            - --min-contract-price
+            - !Ref MinContractPrice
             - --runtime-config-source
             - postgres
             - --submit-live-orders

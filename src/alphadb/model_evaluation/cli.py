@@ -185,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     fair.add_argument("--rows", required=True)
     fair.add_argument("--probability-column", default="p_yes")
     fair.add_argument("--min-edge", type=float, default=0.0)
+    fair.add_argument("--min-contract-price", type=float, default=0.0)
     fair.add_argument("--max-order-dollars", type=float, default=5.0)
     fair.add_argument("--max-loss-dollars", type=float, default=50.0)
     fair.add_argument("--taker-fee-multiplier", type=float, default=0.07)
@@ -199,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     fair_walk.add_argument("--holdout-market-count", type=int, required=True)
     fair_walk.add_argument("--step-market-count", type=int, default=None)
     fair_walk.add_argument("--min-edge-values", default="0.0")
+    fair_walk.add_argument("--min-contract-price", type=float, default=0.0)
     fair_walk.add_argument("--probability-column", default="p_yes")
     fair_walk.add_argument("--max-order-dollars", type=float, default=5.0)
     fair_walk.add_argument("--max-loss-dollars", type=float, default=50.0)
@@ -242,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fair_live.add_argument("--max-markets", type=int, default=20)
     fair_live.add_argument("--min-edge", type=float, default=0.0)
+    fair_live.add_argument("--min-contract-price", type=float, default=0.25)
     fair_live.add_argument("--min-edge-values", default="0.0,0.05,0.10")
     fair_live.add_argument("--max-order-dollars", type=float, default=None)
     fair_live.add_argument("--max-ticker-exposure-dollars", type=float, default=None)
@@ -320,9 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "edge-verdict":
         edge_walk_report = load_json(Path(args.edge_walk_forward_report))
         pruning_report = (
-            load_json(Path(args.feature_pruning_report))
-            if args.feature_pruning_report
-            else None
+            load_json(Path(args.feature_pruning_report)) if args.feature_pruning_report else None
         )
         payload = build_edge_verdict_report(
             edge_walk_report.get("aggregate", edge_walk_report),
@@ -374,6 +375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=FairValueReplayConfig(
                 probability_column=args.probability_column,
                 min_edge=args.min_edge,
+                min_contract_price=args.min_contract_price,
                 max_order_dollars=args.max_order_dollars,
                 max_loss_dollars=args.max_loss_dollars,
                 taker_fee_multiplier=args.taker_fee_multiplier,
@@ -386,6 +388,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             holdout_market_count=args.holdout_market_count,
             step_market_count=args.step_market_count,
             min_edge_values=parse_min_edge_values(args.min_edge_values),
+            min_contract_price=args.min_contract_price,
             max_order_dollars=args.max_order_dollars,
             max_loss_dollars=args.max_loss_dollars,
             probability_column=args.probability_column,
@@ -402,17 +405,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.command == "fair-value-collect-live-rows":
         settings = settings_from_env()
-        payload = FairValueDecisionRowCollector(
-            kalshi_client=make_kalshi_client(args.source, settings),
-            coinbase_client=make_coinbase_client(args.coinbase_source),
-            settings=settings,
-            config=FairValueDecisionRowCollectorConfig(
-                max_markets=args.max_markets,
-                run_id=args.run_id,
-                source_mode=args.source,
-                coinbase_source_mode=args.coinbase_source,
-            ),
-        ).collect().as_dict()
+        payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=make_kalshi_client(args.source, settings),
+                coinbase_client=make_coinbase_client(args.coinbase_source),
+                settings=settings,
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=args.max_markets,
+                    run_id=args.run_id,
+                    source_mode=args.source,
+                    coinbase_source_mode=args.coinbase_source,
+                ),
+            )
+            .collect()
+            .as_dict()
+        )
     elif args.command == "fair-value-live-trading-job":
         settings = settings_from_env()
         payload = FairValueLiveTradingJob(
@@ -422,6 +429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 coinbase_source=args.coinbase_source,
                 max_markets=args.max_markets,
                 min_edge=args.min_edge,
+                min_contract_price=args.min_contract_price,
                 min_edge_values=parse_live_job_min_edge_values(args.min_edge_values),
                 max_order_dollars=args.max_order_dollars
                 if args.max_order_dollars is not None

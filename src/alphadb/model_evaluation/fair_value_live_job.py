@@ -59,6 +59,7 @@ class FairValueLiveTradingJobConfig:
     coinbase_source: str = "fixture"
     max_markets: int = 20
     min_edge: float = 0.0
+    min_contract_price: float = 0.25
     min_edge_values: tuple[float, ...] = (0.0, 0.05, 0.10)
     max_order_dollars: float = 5.0
     max_ticker_exposure_dollars: float = 5.0
@@ -78,6 +79,7 @@ class FairValueLiveTradingJobConfig:
             "coinbase_source": self.coinbase_source,
             "max_markets": self.max_markets,
             "min_edge": self.min_edge,
+            "min_contract_price": self.min_contract_price,
             "min_edge_values": list(self.min_edge_values),
             "max_order_dollars": self.max_order_dollars,
             "max_ticker_exposure_dollars": self.max_ticker_exposure_dollars,
@@ -135,6 +137,7 @@ class FairValueLiveTradingJob:
             rows,
             config=FairValueReplayConfig(
                 min_edge=self.config.min_edge,
+                min_contract_price=self.config.min_contract_price,
                 max_order_dollars=self.config.max_order_dollars,
                 max_loss_dollars=self.config.max_daily_loss_dollars,
             ),
@@ -145,6 +148,7 @@ class FairValueLiveTradingJob:
             holdout_market_count=self.config.holdout_market_count,
             step_market_count=self.config.step_market_count,
             min_edge_values=self.config.min_edge_values,
+            min_contract_price=self.config.min_contract_price,
             max_order_dollars=self.config.max_order_dollars,
             max_loss_dollars=self.config.max_daily_loss_dollars,
         )
@@ -240,6 +244,7 @@ class FairValueLiveTradingJob:
                     "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
                     "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
                     "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
+                    "min_contract_price": self.config.min_contract_price,
                     "admission_daily_loss_accounting": admission_daily_loss_accounting,
                     "daily_loss_accounting": daily_loss_accounting,
                     "runtime_guard": guard.as_dict(),
@@ -1240,6 +1245,7 @@ def resolve_live_runtime_config(
                 "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": config.max_daily_loss_dollars,
                 "min_edge": config.min_edge,
+                "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
             },
         }
@@ -1253,6 +1259,7 @@ def resolve_live_runtime_config(
                 "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": config.max_daily_loss_dollars,
                 "min_edge": config.min_edge,
+                "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
             },
         }
@@ -1271,6 +1278,7 @@ def resolve_live_runtime_config(
                 "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": config.max_daily_loss_dollars,
                 "min_edge": config.min_edge,
+                "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
             },
         }
@@ -1279,6 +1287,7 @@ def resolve_live_runtime_config(
         config,
         max_markets=dashboard_config.max_markets,
         min_edge=dashboard_config.min_edge,
+        min_contract_price=dashboard_config.min_contract_price,
         max_order_dollars=dashboard_config.max_order_dollars,
         max_ticker_exposure_dollars=dashboard_config.max_market_exposure_dollars,
         max_daily_loss_dollars=dashboard_config.max_daily_loss_dollars,

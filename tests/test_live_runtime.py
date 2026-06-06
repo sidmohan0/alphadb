@@ -45,6 +45,7 @@ def test_runtime_config_repository_seeds_reads_saves_and_lists_history() -> None
             max_daily_loss_dollars=12.0,
             min_edge=0.05,
             max_markets=7,
+            min_contract_price=0.25,
         ),
         strategy=strategy,
     )
@@ -56,6 +57,7 @@ def test_runtime_config_repository_seeds_reads_saves_and_lists_history() -> None
     assert active.config_id == seeded.config_id
     assert saved.version == 2
     assert saved.config.max_market_exposure_dollars == 3.5
+    assert saved.config.min_contract_price == 0.25
     assert [revision.version for revision in history] == [2, 1]
     assert history[0].is_active is True
     assert history[1].is_active is False
@@ -72,6 +74,8 @@ def test_runtime_config_validation_blocks_malformed_values() -> None:
         ).validate()
     with pytest.raises(ValueError, match="max_markets"):
         LiveRuntimeConfig.from_payload({"max_markets": 0})
+    with pytest.raises(ValueError, match="min_contract_price"):
+        LiveRuntimeConfig.from_payload({"min_contract_price": 1.01})
 
 
 def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() -> None:
@@ -86,6 +90,7 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
                 "max_market_exposure_dollars": 5.0,
                 "max_daily_loss_dollars": 50.0,
                 "min_edge": 0.0,
+                "min_contract_price": 0.25,
                 "max_markets": 20,
             },
         },

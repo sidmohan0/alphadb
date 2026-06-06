@@ -93,10 +93,13 @@ def service(repository: FakeConfigRepository) -> DashboardService:
 def test_dashboard_primary_route_is_live_first_and_not_a_table_dump() -> None:
     assert "Live Operator Console" in DASHBOARD_HTML
     assert "Runtime Config" in DASHBOARD_HTML
+    assert "Min contract price" in DASHBOARD_HTML
     assert "Recent Attempts" in DASHBOARD_HTML
     assert "status.live_orders_enabled" in DASHBOARD_HTML
     assert "live runner active" in DASHBOARD_HTML
-    assert "data.runtime_guard?.can_submit_live_orders ? \"live orders enabled\"" not in DASHBOARD_HTML
+    assert (
+        'data.runtime_guard?.can_submit_live_orders ? "live orders enabled"' not in DASHBOARD_HTML
+    )
     assert "runtime_guard" not in DASHBOARD_HTML
     assert ">Research<" not in DASHBOARD_HTML
     assert ">Registry<" not in DASHBOARD_HTML
@@ -159,6 +162,7 @@ def test_dashboard_service_saves_config_and_reloads_active_values() -> None:
             "max_market_exposure_dollars": 3.5,
             "max_daily_loss_dollars": 12.0,
             "min_edge": 0.05,
+            "min_contract_price": 0.25,
             "max_markets": 7,
         }
     )
@@ -167,6 +171,7 @@ def test_dashboard_service_saves_config_and_reloads_active_values() -> None:
     assert saved["active_config"]["version"] == 2
     assert payload["active_config"]["max_order_dollars"] == 2.25
     assert payload["active_config"]["max_market_exposure_dollars"] == 3.5
+    assert payload["active_config"]["min_contract_price"] == 0.25
     assert [row["version"] for row in payload["config_history"]] == [2, 1]
 
 
@@ -181,6 +186,7 @@ def test_dashboard_service_rejects_invalid_config_without_saving() -> None:
                 "max_market_exposure_dollars": 3.5,
                 "max_daily_loss_dollars": 12.0,
                 "min_edge": 0.05,
+                "min_contract_price": 0.25,
                 "max_markets": 7,
             }
         )

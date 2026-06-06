@@ -169,6 +169,7 @@ export function LiveOperations() {
               <Value label="Version" value={text(config.version)} />
               <Value label="Max order" value={money(config.max_order_dollars)} />
               <Value label="Min edge" value={text(config.min_edge)} />
+              <Value label="Min price" value={money(config.min_contract_price)} />
               <Value label="Max markets" value={text(config.max_markets)} />
             </div>
           </Panel>

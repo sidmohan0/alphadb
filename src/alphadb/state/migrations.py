@@ -414,6 +414,8 @@ LIVE_RUNTIME_CONFIG = Migration(
                 check (max_market_exposure_dollars > 0),
             max_daily_loss_dollars numeric not null check (max_daily_loss_dollars > 0),
             min_edge numeric not null check (min_edge >= 0),
+            min_contract_price numeric not null default 0.25
+                check (min_contract_price >= 0 and min_contract_price <= 1),
             max_markets integer not null check (max_markets >= 1),
             snapshot jsonb not null default '{}'::jsonb,
             created_by text not null default 'dashboard',
@@ -562,6 +564,24 @@ AGENT_FIRST_DASHBOARD = Migration(
 )
 
 
+LIVE_RUNTIME_MIN_CONTRACT_PRICE = Migration(
+    version="0012_live_runtime_min_contract_price",
+    statements=(
+        """
+        alter table live_runtime_configs
+        add column if not exists min_contract_price numeric not null default 0.25
+            check (min_contract_price >= 0 and min_contract_price <= 1)
+        """,
+        """
+        update live_runtime_configs
+        set snapshot = coalesce(snapshot, '{}'::jsonb)
+            || jsonb_build_object('min_contract_price', min_contract_price)
+        where not (coalesce(snapshot, '{}'::jsonb) ? 'min_contract_price')
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -574,4 +594,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     LIVE_RUNTIME_CONFIG,
     LIVE_RUN_STATUS,
     AGENT_FIRST_DASHBOARD,
+    LIVE_RUNTIME_MIN_CONTRACT_PRICE,
 )

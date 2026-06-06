@@ -10,13 +10,16 @@ deployment, live config changes, schedule changes, or order submission.
 - Non-secret fair-value live runtime config comes only from the AlphaDB
   dashboard and its managed Postgres `live_runtime_configs` revisions.
 - The dashboard-owned values are `max_order_dollars`,
-  `max_market_exposure_dollars`, `max_daily_loss_dollars`, `min_edge`, and
-  `max_markets`.
+  `max_market_exposure_dollars`, `max_daily_loss_dollars`, `min_edge`,
+  `min_contract_price`, and `max_markets`.
 - Secrets and infrastructure config stay outside the dashboard: `DATABASE_URL`,
   Kalshi API credentials, private keys, dashboard PIN/cookie secret, VPC,
   subnets, security groups, image tags, IAM roles, log groups, and schedules.
 - CloudFormation parameters, task environment variables, Secrets Manager values,
-  and CLI flags must not set non-secret live runtime knobs for the live worker.
+  and CLI flags must not override dashboard-owned live runtime knobs for the
+  AWS live worker. The task may carry CLI fallback defaults for local/fixture
+  paths, but `--runtime-config-source postgres` makes the dashboard/Postgres
+  revision authoritative in AWS.
 
 ## AWS Assumptions
 
@@ -75,6 +78,7 @@ revision for first cutover:
 | Max market exposure dollars | `5.00` |
 | Max daily loss dollars | `50.00` |
 | Min edge | `0.00` |
+| Min contract price | `0.25` |
 | Max markets | `20` |
 
 If the operator chooses different values, record the exact difference in the
@@ -182,7 +186,8 @@ Evidence captured on 2026-06-04 after explicit operator confirmation:
   `live_cfg_13a290431e09`, version `2`, source `dashboard_postgres`.
 - Active runtime config snapshot:
   `max_order_dollars=5.0`, `max_market_exposure_dollars=5.0`,
-  `max_daily_loss_dollars=50.0`, `min_edge=0.0`, `max_markets=20`.
+  `max_daily_loss_dollars=50.0`, `min_edge=0.0`,
+  `min_contract_price=0.25`, `max_markets=20`.
 - Rollback config revision: `live_cfg_78f1e41076ef`, version `1`.
 - Patched live worker image:
   `766780331843.dkr.ecr.us-east-2.amazonaws.com/alphadb-dashboard:b0c68c6-alp161-skip-20260604230256`.
@@ -264,7 +269,7 @@ worker projection, not the dashboard web process guard.
 - Active dashboard config shown by `/api/live`:
   `live_cfg_13a290431e09`, version `2`, `max_order_dollars=5.0`,
   `max_market_exposure_dollars=5.0`, `max_daily_loss_dollars=50.0`,
-  `min_edge=0.0`, `max_markets=20`.
+  `min_edge=0.0`, `min_contract_price=0.25`, `max_markets=20`.
 - Latest dashboard live status observed:
   `fv_live_20260604T233310Z`, config id `live_cfg_13a290431e09`, config
   version `2`, `live_orders_enabled=true`, market
@@ -320,6 +325,7 @@ the dashboard/API as a new active revision:
   "max_market_exposure_dollars": 5.0,
   "max_daily_loss_dollars": 50.0,
   "min_edge": 0.0,
+  "min_contract_price": 0.25,
   "max_markets": 20
 }
 ```

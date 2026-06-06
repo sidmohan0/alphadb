@@ -27,6 +27,7 @@ class LiveRuntimeConfig:
     max_daily_loss_dollars: float
     min_edge: float
     max_markets: int
+    min_contract_price: float = 0.25
 
     def validate(self) -> "LiveRuntimeConfig":
         if self.max_order_dollars <= 0:
@@ -39,6 +40,10 @@ class LiveRuntimeConfig:
             raise ValueError("min_edge must be non-negative")
         if self.min_edge > 1:
             raise ValueError("min_edge must be no greater than 1")
+        if self.min_contract_price < 0:
+            raise ValueError("min_contract_price must be non-negative")
+        if self.min_contract_price > 1:
+            raise ValueError("min_contract_price must be no greater than 1")
         if self.max_markets < 1:
             raise ValueError("max_markets must be at least 1")
         if self.max_markets > MAX_SCAN_MARKETS:
@@ -51,6 +56,7 @@ class LiveRuntimeConfig:
             "max_market_exposure_dollars": self.max_market_exposure_dollars,
             "max_daily_loss_dollars": self.max_daily_loss_dollars,
             "min_edge": self.min_edge,
+            "min_contract_price": self.min_contract_price,
             "max_markets": self.max_markets,
         }
 
@@ -81,6 +87,11 @@ class LiveRuntimeConfig:
             ),
             min_edge=_float_payload(payload, "min_edge", default=base.min_edge),
             max_markets=_int_payload(payload, "max_markets", default=base.max_markets),
+            min_contract_price=_float_payload(
+                payload,
+                "min_contract_price",
+                default=base.min_contract_price,
+            ),
         )
         return config.validate()
 
@@ -91,6 +102,7 @@ DEFAULT_FAIR_VALUE_LIVE_CONFIG = LiveRuntimeConfig(
     max_daily_loss_dollars=50.0,
     min_edge=0.0,
     max_markets=20,
+    min_contract_price=0.25,
 )
 
 
@@ -264,11 +276,12 @@ class LiveRuntimeConfigRepository:
                 max_market_exposure_dollars,
                 max_daily_loss_dollars,
                 min_edge,
+                min_contract_price,
                 max_markets,
                 snapshot,
                 created_by
             )
-            values (%s, %s, %s, true, %s, %s, %s, %s, %s, %s, %s)
+            values (%s, %s, %s, true, %s, %s, %s, %s, %s, %s, %s, %s)
             returning *
             """,
             (
@@ -279,6 +292,7 @@ class LiveRuntimeConfigRepository:
                 config.max_market_exposure_dollars,
                 config.max_daily_loss_dollars,
                 config.min_edge,
+                config.min_contract_price,
                 config.max_markets,
                 Jsonb(snapshot),
                 created_by,
@@ -464,7 +478,9 @@ class LiveRunStatusRepository:
                     (strategy,),
                 )
                 row = cursor.fetchone()
-        return no_recent_live_run_status(strategy=strategy) if row is None else _status_from_row(row)
+        return (
+            no_recent_live_run_status(strategy=strategy) if row is None else _status_from_row(row)
+        )
 
     def recent_details(
         self,
@@ -551,7 +567,9 @@ def build_fair_value_live_status(
         live_orders_enabled=bool(runtime_controls.get("live_orders_enabled")),
         current_market_ticker=latest_market,
         decision_outcome=decision_outcome,
-        selected_side=latest_side if decision_outcome in {"submitted", "rejected", "error"} else None,
+        selected_side=latest_side
+        if decision_outcome in {"submitted", "rejected", "error"}
+        else None,
         skip_reason=latest_reason if decision_outcome == "skipped" else None,
         latest_attempt_status=latest_status,
         latest_attempt_reason=latest_reason,
@@ -561,7 +579,9 @@ def build_fair_value_live_status(
         market_exposure_used_dollars=market_used,
         market_exposure_limit_dollars=exposure_limit,
         recent_attempt_count=len(attempts),
-        recent_submitted_count=sum(1 for attempt in attempts if attempt.get("status") == "submitted"),
+        recent_submitted_count=sum(
+            1 for attempt in attempts if attempt.get("status") == "submitted"
+        ),
         recent_skipped_count=sum(1 for attempt in attempts if attempt.get("status") == "skipped"),
         recent_no_fill_count=sum(
             1 for row in reconciliation_rows if row.get("settlement_status") == "no_fill"
@@ -629,6 +649,9 @@ def _config_revision_from_row(row: Mapping[str, Any]) -> LiveRuntimeConfigRevisi
             max_daily_loss_dollars=float(row["max_daily_loss_dollars"]),
             min_edge=float(row["min_edge"]),
             max_markets=int(row["max_markets"]),
+            min_contract_price=float(
+                row.get("min_contract_price", DEFAULT_FAIR_VALUE_LIVE_CONFIG.min_contract_price)
+            ),
         ).validate(),
         created_by=str(row["created_by"]),
         created_at=_datetime(row["created_at"]) or datetime.now(UTC),
@@ -691,7 +714,9 @@ def _recent_attempt_rows(
                 "reason": attempt.get("reason"),
                 "side": attempt.get("side"),
                 "fill_status": _fill_status(attempt, reconciliation),
-                "filled_contracts": reconciliation.get("filled_contracts", attempt.get("fill_count")),
+                "filled_contracts": reconciliation.get(
+                    "filled_contracts", attempt.get("fill_count")
+                ),
                 "order_id": attempt.get("order_id"),
             }
         )
