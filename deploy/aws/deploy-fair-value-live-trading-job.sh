@@ -30,6 +30,16 @@ secret_arn() {
 require_command aws
 require_command docker
 require_command git
+require_command python3
+
+if [[ "${SCHEDULE_STATE:-DISABLED}" == "ENABLED" ]]; then
+  if [[ -z "${FAIR_VALUE_LIVE_SMOKE_EVIDENCE:-}" ]]; then
+    echo "Refusing to enable schedule without FAIR_VALUE_LIVE_SMOKE_EVIDENCE." >&2
+    echo "Run one-cycle smoke, write evidence JSON, then retry with that path." >&2
+    exit 1
+  fi
+  python3 scripts/validate-fair-value-live-smoke.py "$FAIR_VALUE_LIVE_SMOKE_EVIDENCE"
+fi
 
 ACCOUNT_ID="$(aws --profile "$PROFILE" sts get-caller-identity --query Account --output text)"
 IMAGE_URI="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPOSITORY:$IMAGE_TAG"

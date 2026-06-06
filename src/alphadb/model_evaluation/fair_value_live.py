@@ -164,6 +164,7 @@ class FairValueDecisionRowCollector:
         yes_ask = quote_price(market, ("yes_ask_dollars", "yes_ask", "yes_price"))
         no_ask = quote_price(market, ("no_ask_dollars", "no_ask", "no_price"))
         threshold = payout_threshold(market)
+        quote_observed_at = parse_kalshi_datetime(market.get("updated_time"), now)
         try:
             orderbook = self.kalshi_client.get_orderbook(market_ticker)
         except Exception as exc:
@@ -174,6 +175,7 @@ class FairValueDecisionRowCollector:
                     **base,
                     "market_open_time": open_time.isoformat(),
                     "close_time": close_time.isoformat(),
+                    "quote_observed_at": quote_observed_at.isoformat(),
                 },
                 "missing_quote",
             )
@@ -185,6 +187,7 @@ class FairValueDecisionRowCollector:
                     "close_time": close_time.isoformat(),
                     "yes_ask": yes_ask,
                     "no_ask": no_ask,
+                    "quote_observed_at": quote_observed_at.isoformat(),
                     "orderbook_observed": True,
                     "orderbook_shape": orderbook_shape(orderbook),
                 },
@@ -201,6 +204,7 @@ class FairValueDecisionRowCollector:
                     "close_time": close_time.isoformat(),
                     "yes_ask": yes_ask,
                     "no_ask": no_ask,
+                    "quote_observed_at": quote_observed_at.isoformat(),
                     "payout_threshold": threshold,
                 },
                 "missing_feature_data",
@@ -216,6 +220,7 @@ class FairValueDecisionRowCollector:
             "time_to_close_seconds": max(0.0, (close_time - now).total_seconds()),
             "yes_ask": yes_ask,
             "no_ask": no_ask,
+            "quote_observed_at": quote_observed_at.isoformat(),
             "payout_threshold": threshold,
             "orderbook_observed": True,
             "orderbook_shape": orderbook_shape(orderbook),

@@ -48,8 +48,9 @@ deployment, live config changes, schedule changes, or order submission.
   `alphadb-fair-value-live` task definition, private or egress-capable subnets,
   and the live worker security group.
 - Expected scheduled-run path: EventBridge rule `alphadb-fair-value-live`, kept
-  `DISABLED` until the legacy path is paused, dashboard config is saved, and the
-  operator explicitly approves the live-money enablement.
+  `DISABLED` until the one-cycle smoke gate passes, the legacy path is paused,
+  dashboard config is saved, and the operator explicitly approves the
+  live-money enablement.
 
 ## Legacy MVP Resources To Pause
 
@@ -101,6 +102,13 @@ Capture these items before calling the cutover complete:
 - Worker manifest: S3 URI, `runtime_config.config_id`,
   `runtime_config.version`, `runtime_config.source`, and exact
   `runtime_config.snapshot`.
+- One-cycle smoke evidence JSON validated by
+  `scripts/validate-fair-value-live-smoke.py`, proving:
+  `p95_runtime_seconds < 45`, `overlapping_task_count = 0`,
+  `stale_task_count = 0`, `max_quote_age_seconds <= 15`,
+  `min_contract_price = 0.25`, `min_edge = 0`,
+  `task_definition_one_cycle = true`, `live_order_guards_preserved = true`, and
+  `schedule_state_before = DISABLED`.
 - Orders/fills/no-fills/skips: order ids or client order ids where available,
   fill counts, no-fill rows, explicit skip reasons, and any exchange/API error.
 - Live status projection: dashboard latest-run summary and recent attempts after
@@ -127,14 +135,19 @@ Capture these items before calling the cutover complete:
    authority.
 7. Pause the legacy MVP rule `alphadb-structural-live` and verify no legacy
    runner can submit live orders automatically.
-8. Ask for explicit operator confirmation before enabling or triggering the
-   AlphaDB live worker.
-9. Enable or manually trigger the AlphaDB worker only after the legacy path is
-   paused and the dashboard config revision is active.
-10. Verify the worker manifest records the dashboard config id/version/source and
+8. Run manual one-cycle smoke while `alphadb-fair-value-live` remains
+   `DISABLED`.
+9. Write smoke evidence JSON and validate it:
+   - `scripts/validate-fair-value-live-smoke.py <evidence.json>`
+10. Ask for explicit operator confirmation before enabling or triggering the
+   scheduled AlphaDB live worker.
+11. Enable the one-minute schedule only by deploying CloudFormation with
+   `SCHEDULE_STATE=ENABLED FAIR_VALUE_LIVE_SMOKE_EVIDENCE=<evidence.json>`.
+   The deploy script refuses to enable without passing evidence.
+12. Verify the worker manifest records the dashboard config id/version/source and
     exact snapshot.
-11. Verify the dashboard Live workspace shows the curated latest-run summary.
-12. Complete the ALP-162 evidence handoff and only then mark ALP-156 complete.
+13. Verify the dashboard Live workspace shows the curated latest-run summary.
+14. Complete the ALP-162 evidence handoff and only then mark ALP-156 complete.
 
 ## Rollback
 

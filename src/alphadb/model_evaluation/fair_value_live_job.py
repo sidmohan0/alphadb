@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from contextlib import contextmanager
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -21,9 +23,17 @@ from alphadb.live_orders import (
     materialize_private_key_from_env,
 )
 from alphadb.live_runtime import (
+    FAIR_VALUE_LIVE_STRATEGY,
     LiveRunStatusRepository,
     LiveRuntimeConfigRepository,
     build_fair_value_live_status,
+)
+from alphadb.live_risk import (
+    DEFAULT_LIVE_RISK_STALE_SECONDS,
+    LiveRiskAdmissionRepository,
+    LiveRiskAdmissionResult,
+    LiveRiskAdmissionState,
+    state_denial_reason,
 )
 from alphadb.model_evaluation.fair_value_live import (
     FairValueDecisionRowCollector,
@@ -33,9 +43,9 @@ from alphadb.model_evaluation.fair_value_live import (
 )
 from alphadb.model_evaluation.fair_value_replay import (
     FairValueReplayConfig,
-    build_fair_value_replay_report,
-    build_fair_value_walk_forward_report,
+    decide_trade,
     parse_min_edge_values,
+    replay_sort_key,
 )
 from alphadb.model_evaluation.io import file_sha256, write_json
 from alphadb.model_evaluation.metrics import optional_float, taker_fee
@@ -71,6 +81,9 @@ class FairValueLiveTradingJobConfig:
     submit_live_orders: bool = False
     runtime_config_source: RuntimeConfigSource = "auto"
     live_risk_timezone: str = DEFAULT_LIVE_RISK_TIMEZONE
+    live_risk_state_stale_seconds: int = DEFAULT_LIVE_RISK_STALE_SECONDS
+    quote_stale_seconds: int = 15
+    coinbase_feature_stale_seconds: int = 90
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +104,9 @@ class FairValueLiveTradingJobConfig:
             "submit_live_orders": self.submit_live_orders,
             "runtime_config_source": self.runtime_config_source,
             "live_risk_timezone": self.live_risk_timezone,
+            "live_risk_state_stale_seconds": self.live_risk_state_stale_seconds,
+            "quote_stale_seconds": self.quote_stale_seconds,
+            "coinbase_feature_stale_seconds": self.coinbase_feature_stale_seconds,
         }
 
 
@@ -107,210 +123,533 @@ class FairValueLiveTradingJob:
         self.order_client = order_client or HttpKalshiLiveOrderClient()
 
     def run(self, *, now: datetime | None = None) -> dict[str, Any]:
-        materialize_private_key_from_env()
         settings = self._settings or settings_from_env()
         original_config = self.config
-        effective_config, runtime_config = resolve_live_runtime_config(
-            original_config,
-            settings=settings,
-        )
-        self.config = effective_config
         generated_at = ensure_utc(now or datetime.now(UTC))
         run_id = f"fv_live_{generated_at.strftime('%Y%m%dT%H%M%SZ')}"
         run_dir = self.config.output_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-
-        collector = FairValueDecisionRowCollector(
-            kalshi_client=make_kalshi_client(self.config.source, settings),
-            coinbase_client=make_coinbase_client(self.config.coinbase_source),
-            settings=settings,
-            config=FairValueDecisionRowCollectorConfig(
-                max_markets=self.config.max_markets,
-                run_id=run_id,
-                source_mode=self.config.source,
-                coinbase_source_mode=self.config.coinbase_source,
-            ),
-        )
-        collected = collector.collect(now=generated_at).as_dict()
-        rows = [row for row in collected["rows"] if row.get("row_type") == "decision"]
-        replay = build_fair_value_replay_report(
-            rows,
-            config=FairValueReplayConfig(
-                min_edge=self.config.min_edge,
-                min_contract_price=self.config.min_contract_price,
-                max_order_dollars=self.config.max_order_dollars,
-                max_loss_dollars=self.config.max_daily_loss_dollars,
-            ),
-        )
-        walk_forward = build_fair_value_walk_forward_report(
-            rows,
-            selection_market_count=self.config.selection_market_count,
-            holdout_market_count=self.config.holdout_market_count,
-            step_market_count=self.config.step_market_count,
-            min_edge_values=self.config.min_edge_values,
-            min_contract_price=self.config.min_contract_price,
-            max_order_dollars=self.config.max_order_dollars,
-            max_loss_dollars=self.config.max_daily_loss_dollars,
-        )
-
-        live_run_lock = acquire_live_run_lock(
-            output_root=self.config.output_root,
-            s3_prefix=self.config.s3_prefix,
-            run_id=run_id,
-            generated_at=generated_at,
-            enabled=self.config.submit_live_orders,
-        )
-        try:
-            prior_attempts = load_prior_live_attempts(
+        timer = PhaseTimer()
+        with timer.phase("live_run_lock"):
+            live_run_lock = acquire_live_run_lock(
                 output_root=self.config.output_root,
                 s3_prefix=self.config.s3_prefix,
-                current_run_id=run_id,
-            )
-            prior_reconciliation = reconcile_live_attempts(
-                prior_attempts,
-                settings=settings,
-                order_client=self.order_client,
+                run_id=run_id,
                 generated_at=generated_at,
-                max_ticker_exposure_dollars=self.config.max_ticker_exposure_dollars,
+                enabled=self.config.submit_live_orders,
             )
-            admission_daily_loss_accounting = daily_loss_accounting_report(
-                prior_reconciliation["rows"],
+        try:
+            if not live_run_lock.acquired:
+                attempt = lock_held_attempt(
+                    run_id=run_id,
+                    generated_at=generated_at,
+                    live_run_lock=live_run_lock,
+                )
+                timer.ensure_phases(
+                    "runtime_config",
+                    "collection",
+                    "decision",
+                    "freshness",
+                    "risk_admission",
+                    "submit",
+                    "status_materialization",
+                    "artifact_write",
+                )
+                return self._materialize_one_cycle_run(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    generated_at=generated_at,
+                    runtime_config=runtime_config_snapshot(original_config),
+                    collected=None,
+                    selected_decision=None,
+                    selected_row=None,
+                    live_attempts=[attempt],
+                    live_reconciliation=compact_live_reconciliation(
+                        [attempt],
+                        generated_at=generated_at,
+                        max_ticker_exposure_dollars=original_config.max_ticker_exposure_dollars,
+                    ),
+                    admission_daily_loss_accounting=empty_live_risk_accounting(
+                        generated_at=generated_at,
+                        live_risk_timezone=original_config.live_risk_timezone,
+                        reason="live_run_lock_held",
+                    ),
+                    daily_loss_accounting=empty_live_risk_accounting(
+                        generated_at=generated_at,
+                        live_risk_timezone=original_config.live_risk_timezone,
+                        reason="live_run_lock_held",
+                    ),
+                    runtime_guard=evaluate_runtime_guard(settings).as_dict(),
+                    live_run_lock=live_run_lock,
+                    timer=timer,
+                    require_postgres=False,
+                    materialize_status=False,
+                )
+
+            with timer.phase("runtime_config"):
+                effective_config, runtime_config = resolve_live_runtime_config(
+                    original_config,
+                    settings=settings,
+                )
+                self.config = effective_config
+                guard = evaluate_runtime_guard(settings)
+            with timer.phase("collection"):
+                collector = FairValueDecisionRowCollector(
+                    kalshi_client=make_kalshi_client(self.config.source, settings),
+                    coinbase_client=make_coinbase_client(self.config.coinbase_source),
+                    settings=settings,
+                    config=FairValueDecisionRowCollectorConfig(
+                        max_markets=self.config.max_markets,
+                        run_id=run_id,
+                        source_mode=self.config.source,
+                        coinbase_source_mode=self.config.coinbase_source,
+                    ),
+                )
+                collected = collector.collect(now=generated_at).as_dict()
+            with timer.phase("decision"):
+                selected_decision, selected_row = select_one_cycle_live_decision(
+                    collected.get("rows", []),
+                    config=FairValueReplayConfig(
+                        min_edge=self.config.min_edge,
+                        min_contract_price=self.config.min_contract_price,
+                        max_order_dollars=self.config.max_order_dollars,
+                        max_loss_dollars=self.config.max_daily_loss_dollars,
+                    ),
+                )
+            with timer.phase("freshness"):
+                selected_decision = apply_live_freshness_gates(
+                    selected_decision,
+                    selected_row,
+                    generated_at=generated_at,
+                    quote_stale_seconds=self.config.quote_stale_seconds,
+                    coinbase_feature_stale_seconds=self.config.coinbase_feature_stale_seconds,
+                )
+            live_risk_day, _window_start, _window_end = live_risk_window(
                 generated_at=generated_at,
                 live_risk_timezone=self.config.live_risk_timezone,
             )
-            daily_loss_used = float(admission_daily_loss_accounting["daily_loss_used_dollars"])
-            market_exposure_by_ticker = per_market_exposure_dollars(prior_reconciliation["rows"])
-            live_attempts = self._submit_live_attempts(
-                replay_decisions=replay["decisions"],
+            admission_state: LiveRiskAdmissionState | None = None
+            if self.config.submit_live_orders:
+                with timer.phase("risk_state_read"):
+                    admission_state = live_risk_state_for_day(
+                        settings=settings,
+                        strategy=FAIR_VALUE_LIVE_STRATEGY,
+                        live_risk_day=live_risk_day,
+                    )
+            admission_daily_loss_accounting = live_risk_accounting_report(
+                admission_state,
+                generated_at=generated_at,
+                live_risk_timezone=self.config.live_risk_timezone,
+            )
+            live_attempt, risk_transition, order_submit_at = self._submit_one_cycle_attempt(
+                decision=selected_decision,
+                decision_row=selected_row,
                 settings=settings,
                 run_id=run_id,
                 generated_at=generated_at,
-                starting_daily_loss_used=daily_loss_used,
+                live_risk_day=live_risk_day,
+                admission_state=admission_state,
                 daily_loss_accounting=admission_daily_loss_accounting,
-                market_exposure_by_ticker=market_exposure_by_ticker,
+                runtime_guard=guard.as_dict(),
                 live_run_lock=live_run_lock,
+                timer=timer,
+            )
+            live_attempts = [live_attempt]
+            live_reconciliation = compact_live_reconciliation(
+                live_attempts,
+                generated_at=generated_at,
+                max_ticker_exposure_dollars=self.config.max_ticker_exposure_dollars,
+            )
+            final_state = live_risk_state_for_day(
+                settings=settings,
+                strategy=FAIR_VALUE_LIVE_STRATEGY,
+                live_risk_day=live_risk_day,
+                apply_migrations=False,
+            ) if self.config.submit_live_orders else None
+            daily_loss_accounting = live_risk_accounting_report(
+                final_state or admission_state,
+                generated_at=generated_at,
+                live_risk_timezone=self.config.live_risk_timezone,
             )
             live_attempts_payload = {
                 "schema_version": FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA,
                 "run_id": run_id,
                 "generated_at": generated_at.isoformat(),
                 "admission_daily_loss_accounting": admission_daily_loss_accounting,
+                "risk_transition": risk_transition.as_dict() if risk_transition else None,
                 "skip_reasons": summarize_attempt_reasons(live_attempts),
                 "attempts": live_attempts,
+                "one_cycle": True,
             }
-            live_reconciliation = reconcile_live_attempts(
-                [*prior_attempts, *live_attempts],
-                settings=settings,
-                order_client=self.order_client,
-                generated_at=generated_at,
-                max_ticker_exposure_dollars=self.config.max_ticker_exposure_dollars,
-            )
-            daily_loss_accounting = daily_loss_accounting_report(
-                live_reconciliation["rows"],
-                generated_at=generated_at,
-                live_risk_timezone=self.config.live_risk_timezone,
-            )
             live_attempts_payload["daily_loss_accounting"] = daily_loss_accounting
+            if order_submit_at is not None:
+                timer.order_submit_at = order_submit_at
+            return self._materialize_one_cycle_run(
+                run_dir=run_dir,
+                run_id=run_id,
+                generated_at=generated_at,
+                runtime_config=runtime_config,
+                collected=collected,
+                selected_decision=selected_decision,
+                selected_row=selected_row,
+                live_attempts=live_attempts,
+                live_reconciliation=live_reconciliation,
+                admission_daily_loss_accounting=admission_daily_loss_accounting,
+                daily_loss_accounting=daily_loss_accounting,
+                runtime_guard=guard.as_dict(),
+                live_run_lock=live_run_lock,
+                timer=timer,
+                require_postgres=runtime_config.get("source") == "dashboard_postgres",
+                materialize_status=should_materialize_live_run_status(live_run_lock),
+                live_attempts_payload=live_attempts_payload,
+            )
+        finally:
+            self.config = original_config
+            live_run_lock.release()
 
-            artifacts = {
-                "decision_rows": run_dir / "decision_rows.json",
-                "replay_report": run_dir / "replay_report.json",
-                "walk_forward_report": run_dir / "walk_forward_report.json",
-                "live_order_attempts": run_dir / "live_order_attempts.json",
-                "live_reconciliation_report": run_dir / "live_reconciliation_report.json",
-            }
-            write_json(artifacts["decision_rows"], collected)
-            write_json(artifacts["replay_report"], replay)
-            write_json(artifacts["walk_forward_report"], walk_forward)
-            write_json(artifacts["live_order_attempts"], live_attempts_payload)
-            write_json(artifacts["live_reconciliation_report"], live_reconciliation)
+    def _submit_one_cycle_attempt(
+        self,
+        *,
+        decision: Mapping[str, Any],
+        decision_row: Mapping[str, Any] | None,
+        settings: Settings,
+        run_id: str,
+        generated_at: datetime,
+        live_risk_day: date,
+        admission_state: LiveRiskAdmissionState | None,
+        daily_loss_accounting: Mapping[str, Any],
+        runtime_guard: Mapping[str, Any],
+        live_run_lock: "LiveRunLock",
+        timer: "PhaseTimer",
+    ) -> tuple[dict[str, Any], LiveRiskAdmissionResult | None, datetime | None]:
+        market_ticker = str(decision.get("ticker") or decision.get("market_ticker") or "")
+        current_market_exposure = (
+            admission_state.market_exposure_dollars(market_ticker) if admission_state else 0.0
+        )
+        market_remaining = max(
+            0.0,
+            self.config.max_ticker_exposure_dollars - current_market_exposure,
+        )
+        order = dict(decision)
+        sized_order = (
+            order_sized_to_market_cap(
+                order,
+                remaining_ticker_exposure_dollars=market_remaining,
+            )
+            if order.get("decision") == "trade"
+            else None
+        )
+        effective_decision = dict(sized_order or order)
+        request_payload = (
+            live_order_request(effective_decision, run_id=run_id)
+            if sized_order is not None
+            else {}
+        )
+        max_loss = (
+            float(effective_decision.get("max_loss_dollars") or 0.0)
+            if sized_order is not None
+            else 0.0
+        )
+        risk_before = admission_state.total_risk_used_dollars if admission_state else 0.0
+        base = {
+            "attempt_id": f"fv_live_order_{uuid4().hex[:12]}",
+            "run_id": run_id,
+            "submitted_at": generated_at.isoformat(),
+            "market_ticker": market_ticker,
+            "side": effective_decision.get("side"),
+            "decision": effective_decision,
+            "original_decision": dict(decision),
+            "source_row": dict(decision_row or {}),
+            "request_payload": request_payload,
+            "max_loss_dollars": round(max_loss, 6),
+            "daily_loss_used_before_dollars": round(risk_before, 6),
+            "daily_loss_accounting": dict(daily_loss_accounting),
+            "market_exposure": {
+                "market_ticker": market_ticker,
+                "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
+                "used_before_dollars": round(current_market_exposure, 6),
+                "remaining_before_dollars": round(market_remaining, 6),
+                "intended_contracts": int(
+                    decision.get("intended_contracts") or decision.get("contracts") or 0
+                ),
+                "sized_contracts": int(
+                    effective_decision.get("intended_contracts")
+                    or effective_decision.get("contracts")
+                    or 0
+                ),
+            },
+            "freshness": live_decision_freshness(decision_row, generated_at=generated_at),
+            "runtime_guard": dict(runtime_guard),
+            "live_run_lock": live_run_lock.as_dict(),
+            "attempt_index": 0,
+        }
+        if decision.get("decision") != "trade":
+            return (
+                {**base, "status": "skipped", "reason": str(decision.get("reason") or "no_trade")},
+                None,
+                None,
+            )
+        if sized_order is None:
+            return ({**base, "status": "skipped", "reason": "market_exposure_cap_reached"}, None, None)
+        if not self.config.submit_live_orders:
+            return ({**base, "status": "skipped", "reason": "submit_live_orders_false"}, None, None)
+        if not runtime_guard.get("can_submit_live_orders"):
+            reason = str(runtime_guard.get("denial_reason") or "live_orders_disabled")
+            return ({**base, "status": "skipped", "reason": reason}, None, None)
+        try:
+            materialize_private_key_from_env()
+        except Exception as exc:
+            return (
+                {
+                    **base,
+                    "status": "error",
+                    "reason": f"live_order_error:{type(exc).__name__}",
+                    "response_payload": {"message": str(exc)},
+                },
+                None,
+                None,
+            )
 
-            guard = evaluate_runtime_guard(settings)
-            orders_placed = sum(1 for attempt in live_attempts if attempt["status"] == "submitted")
-            filled_contracts = sum(int(attempt.get("fill_count") or 0) for attempt in live_attempts)
-            manifest = {
-                "schema_version": FAIR_VALUE_LIVE_JOB_SCHEMA,
+        with timer.phase("risk_admission"):
+            risk_result = LiveRiskAdmissionRepository(settings.database_url).admit_order(
+                live_risk_day=live_risk_day,
+                market_ticker=market_ticker,
+                max_loss_dollars=max_loss,
+                max_daily_loss_dollars=self.config.max_daily_loss_dollars,
+                max_market_exposure_dollars=self.config.max_ticker_exposure_dollars,
+                now=generated_at,
+                stale_after_seconds=self.config.live_risk_state_stale_seconds,
+                run_id=run_id,
+            )
+        base = {
+            **base,
+            "risk_admission": risk_result.as_dict(),
+            "risk_reservation_id": risk_result.reservation_id,
+        }
+        if not risk_result.approved:
+            return ({**base, "status": "skipped", "reason": risk_result.reason}, risk_result, None)
+
+        order_submit_at = datetime.now(UTC)
+        try:
+            with timer.phase("submit"):
+                response = self.order_client.create_order(
+                    request_payload=request_payload,
+                    settings=settings,
+                )
+        except Exception as exc:
+            transition = LiveRiskAdmissionRepository(settings.database_url).retain_reservation(
+                live_risk_day=live_risk_day,
+                reservation_id=str(risk_result.reservation_id),
+                now=datetime.now(UTC),
+            )
+            return (
+                {
+                    **base,
+                    "order_submit_at": order_submit_at.isoformat(),
+                    "status": "error",
+                    "reason": f"live_order_error:{type(exc).__name__}",
+                    "response_payload": {"message": str(exc)},
+                    "risk_transition": transition.as_dict(),
+                },
+                transition,
+                order_submit_at,
+            )
+        fill_count = int(numeric_response_value(response, ("fill_count", "fill_count_fp")) or 0)
+        accepted = exchange_response_accepted(response)
+        if accepted and fill_count > 0:
+            transition = LiveRiskAdmissionRepository(settings.database_url).convert_reservation(
+                live_risk_day=live_risk_day,
+                reservation_id=str(risk_result.reservation_id),
+                filled_max_loss_dollars=filled_max_loss_estimate(effective_decision, fill_count),
+                now=datetime.now(UTC),
+            )
+        elif accepted:
+            transition = LiveRiskAdmissionRepository(settings.database_url).release_reservation(
+                live_risk_day=live_risk_day,
+                reservation_id=str(risk_result.reservation_id),
+                now=datetime.now(UTC),
+            )
+        else:
+            transition = LiveRiskAdmissionRepository(settings.database_url).release_reservation(
+                live_risk_day=live_risk_day,
+                reservation_id=str(risk_result.reservation_id),
+                now=datetime.now(UTC),
+            )
+        return (
+            {
+                **base,
+                "order_submit_at": order_submit_at.isoformat(),
+                "status": "submitted" if accepted else "rejected",
+                "reason": "submitted" if accepted else "exchange_rejected",
+                "response_payload": dict(response),
+                "risk_transition": transition.as_dict(),
+                "order_id": response.get("order_id"),
+                "client_order_id": response.get("client_order_id")
+                or request_payload.get("client_order_id"),
+                "fill_count": fill_count,
+                "remaining_count": numeric_response_value(
+                    response,
+                    ("remaining_count", "remaining_count_fp"),
+                ),
+            },
+            transition,
+            order_submit_at,
+        )
+
+    def _materialize_one_cycle_run(
+        self,
+        *,
+        run_dir: Path,
+        run_id: str,
+        generated_at: datetime,
+        runtime_config: Mapping[str, Any],
+        collected: Mapping[str, Any] | None,
+        selected_decision: Mapping[str, Any] | None,
+        selected_row: Mapping[str, Any] | None,
+        live_attempts: Sequence[Mapping[str, Any]],
+        live_reconciliation: Mapping[str, Any],
+        admission_daily_loss_accounting: Mapping[str, Any],
+        daily_loss_accounting: Mapping[str, Any],
+        runtime_guard: Mapping[str, Any],
+        live_run_lock: "LiveRunLock",
+        timer: "PhaseTimer",
+        require_postgres: bool,
+        materialize_status: bool,
+        live_attempts_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        timer.ensure_phases(
+            "live_run_lock",
+            "runtime_config",
+            "collection",
+            "decision",
+            "freshness",
+            "risk_state_read",
+            "risk_admission",
+            "submit",
+            "status_materialization",
+            "artifact_write",
+        )
+        attempts_payload = dict(
+            live_attempts_payload
+            or {
+                "schema_version": FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA,
                 "run_id": run_id,
                 "generated_at": generated_at.isoformat(),
-                "config": self.config.as_dict(),
-                "runtime_config": runtime_config,
-                "runtime_controls": {
-                    "report_only": False,
-                    "submit_live_orders_requested": self.config.submit_live_orders,
-                    "live_orders_enabled": guard.can_submit_live_orders,
-                    "orders_placed": orders_placed,
-                    "filled_contracts": filled_contracts,
-                    "max_order_dollars": self.config.max_order_dollars,
-                    "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
-                    "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
-                    "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
-                    "min_contract_price": self.config.min_contract_price,
-                    "admission_daily_loss_accounting": admission_daily_loss_accounting,
-                    "daily_loss_accounting": daily_loss_accounting,
-                    "runtime_guard": guard.as_dict(),
-                    "live_run_lock": live_run_lock.as_dict(),
-                    "live_status_materialized": should_materialize_live_run_status(live_run_lock),
-                },
-                "counts": {
-                    "collected_rows": collected["counts"]["rows"],
-                    "decision_rows": collected["counts"]["decisions"],
-                    "skip_rows": collected["counts"]["skips"],
-                    "replay_trades": replay["counts"]["trades"],
-                    "walk_forward_windows": walk_forward["complete_window_count"],
-                    "live_attempts": len(live_attempts),
-                    "live_skipped": sum(
-                        1 for attempt in live_attempts if attempt.get("status") == "skipped"
-                    ),
-                    "prior_live_attempts_reconciled": len(prior_attempts),
-                    "prior_reconciliation_rows_for_daily_loss": admission_daily_loss_accounting[
-                        "same_live_risk_day_rows"
-                    ],
-                    "live_reconciliation_rows_for_daily_loss": daily_loss_accounting[
-                        "same_live_risk_day_rows"
-                    ],
-                },
-                "report_summary": {
-                    "simulated_replay_net_pnl_dollars": replay["pnl"]["net_pnl_dollars"],
-                    "simulated_replay_settlement_status": replay["settlement"]["status"],
-                    "daily_loss_live_risk_day": daily_loss_accounting["live_risk_day"],
-                    "daily_loss_used_dollars": daily_loss_accounting["daily_loss_used_dollars"],
-                    "live_reconciliation_scope": "full_history_loaded_attempts",
-                    "live_full_history_net_pnl_dollars": live_reconciliation["pnl"][
-                        "net_pnl_dollars"
-                    ],
-                    "live_full_history_unsettled_exposure_dollars": live_reconciliation["pnl"][
-                        "unsettled_exposure_dollars"
-                    ],
-                    "live_daily_net_pnl_dollars": live_reconciliation["pnl"]["net_pnl_dollars"],
-                    "live_daily_unsettled_exposure_dollars": live_reconciliation["pnl"][
-                        "unsettled_exposure_dollars"
-                    ],
-                    "live_settlement_status": live_reconciliation["settlement"]["status"],
-                    "live_attempt_skip_reasons": summarize_attempt_reasons(live_attempts),
-                },
-                "artifacts": artifact_records(artifacts),
+                "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
+                "daily_loss_accounting": dict(daily_loss_accounting),
+                "skip_reasons": summarize_attempt_reasons(live_attempts),
+                "attempts": [dict(attempt) for attempt in live_attempts],
+                "one_cycle": True,
             }
-            if should_materialize_live_run_status(live_run_lock):
+        )
+        artifacts: dict[str, Path] = {
+            "live_order_attempts": run_dir / "live_order_attempts.json",
+            "live_reconciliation_report": run_dir / "live_reconciliation_report.json",
+        }
+        if collected is not None:
+            artifacts["decision_rows"] = run_dir / "decision_rows.json"
+        with timer.phase("artifact_write"):
+            if collected is not None:
+                write_json(artifacts["decision_rows"], collected)
+            write_json(artifacts["live_order_attempts"], attempts_payload)
+            write_json(artifacts["live_reconciliation_report"], live_reconciliation)
+
+        orders_placed = sum(1 for attempt in live_attempts if attempt["status"] == "submitted")
+        filled_contracts = sum(int(attempt.get("fill_count") or 0) for attempt in live_attempts)
+        collected_counts = as_mapping((collected or {}).get("counts"))
+        selected_trade = (selected_decision or {}).get("decision") == "trade"
+        latest_attempt = dict(live_attempts[-1]) if live_attempts else {}
+        manifest = {
+            "schema_version": FAIR_VALUE_LIVE_JOB_SCHEMA,
+            "run_id": run_id,
+            "generated_at": generated_at.isoformat(),
+            "one_cycle": True,
+            "hot_path_scope": "one_current_decision_no_replay_no_walk_forward_no_full_history",
+            "config": self.config.as_dict(),
+            "runtime_config": dict(runtime_config),
+            "runtime_controls": {
+                "report_only": False,
+                "submit_live_orders_requested": self.config.submit_live_orders,
+                "live_orders_enabled": bool(runtime_guard.get("can_submit_live_orders")),
+                "orders_placed": orders_placed,
+                "filled_contracts": filled_contracts,
+                "max_order_dollars": self.config.max_order_dollars,
+                "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
+                "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
+                "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
+                "min_contract_price": self.config.min_contract_price,
+                "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
+                "daily_loss_accounting": dict(daily_loss_accounting),
+                "runtime_guard": dict(runtime_guard),
+                "live_run_lock": live_run_lock.as_dict(),
+                "live_status_materialized": False,
+            },
+            "selected_decision": dict(selected_decision or {}),
+            "selected_row": dict(selected_row or {}),
+            "counts": {
+                "collected_rows": int(collected_counts.get("rows") or 0),
+                "decision_rows": int(collected_counts.get("decisions") or 0),
+                "skip_rows": int(collected_counts.get("skips") or 0),
+                "replay_trades": 1 if selected_trade else 0,
+                "walk_forward_windows": 0,
+                "live_attempts": len(live_attempts),
+                "live_skipped": sum(
+                    1 for attempt in live_attempts if attempt.get("status") == "skipped"
+                ),
+                "prior_live_attempts_reconciled": 0,
+                "prior_reconciliation_rows_for_daily_loss": 0,
+                "live_reconciliation_rows_for_daily_loss": len(
+                    live_reconciliation.get("rows", [])
+                ),
+            },
+            "report_summary": {
+                "daily_loss_live_risk_day": daily_loss_accounting["live_risk_day"],
+                "daily_loss_used_dollars": daily_loss_accounting["daily_loss_used_dollars"],
+                "live_reconciliation_scope": "current_attempt_compact",
+                "live_full_history_net_pnl_dollars": None,
+                "live_full_history_unsettled_exposure_dollars": None,
+                "live_daily_net_pnl_dollars": live_reconciliation["pnl"]["net_pnl_dollars"],
+                "live_daily_unsettled_exposure_dollars": live_reconciliation["pnl"][
+                    "unsettled_exposure_dollars"
+                ],
+                "live_settlement_status": live_reconciliation["settlement"]["status"],
+                "live_attempt_skip_reasons": summarize_attempt_reasons(live_attempts),
+            },
+            "timing": timer.snapshot(
+                quote_seen_at=parse_datetime(latest_attempt.get("quote_seen_at")),
+                order_submit_at=parse_datetime(latest_attempt.get("order_submit_at")),
+            ),
+            "artifacts": artifact_records(artifacts),
+        }
+        if materialize_status:
+            with timer.phase("status_materialization"):
                 materialize_live_run_status(
-                    settings=settings,
+                    settings=self._settings or settings_from_env(),
                     manifest=manifest,
-                    live_attempts_payload=live_attempts_payload,
+                    live_attempts_payload=attempts_payload,
                     live_reconciliation=live_reconciliation,
-                    require_postgres=runtime_config.get("source") == "dashboard_postgres",
+                    require_postgres=require_postgres,
                 )
-            write_json(run_dir / "manifest.json", manifest)
-            manifest["artifacts"]["manifest"] = artifact_record(run_dir / "manifest.json")
-            if self.config.s3_prefix:
+            manifest["runtime_controls"]["live_status_materialized"] = True
+        manifest["timing"] = timer.snapshot(
+            quote_seen_at=parse_datetime(latest_attempt.get("quote_seen_at")),
+            order_submit_at=parse_datetime(latest_attempt.get("order_submit_at")),
+        )
+        write_json(run_dir / "manifest.json", manifest)
+        manifest["artifacts"]["manifest"] = artifact_record(run_dir / "manifest.json")
+        if self.config.s3_prefix:
+            with timer.phase("s3_upload"):
                 manifest["s3_uploads"] = upload_artifacts_to_s3(
                     manifest["artifacts"],
                     s3_prefix=self.config.s3_prefix,
                 )
-                write_json(run_dir / "manifest.json", manifest)
-                manifest["artifacts"]["manifest"] = artifact_record(run_dir / "manifest.json")
-            return manifest
-        finally:
-            self.config = original_config
-            live_run_lock.release()
+            manifest["timing"] = timer.snapshot(
+                quote_seen_at=parse_datetime(latest_attempt.get("quote_seen_at")),
+                order_submit_at=parse_datetime(latest_attempt.get("order_submit_at")),
+            )
+            write_json(run_dir / "manifest.json", manifest)
+            manifest["artifacts"]["manifest"] = artifact_record(run_dir / "manifest.json")
+        return manifest
 
     def _submit_live_attempts(
         self,
@@ -477,6 +816,401 @@ class FairValueLiveTradingJob:
                     float(market_exposure.get(market_ticker, 0.0)) + filled_max_loss
                 )
         return attempts
+
+
+class PhaseTimer:
+    def __init__(self) -> None:
+        self.started_at = time.perf_counter()
+        self.phase_seconds: dict[str, float] = {}
+        self.order_submit_at: datetime | None = None
+
+    @contextmanager
+    def phase(self, name: str):
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.phase_seconds[name] = round(
+                self.phase_seconds.get(name, 0.0) + time.perf_counter() - started,
+                6,
+            )
+
+    def ensure_phases(self, *names: str) -> None:
+        for name in names:
+            self.phase_seconds.setdefault(name, 0.0)
+
+    def snapshot(
+        self,
+        *,
+        quote_seen_at: datetime | None = None,
+        order_submit_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        submit_at = order_submit_at or self.order_submit_at
+        quote_to_submit = (
+            round((submit_at - quote_seen_at).total_seconds(), 6)
+            if quote_seen_at is not None and submit_at is not None
+            else None
+        )
+        return {
+            "total_elapsed_seconds": round(time.perf_counter() - self.started_at, 6),
+            "phase_seconds": dict(sorted(self.phase_seconds.items())),
+            "quote_seen_at": quote_seen_at.isoformat() if quote_seen_at else None,
+            "order_submit_at": submit_at.isoformat() if submit_at else None,
+            "quote_to_submit_seconds": quote_to_submit,
+        }
+
+
+def runtime_config_snapshot(config: FairValueLiveTradingJobConfig) -> dict[str, Any]:
+    return {
+        "source": "not_read_lock_held",
+        "config_id": None,
+        "version": None,
+        "snapshot": {
+            "max_order_dollars": config.max_order_dollars,
+            "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
+            "max_daily_loss_dollars": config.max_daily_loss_dollars,
+            "min_edge": config.min_edge,
+            "min_contract_price": config.min_contract_price,
+            "max_markets": config.max_markets,
+        },
+    }
+
+
+def lock_held_attempt(
+    *,
+    run_id: str,
+    generated_at: datetime,
+    live_run_lock: "LiveRunLock",
+) -> dict[str, Any]:
+    return {
+        "attempt_id": f"fv_live_order_{uuid4().hex[:12]}",
+        "run_id": run_id,
+        "submitted_at": generated_at.isoformat(),
+        "market_ticker": "",
+        "side": None,
+        "decision": {"decision": "skip", "reason": "live_run_lock_held"},
+        "original_decision": {"decision": "skip", "reason": "live_run_lock_held"},
+        "request_payload": {},
+        "max_loss_dollars": 0.0,
+        "daily_loss_used_before_dollars": 0.0,
+        "daily_loss_accounting": {},
+        "market_exposure": {},
+        "runtime_guard": {},
+        "live_run_lock": live_run_lock.as_dict(),
+        "attempt_index": 0,
+        "status": "skipped",
+        "reason": live_run_lock.reason or "live_run_lock_held",
+    }
+
+
+def select_one_cycle_live_decision(
+    rows: object,
+    *,
+    config: FairValueReplayConfig,
+) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
+    row_list = [dict(row) for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+    decisions: list[tuple[dict[str, Any], Mapping[str, Any]]] = []
+    for row in sorted(
+        [row for row in row_list if row.get("row_type") == "decision"],
+        key=replay_sort_key,
+    ):
+        decisions.append((decide_trade(row, config=config, cumulative_pnl=0.0), row))
+    trades = [
+        (decision, row) for decision, row in decisions if decision.get("decision") == "trade"
+    ]
+    if trades:
+        return max(
+            trades,
+            key=lambda item: (
+                float(item[0].get("edge") or 0.0),
+                str(item[0].get("ticker") or ""),
+            ),
+        )
+    if decisions:
+        return decisions[0]
+    skips = sorted(
+        [row for row in row_list if row.get("row_type") == "skip"],
+        key=replay_sort_key,
+    )
+    if skips:
+        row = skips[0]
+        return (
+            {
+                "ticker": str(row.get("ticker") or row.get("market_ticker") or ""),
+                "market_ticker": str(row.get("ticker") or row.get("market_ticker") or ""),
+                "decision_timestamp": row.get("decision_timestamp"),
+                "decision": "skip",
+                "reason": str(row.get("skip_reason") or "collector_skip"),
+            },
+            row,
+        )
+    return (
+        {
+            "ticker": "",
+            "market_ticker": "",
+            "decision_timestamp": None,
+            "decision": "skip",
+            "reason": "no_current_market",
+        },
+        None,
+    )
+
+
+def apply_live_freshness_gates(
+    decision: Mapping[str, Any],
+    row: Mapping[str, Any] | None,
+    *,
+    generated_at: datetime,
+    quote_stale_seconds: int,
+    coinbase_feature_stale_seconds: int,
+) -> dict[str, Any]:
+    result = dict(decision)
+    if result.get("decision") != "trade":
+        return result
+    freshness = live_decision_freshness(row, generated_at=generated_at)
+    quote_age = freshness.get("quote_age_seconds")
+    if quote_age is None or float(quote_age) > quote_stale_seconds:
+        return {**result, "decision": "skip", "reason": "quote_stale"}
+    coinbase_age = freshness.get("coinbase_feature_age_seconds")
+    if coinbase_age is None or float(coinbase_age) > coinbase_feature_stale_seconds:
+        return {**result, "decision": "skip", "reason": "coinbase_context_stale"}
+    return result
+
+
+def live_decision_freshness(
+    row: Mapping[str, Any] | None,
+    *,
+    generated_at: datetime,
+) -> dict[str, Any]:
+    if not row:
+        return {
+            "quote_seen_at": None,
+            "quote_age_seconds": None,
+            "coinbase_max_source_event_timestamp": None,
+            "coinbase_feature_age_seconds": None,
+        }
+    quote_seen_at = parse_datetime(
+        row.get("quote_observed_at") or row.get("kalshi_received_at") or row.get("decision_timestamp")
+    )
+    coinbase_seen_at = parse_datetime(row.get("coinbase_max_source_event_timestamp"))
+    quote_age = (
+        max(0.0, (generated_at - quote_seen_at).total_seconds())
+        if quote_seen_at is not None
+        else None
+    )
+    coinbase_age = (
+        max(0.0, (generated_at - coinbase_seen_at).total_seconds())
+        if coinbase_seen_at is not None
+        else None
+    )
+    if coinbase_age is None and row.get("coinbase_source_lag_ms") is not None:
+        coinbase_age = max(0.0, float(row.get("coinbase_source_lag_ms") or 0.0) / 1000.0)
+    return {
+        "quote_seen_at": quote_seen_at.isoformat() if quote_seen_at else None,
+        "quote_age_seconds": round(quote_age, 6) if quote_age is not None else None,
+        "coinbase_max_source_event_timestamp": coinbase_seen_at.isoformat()
+        if coinbase_seen_at
+        else None,
+        "coinbase_feature_age_seconds": round(coinbase_age, 6)
+        if coinbase_age is not None
+        else None,
+    }
+
+
+def live_risk_state_for_day(
+    *,
+    settings: Settings,
+    strategy: str,
+    live_risk_day: date,
+    apply_migrations: bool = True,
+) -> LiveRiskAdmissionState | None:
+    try:
+        return LiveRiskAdmissionRepository(settings.database_url).get_state(
+            strategy=strategy,
+            live_risk_day=live_risk_day,
+            apply_migrations=apply_migrations,
+        )
+    except Exception:
+        return None
+
+
+def live_risk_accounting_report(
+    state: LiveRiskAdmissionState | None,
+    *,
+    generated_at: datetime,
+    live_risk_timezone: str,
+) -> dict[str, Any]:
+    live_risk_day, window_start_utc, window_end_utc = live_risk_window(
+        generated_at=generated_at,
+        live_risk_timezone=live_risk_timezone,
+    )
+    if state is None:
+        return {
+            **empty_live_risk_accounting(
+                generated_at=generated_at,
+                live_risk_timezone=live_risk_timezone,
+                reason="risk_state_missing",
+            ),
+            "basis": "live_risk_admission_state",
+        }
+    invalid_reason = state_denial_reason(
+        state,
+        now=generated_at,
+        stale_after_seconds=DEFAULT_LIVE_RISK_STALE_SECONDS,
+    )
+    return {
+        "schema_version": FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA,
+        "basis": "live_risk_admission_state",
+        "timezone": live_risk_timezone,
+        "live_risk_day": live_risk_day.isoformat(),
+        "window_start_utc": window_start_utc.isoformat(),
+        "window_end_utc": window_end_utc.isoformat(),
+        "risk_state_status": state.status,
+        "risk_state_reason": invalid_reason,
+        "risk_state_updated_at": state.updated_at.isoformat(),
+        "risk_state_version": state.version,
+        "prior_reconciliation_rows": 0,
+        "same_live_risk_day_rows": 0,
+        "same_live_risk_day_filled_rows": 0,
+        "same_live_risk_day_no_fill_rows": 0,
+        "same_live_risk_day_settled_rows": 0,
+        "same_live_risk_day_unsettled_rows": 0,
+        "daily_loss_realized_dollars": round(state.daily_loss_used_dollars, 6),
+        "open_exposure_dollars": round(state.open_exposure_dollars, 6),
+        "pending_exposure_dollars": round(state.pending_exposure_dollars, 6),
+        "daily_loss_used_dollars": state.total_risk_used_dollars,
+        "per_market_exposure_dollars": dict(state.per_market_exposure_dollars),
+    }
+
+
+def empty_live_risk_accounting(
+    *,
+    generated_at: datetime,
+    live_risk_timezone: str,
+    reason: str,
+) -> dict[str, Any]:
+    live_risk_day, window_start_utc, window_end_utc = live_risk_window(
+        generated_at=generated_at,
+        live_risk_timezone=live_risk_timezone,
+    )
+    return {
+        "schema_version": FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA,
+        "basis": "live_risk_admission_state",
+        "timezone": live_risk_timezone,
+        "live_risk_day": live_risk_day.isoformat(),
+        "window_start_utc": window_start_utc.isoformat(),
+        "window_end_utc": window_end_utc.isoformat(),
+        "risk_state_status": "missing",
+        "risk_state_reason": reason,
+        "prior_reconciliation_rows": 0,
+        "same_live_risk_day_rows": 0,
+        "same_live_risk_day_filled_rows": 0,
+        "same_live_risk_day_no_fill_rows": 0,
+        "same_live_risk_day_settled_rows": 0,
+        "same_live_risk_day_unsettled_rows": 0,
+        "daily_loss_realized_dollars": 0.0,
+        "open_exposure_dollars": 0.0,
+        "pending_exposure_dollars": 0.0,
+        "daily_loss_used_dollars": 0.0,
+        "per_market_exposure_dollars": {},
+    }
+
+
+def compact_live_reconciliation(
+    attempts: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: datetime,
+    max_ticker_exposure_dollars: float,
+) -> dict[str, Any]:
+    rows = [compact_reconciliation_row(attempt, generated_at=generated_at) for attempt in attempts]
+    filled = [row for row in rows if int(row["filled_contracts"]) > 0]
+    unsettled = [row for row in filled if row["settlement_status"] == "unsettled"]
+    pnl = {
+        "net_pnl_dollars": 0.0,
+        "gross_cost_dollars": round(sum(float(row["cost_dollars"]) for row in filled), 6),
+        "fees_dollars": round(sum(float(row["fees_dollars"]) for row in filled), 6),
+        "payout_dollars": 0.0,
+        "unsettled_exposure_dollars": round(
+            sum(float(row["max_loss_dollars"]) for row in unsettled),
+            6,
+        ),
+        "filled_contracts": sum(int(row["filled_contracts"]) for row in filled),
+        "settled_trade_count": 0,
+        "unsettled_trade_count": len(unsettled),
+    }
+    return {
+        "schema_version": FAIR_VALUE_LIVE_RECONCILIATION_SCHEMA,
+        "generated_at": generated_at.isoformat(),
+        "scope": "current_attempt_compact",
+        "counts": {
+            "attempts": len(rows),
+            "submitted": sum(1 for row in rows if row["order_status"] == "submitted"),
+            "filled": len(filled),
+            "settled": 0,
+            "unsettled": len(unsettled),
+            "no_fill": sum(1 for row in rows if row["settlement_status"] == "no_fill"),
+            "skipped_or_error": sum(
+                1 for row in rows if row["order_status"] in {"skipped", "error", "rejected"}
+            ),
+        },
+        "pnl": pnl,
+        "settlement": {
+            "status": "unreconciled" if unsettled else "reconciled",
+            "default_reporting": "current_attempt_compact_no_public_settlement_lookup",
+            "settled_rows": 0,
+            "unsettled_rows": len(unsettled),
+            "unsettled_exposure_dollars": pnl["unsettled_exposure_dollars"],
+        },
+        "per_market_exposure": per_market_exposure_report(
+            rows,
+            max_ticker_exposure_dollars=max_ticker_exposure_dollars,
+        ),
+        "rows": rows,
+    }
+
+
+def compact_reconciliation_row(
+    attempt: Mapping[str, Any],
+    *,
+    generated_at: datetime,
+) -> dict[str, Any]:
+    decision = as_mapping(attempt.get("decision"))
+    response = as_mapping(attempt.get("response_payload"))
+    filled_contracts = int(
+        numeric_response_value(response, ("fill_count_fp", "fill_count", "filled_quantity"))
+        or attempt.get("fill_count")
+        or 0
+    )
+    price = float(decision.get("price") or 0.0)
+    fee_per_contract = float(decision.get("fee_per_contract") or taker_fee(price, 0.07))
+    cost = round(price * filled_contracts, 6)
+    fees = round(fee_per_contract * filled_contracts, 6)
+    if filled_contracts <= 0:
+        settlement = "no_fill"
+    else:
+        settlement = "unsettled"
+    return {
+        "attempt_id": attempt.get("attempt_id"),
+        "run_id": attempt.get("run_id"),
+        "submitted_at": attempt.get("submitted_at"),
+        "reconciled_at": generated_at.isoformat(),
+        "market_ticker": str(attempt.get("market_ticker") or decision.get("ticker") or ""),
+        "side": str(attempt.get("side") or decision.get("side") or ""),
+        "order_status": attempt.get("status"),
+        "order_id": attempt.get("order_id") or response.get("order_id"),
+        "client_order_id": attempt.get("client_order_id") or response.get("client_order_id"),
+        "filled_contracts": filled_contracts,
+        "cost_dollars": cost,
+        "fees_dollars": fees,
+        "payout_dollars": 0.0,
+        "pnl_dollars": 0.0,
+        "max_loss_dollars": round(cost + fees, 6),
+        "settlement_status": settlement,
+        "market_status": None,
+        "result": None,
+        "order_detail_observed": False,
+        "order_detail_error": None,
+    }
 
 
 @dataclass

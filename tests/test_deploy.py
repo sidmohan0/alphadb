@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -276,9 +279,14 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "DATABASE_URL" in template
     assert "--runtime-config-source" in template
     assert "postgres" in template
+    assert "--quote-stale-seconds" in template
+    assert "--coinbase-feature-stale-seconds" in template
+    assert "--live-risk-state-stale-seconds" in template
     assert "MinContractPrice" in template
     assert "--min-contract-price" in template
     assert 'MinContractPrice="${MIN_CONTRACT_PRICE:-0.25}"' in deploy_script
+    assert "FAIR_VALUE_LIVE_SMOKE_EVIDENCE" in deploy_script
+    assert "validate-fair-value-live-smoke.py" in deploy_script
     assert "MaxOrderDollars" not in template
     assert "MaxTickerExposureDollars" not in template
     assert "--max-ticker-exposure-dollars" not in template
@@ -289,6 +297,62 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "s3:GetObject" in template
     assert "s3:PutObject" in template
     assert "s3:DeleteObject" in template
+
+
+def test_fair_value_live_smoke_validator_requires_runtime_gate_evidence(tmp_path: Path) -> None:
+    script = Path("scripts/validate-fair-value-live-smoke.py")
+    passing = tmp_path / "passing.json"
+    passing.write_text(
+        json.dumps(
+            {
+                "p95_runtime_seconds": 44.9,
+                "overlapping_task_count": 0,
+                "stale_task_count": 0,
+                "max_quote_age_seconds": 15,
+                "min_contract_price": 0.25,
+                "min_edge": 0,
+                "task_definition_one_cycle": True,
+                "live_order_guards_preserved": True,
+                "schedule_state_before": "DISABLED",
+            }
+        ),
+        encoding="utf-8",
+    )
+    failing = tmp_path / "failing.json"
+    failing.write_text(
+        json.dumps(
+            {
+                "p95_runtime_seconds": 45,
+                "overlapping_task_count": 1,
+                "stale_task_count": 0,
+                "max_quote_age_seconds": 16,
+                "min_contract_price": 0.2,
+                "min_edge": 0.01,
+                "task_definition_one_cycle": False,
+                "live_order_guards_preserved": True,
+                "schedule_state_before": "ENABLED",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ok = subprocess.run(
+        [sys.executable, str(script), str(passing)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    bad = subprocess.run(
+        [sys.executable, str(script), str(failing)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert ok.returncode == 0
+    assert bad.returncode == 1
+    assert "p95_runtime_seconds" in bad.stderr
+    assert "schedule_state_before" in bad.stderr
 
 
 def test_runtime_config_status_reports_readable_active_config(monkeypatch) -> None:

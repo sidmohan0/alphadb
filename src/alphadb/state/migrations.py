@@ -582,6 +582,38 @@ LIVE_RUNTIME_MIN_CONTRACT_PRICE = Migration(
 )
 
 
+LIVE_RISK_ADMISSION_STATE = Migration(
+    version="0013_live_risk_admission_state",
+    statements=(
+        """
+        create table if not exists live_risk_admission_states (
+            strategy text not null,
+            live_risk_day date not null,
+            daily_loss_used_dollars numeric not null default 0
+                check (daily_loss_used_dollars >= 0),
+            open_exposure_dollars numeric not null default 0
+                check (open_exposure_dollars >= 0),
+            pending_exposure_dollars numeric not null default 0
+                check (pending_exposure_dollars >= 0),
+            per_market_exposure jsonb not null default '{}'::jsonb,
+            pending_reservations jsonb not null default '{}'::jsonb,
+            updated_at timestamptz not null,
+            version integer not null default 1 check (version >= 1),
+            status text not null default 'active'
+                check (status in ('active', 'locked', 'stale', 'reconciling')),
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            primary key (strategy, live_risk_day)
+        )
+        """,
+        """
+        create index if not exists live_risk_admission_states_updated_idx
+        on live_risk_admission_states(strategy, updated_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -595,4 +627,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     LIVE_RUN_STATUS,
     AGENT_FIRST_DASHBOARD,
     LIVE_RUNTIME_MIN_CONTRACT_PRICE,
+    LIVE_RISK_ADMISSION_STATE,
 )
