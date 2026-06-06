@@ -119,6 +119,8 @@ require_env PRIVATE_SUBNET_IDS
 require_env DATABASE_URL_SECRET_ARN
 require_env COCKPIT_PIN_SECRET_ARN
 require_env COCKPIT_COOKIE_SECRET_ARN
+require_env KALSHI_API_KEY_ID_SECRET_ARN
+require_env KALSHI_PRIVATE_KEY_PEM_SECRET_ARN
 
 ACCOUNT_ID="${AWS_ACCOUNT_ID:-}"
 if [[ -z "$ACCOUNT_ID" ]]; then
@@ -175,6 +177,8 @@ run aws --profile "$PROFILE" --region "$REGION" cloudformation deploy \
     DatabaseUrlSecretArn="$DATABASE_URL_SECRET_ARN" \
     CockpitPinSecretArn="$COCKPIT_PIN_SECRET_ARN" \
     CockpitCookieSecretArn="$COCKPIT_COOKIE_SECRET_ARN" \
+    KalshiApiKeyIdSecretArn="$KALSHI_API_KEY_ID_SECRET_ARN" \
+    KalshiPrivateKeyPemSecretArn="$KALSHI_PRIVATE_KEY_PEM_SECRET_ARN" \
     PrivateNamespaceName="$PRIVATE_NAMESPACE_NAME" \
     RuntimeMode="$RUNTIME_MODE" \
     AwsRegionValue="$REGION"

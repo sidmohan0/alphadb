@@ -29,6 +29,7 @@ from alphadb.live_runtime import (
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
 )
+from alphadb.live_orders import materialize_private_key_from_env
 from alphadb.performance import PerformanceSummaryRepository
 from alphadb.portfolio import cached_portfolio_balance_payload
 
@@ -290,6 +291,11 @@ class DashboardService:
 
 def dashboard_auth_config(settings: Settings) -> DashboardAuthConfig:
     return DashboardAuthConfig.from_settings(settings).validate()
+
+
+def load_dashboard_settings() -> Settings:
+    materialize_private_key_from_env()
+    return settings_from_env()
 
 
 def _path_parts(path: str) -> list[str]:
@@ -1050,7 +1056,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    settings = settings_from_env()
+    settings = load_dashboard_settings()
     port = args.port or int(settings.dashboard_port)
     service = DashboardService(settings=settings)
     server = ThreadingHTTPServer((args.host, port), make_handler(service))

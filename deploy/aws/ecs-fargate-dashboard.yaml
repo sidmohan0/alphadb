@@ -35,6 +35,12 @@ Parameters:
   CockpitCookieSecretArn:
     Type: String
     Description: Secrets Manager ARN whose value signs Cockpit remember-cookies.
+  KalshiApiKeyIdSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is KALSHI_API_KEY_ID.
+  KalshiPrivateKeyPemSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is the Kalshi private key PEM.
   PrivateNamespaceName:
     Type: String
     Default: alphadb.local
@@ -114,6 +120,8 @@ Resources:
                   - !Ref DatabaseUrlSecretArn
                   - !Ref CockpitPinSecretArn
                   - !Ref CockpitCookieSecretArn
+                  - !Ref KalshiApiKeyIdSecretArn
+                  - !Ref KalshiPrivateKeyPemSecretArn
 
   CockpitTaskRole:
     Type: AWS::IAM::Role
@@ -323,6 +331,10 @@ Resources:
               ValueFrom: !Ref CockpitPinSecretArn
             - Name: ALPHADB_DASHBOARD_COOKIE_SECRET
               ValueFrom: !Ref CockpitCookieSecretArn
+            - Name: KALSHI_API_KEY_ID
+              ValueFrom: !Ref KalshiApiKeyIdSecretArn
+            - Name: KALSHI_PRIVATE_KEY_PEM
+              ValueFrom: !Ref KalshiPrivateKeyPemSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:

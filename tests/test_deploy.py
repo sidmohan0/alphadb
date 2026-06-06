@@ -210,6 +210,8 @@ def test_dashboard_fargate_template_defines_public_cockpit_and_private_api() -> 
     assert "DatabaseUrlSecretArn" in template
     assert "CockpitPinSecretArn" in template
     assert "CockpitCookieSecretArn" in template
+    assert "KalshiApiKeyIdSecretArn" in template
+    assert "KalshiPrivateKeyPemSecretArn" in template
     assert "AWS::ServiceDiscovery::PrivateDnsNamespace" in template
     assert "AWS::ServiceDiscovery::Service" in template
     assert "Name: ALPHADB_API_BASE_URL" in cockpit_task
@@ -219,6 +221,10 @@ def test_dashboard_fargate_template_defines_public_cockpit_and_private_api() -> 
     assert "DATABASE_URL" not in cockpit_task
     assert "Name: DATABASE_URL" in api_task
     assert "Name: ALPHADB_DASHBOARD_PIN" in api_task
+    assert "Name: KALSHI_API_KEY_ID" in api_task
+    assert "Name: KALSHI_PRIVATE_KEY_PEM" in api_task
+    assert "Name: KALSHI_API_KEY_ID" not in cockpit_task
+    assert "Name: KALSHI_PRIVATE_KEY_PEM" not in cockpit_task
     assert "LoadBalancers:" not in api_service
     assert "ServiceRegistries:" in api_service
     assert "LoadBalancers:" in cockpit_service
@@ -240,6 +246,13 @@ def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secr
     assert "require_env DATABASE_URL_SECRET_ARN" in deploy_script
     assert "require_env COCKPIT_PIN_SECRET_ARN" in deploy_script
     assert "require_env COCKPIT_COOKIE_SECRET_ARN" in deploy_script
+    assert "require_env KALSHI_API_KEY_ID_SECRET_ARN" in deploy_script
+    assert "require_env KALSHI_PRIVATE_KEY_PEM_SECRET_ARN" in deploy_script
+    assert 'KalshiApiKeyIdSecretArn="$KALSHI_API_KEY_ID_SECRET_ARN"' in deploy_script
+    assert (
+        'KalshiPrivateKeyPemSecretArn="$KALSHI_PRIVATE_KEY_PEM_SECRET_ARN"'
+        in deploy_script
+    )
     assert "DATABASE_URL=" not in deploy_script
     assert "run_api_command alphadb-deploy migrate" in deploy_script
     assert "run_api_command alphadb-deploy seed-readiness --series KXBTC15M" in deploy_script
