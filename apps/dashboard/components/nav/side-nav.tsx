@@ -3,10 +3,11 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Activity, Database, FlaskConical, Layers, Zap } from "lucide-react"
+import { Activity, Database, FlaskConical, Layers, TrendingUp, Zap } from "lucide-react"
 
 const navItems = [
   { href: "/", label: "Live", icon: Activity },
+  { href: "/performance", label: "Performance", icon: TrendingUp },
   { href: "/strategies", label: "Strategies", icon: Layers },
   { href: "/data", label: "Data", icon: Database },
   { href: "/lab", label: "Lab", icon: FlaskConical },

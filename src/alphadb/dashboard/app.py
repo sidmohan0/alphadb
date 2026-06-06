@@ -29,6 +29,7 @@ from alphadb.live_runtime import (
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
 )
+from alphadb.performance import PerformanceSummaryRepository
 from alphadb.portfolio import cached_portfolio_balance_payload
 
 
@@ -37,6 +38,7 @@ StatusRepositoryFactory = Callable[[str], LiveRunStatusRepository]
 StrategyRepositoryFactory = Callable[[str], DashboardStrategyRepository]
 DataExplorerRepositoryFactory = Callable[[str], DashboardDataExplorerRepository]
 LabRepositoryFactory = Callable[[str], DashboardLabRepository]
+PerformanceRepositoryFactory = Callable[[str], PerformanceSummaryRepository]
 HealthCollector = Callable[[Settings], HealthReport]
 PortfolioBalanceProvider = Callable[[Settings], Mapping[str, Any]]
 
@@ -51,6 +53,7 @@ class DashboardService:
         DashboardDataExplorerRepository
     )
     lab_repository_factory: LabRepositoryFactory = DashboardLabRepository
+    performance_repository_factory: PerformanceRepositoryFactory = PerformanceSummaryRepository
     health_collector: HealthCollector = collect_health
     portfolio_balance_provider: PortfolioBalanceProvider = cached_portfolio_balance_payload
 
@@ -88,6 +91,13 @@ class DashboardService:
                 limit=8,
             ),
         }
+
+    def performance_payload(self) -> dict[str, Any]:
+        return dict(
+            self.performance_repository_factory(self.settings.database_url).summary(
+                strategy=FAIR_VALUE_LIVE_STRATEGY
+            )
+        )
 
     def save_config(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         config_repository = self.config_repository_factory(self.settings.database_url)
@@ -503,6 +513,9 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/api/health":
                     self._json_ok(service.api_health())
+                    return
+                if path == "/api/performance":
+                    self._json_ok(service.performance_payload())
                     return
                 if path == "/api/strategies":
                     self._json_ok(
