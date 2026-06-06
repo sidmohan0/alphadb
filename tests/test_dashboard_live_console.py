@@ -87,6 +87,16 @@ def service(repository: FakeConfigRepository) -> DashboardService:
         config_repository_factory=lambda database_url: repository,
         status_repository_factory=FakeStatusRepository,
         health_collector=ok_health,
+        portfolio_balance_provider=lambda settings: {
+            "status": "ok",
+            "source": "kalshi",
+            "portfolio_balance_dollars": 123.45,
+            "cash_dollars": 67.89,
+            "assets_dollars": 55.56,
+            "observed_at_utc": "2026-06-04T15:00:00+00:00",
+            "stale": False,
+            "detail": None,
+        },
     )
 
 
@@ -117,6 +127,9 @@ def test_live_payload_does_not_expose_dashboard_process_guard() -> None:
     assert "runtime_guard" not in payload
     assert payload["live_status"]["strategy"] == "fair_value_live"
     assert "summary" not in payload["live_status"]
+    assert payload["portfolio_balance"]["portfolio_balance_dollars"] == 123.45
+    assert payload["portfolio_balance"]["cash_dollars"] == 67.89
+    assert payload["portfolio_balance"]["assets_dollars"] == 55.56
 
 
 def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:
