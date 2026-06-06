@@ -24,3 +24,4 @@ Single-context repo: read `CONTEXT.md` and root `docs/adr/`. See `docs/agents/do
 - Prefer small, independently testable modules.
 - Keep secrets and generated data out of Git.
 - Use normal engineering branch prefixes such as `feat/`, `fix/`, `chore/`, and `docs/`.
+- Before changing strategy, model, or risk logic, create a short strategy diagnosis note unless the user explicitly asks for a direct implementation-only change. Emergency live-risk actions such as pause, stop, disabling live orders, or reducing exposure are exempt; see `docs/agents/strategy-diagnosis.md`.
