@@ -197,6 +197,64 @@ class LiveRiskAdmissionRepository:
                 row = cursor.fetchone()
         return None if row is None else state_from_row(row)
 
+    def create_zero_state_if_missing(
+        self,
+        *,
+        strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+        live_risk_day: date,
+        updated_at: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> tuple[LiveRiskAdmissionState, bool]:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        observed_at = ensure_utc(updated_at or datetime.now(UTC))
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    insert into live_risk_admission_states (
+                        strategy,
+                        live_risk_day,
+                        daily_loss_used_dollars,
+                        open_exposure_dollars,
+                        pending_exposure_dollars,
+                        per_market_exposure,
+                        pending_reservations,
+                        updated_at,
+                        version,
+                        status,
+                        metadata
+                    )
+                    values (%s, %s, 0, 0, 0, %s, %s, %s, 1, 'active', %s)
+                    on conflict (strategy, live_risk_day) do nothing
+                    returning *
+                    """,
+                    (
+                        strategy,
+                        live_risk_day,
+                        Jsonb({}),
+                        Jsonb({}),
+                        observed_at,
+                        Jsonb(dict(metadata or {})),
+                    ),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    connection.commit()
+                    return state_from_row(row), True
+                cursor.execute(
+                    """
+                    select *
+                    from live_risk_admission_states
+                    where strategy = %s and live_risk_day = %s
+                    """,
+                    (strategy, live_risk_day),
+                )
+                existing = cursor.fetchone()
+            connection.commit()
+        if existing is None:
+            raise RuntimeError("live risk admission state bootstrap returned no row")
+        return state_from_row(existing), False
+
     def admit_order(
         self,
         *,

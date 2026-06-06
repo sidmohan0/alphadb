@@ -431,6 +431,14 @@ def materialize_private_key_from_env(
     path = Path(default_path)
     path.write_text(pem.replace("\\n", "\n"), encoding="utf-8")
     path.chmod(0o600)
+    try:
+        load_private_key(path)
+    except Exception as exc:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise LiveOrderError("KALSHI_PRIVATE_KEY_PEM is not a valid RSA private key") from exc
     os.environ[path_env_var] = str(path)
     return path
 

@@ -123,7 +123,7 @@ class FairValueLiveTradingJob:
         self.order_client = order_client or HttpKalshiLiveOrderClient()
 
     def run(self, *, now: datetime | None = None) -> dict[str, Any]:
-        settings = self._settings or settings_from_env()
+        settings, credential_materialization = settings_with_materialized_private_key(self._settings)
         original_config = self.config
         generated_at = ensure_utc(now or datetime.now(UTC))
         run_id = f"fv_live_{generated_at.strftime('%Y%m%dT%H%M%SZ')}"
@@ -179,7 +179,10 @@ class FairValueLiveTradingJob:
                         live_risk_timezone=original_config.live_risk_timezone,
                         reason="live_run_lock_held",
                     ),
-                    runtime_guard=evaluate_runtime_guard(settings).as_dict(),
+                    runtime_guard=runtime_guard_with_credential_materialization(
+                        settings=settings,
+                        credential_materialization=credential_materialization,
+                    ).as_dict(),
                     live_run_lock=live_run_lock,
                     timer=timer,
                     require_postgres=False,
@@ -192,7 +195,10 @@ class FairValueLiveTradingJob:
                     settings=settings,
                 )
                 self.config = effective_config
-                guard = evaluate_runtime_guard(settings)
+                guard = runtime_guard_with_credential_materialization(
+                    settings=settings,
+                    credential_materialization=credential_materialization,
+                )
             with timer.phase("collection"):
                 collector = FairValueDecisionRowCollector(
                     kalshi_client=make_kalshi_client(self.config.source, settings),
@@ -229,18 +235,33 @@ class FairValueLiveTradingJob:
                 live_risk_timezone=self.config.live_risk_timezone,
             )
             admission_state: LiveRiskAdmissionState | None = None
-            if self.config.submit_live_orders:
+            risk_state_read: Mapping[str, Any] = {
+                "risk_state_bootstrapped": False,
+                "risk_state_read_reason": "risk_state_not_required",
+            }
+            should_prepare_risk_state = (
+                self.config.submit_live_orders
+                and guard.can_submit_live_orders
+                and selected_decision.get("decision") == "trade"
+            )
+            if should_prepare_risk_state:
                 with timer.phase("risk_state_read"):
-                    admission_state = live_risk_state_for_day(
+                    admission_state, risk_state_read = live_risk_state_for_admission(
                         settings=settings,
                         strategy=FAIR_VALUE_LIVE_STRATEGY,
                         live_risk_day=live_risk_day,
+                        generated_at=generated_at,
+                        run_id=run_id,
                     )
-            admission_daily_loss_accounting = live_risk_accounting_report(
-                admission_state,
-                generated_at=generated_at,
-                live_risk_timezone=self.config.live_risk_timezone,
-            )
+            admission_daily_loss_accounting = {
+                **live_risk_accounting_report(
+                    admission_state,
+                    generated_at=generated_at,
+                    live_risk_timezone=self.config.live_risk_timezone,
+                    stale_after_seconds=self.config.live_risk_state_stale_seconds,
+                ),
+                **dict(risk_state_read),
+            }
             live_attempt, risk_transition, order_submit_at = self._submit_one_cycle_attempt(
                 decision=selected_decision,
                 decision_row=selected_row,
@@ -270,6 +291,7 @@ class FairValueLiveTradingJob:
                 final_state or admission_state,
                 generated_at=generated_at,
                 live_risk_timezone=self.config.live_risk_timezone,
+                stale_after_seconds=self.config.live_risk_state_stale_seconds,
             )
             live_attempts_payload = {
                 "schema_version": FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA,
@@ -351,6 +373,7 @@ class FairValueLiveTradingJob:
             else 0.0
         )
         risk_before = admission_state.total_risk_used_dollars if admission_state else 0.0
+        freshness = live_decision_freshness(decision_row, generated_at=generated_at)
         base = {
             "attempt_id": f"fv_live_order_{uuid4().hex[:12]}",
             "run_id": run_id,
@@ -378,7 +401,10 @@ class FairValueLiveTradingJob:
                     or 0
                 ),
             },
-            "freshness": live_decision_freshness(decision_row, generated_at=generated_at),
+            "quote_source": (decision_row or {}).get("quote_source"),
+            "quote_seen_at": freshness.get("quote_seen_at"),
+            "quote_age_seconds": freshness.get("quote_age_seconds"),
+            "freshness": freshness,
             "runtime_guard": dict(runtime_guard),
             "live_run_lock": live_run_lock.as_dict(),
             "attempt_index": 0,
@@ -559,6 +585,7 @@ class FairValueLiveTradingJob:
         collected_counts = as_mapping((collected or {}).get("counts"))
         selected_trade = (selected_decision or {}).get("decision") == "trade"
         latest_attempt = dict(live_attempts[-1]) if live_attempts else {}
+        latest_freshness = as_mapping(latest_attempt.get("freshness"))
         manifest = {
             "schema_version": FAIR_VALUE_LIVE_JOB_SCHEMA,
             "run_id": run_id,
@@ -577,12 +604,27 @@ class FairValueLiveTradingJob:
                 "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
                 "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
+                "min_edge": self.config.min_edge,
                 "min_contract_price": self.config.min_contract_price,
                 "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
                 "daily_loss_accounting": dict(daily_loss_accounting),
                 "runtime_guard": dict(runtime_guard),
                 "live_run_lock": live_run_lock.as_dict(),
                 "live_status_materialized": False,
+            },
+            "executable_quote": {
+                "source": latest_attempt.get("quote_source"),
+                "quote_seen_at": latest_attempt.get("quote_seen_at"),
+                "max_quote_age_seconds": latest_attempt.get("quote_age_seconds"),
+                "freshness": dict(latest_freshness),
+            },
+            "live_risk_admission_state": {
+                "status": daily_loss_accounting.get("risk_state_status"),
+                "reason": daily_loss_accounting.get("risk_state_reason"),
+                "updated_at": daily_loss_accounting.get("risk_state_updated_at"),
+                "version": daily_loss_accounting.get("risk_state_version"),
+                "bootstrapped": daily_loss_accounting.get("risk_state_bootstrapped"),
+                "read_reason": daily_loss_accounting.get("risk_state_read_reason"),
             },
             "selected_decision": dict(selected_decision or {}),
             "selected_row": dict(selected_row or {}),
@@ -876,6 +918,50 @@ def runtime_config_snapshot(config: FairValueLiveTradingJobConfig) -> dict[str, 
     }
 
 
+def settings_with_materialized_private_key(
+    settings: Settings | None,
+) -> tuple[Settings, dict[str, Any]]:
+    materialization: dict[str, Any] = {
+        "private_key_pem_present": bool(os.environ.get("KALSHI_PRIVATE_KEY_PEM")),
+        "private_key_path_materialized": False,
+        "credential_error": None,
+    }
+    if settings is not None and settings.kalshi_private_key_path:
+        return settings, materialization
+    try:
+        materialized_path = materialize_private_key_from_env()
+    except Exception as exc:
+        materialization["credential_error"] = "invalid_kalshi_credentials"
+        materialization["error_type"] = type(exc).__name__
+        return settings or settings_from_env(), materialization
+    effective = settings or settings_from_env()
+    if materialized_path is not None and not effective.kalshi_private_key_path:
+        effective = replace(effective, kalshi_private_key_path=str(materialized_path))
+        materialization["private_key_path_materialized"] = True
+    return effective, materialization
+
+
+def runtime_guard_with_credential_materialization(
+    *,
+    settings: Settings,
+    credential_materialization: Mapping[str, Any],
+):
+    guard = evaluate_runtime_guard(settings)
+    if (
+        credential_materialization.get("credential_error")
+        and guard.runtime_mode.value == "gated-live"
+        and settings.enable_live_orders
+    ):
+        return replace(
+            guard,
+            live_enabled=False,
+            can_submit_live_orders=False,
+            denial_reason=str(credential_materialization["credential_error"]),
+            credentials_present=False,
+        )
+    return guard
+
+
 def lock_held_attempt(
     *,
     run_id: str,
@@ -1034,11 +1120,59 @@ def live_risk_state_for_day(
         return None
 
 
+def live_risk_state_for_admission(
+    *,
+    settings: Settings,
+    strategy: str,
+    live_risk_day: date,
+    generated_at: datetime,
+    run_id: str,
+) -> tuple[LiveRiskAdmissionState | None, dict[str, Any]]:
+    repository = LiveRiskAdmissionRepository(settings.database_url)
+    try:
+        state = repository.get_state(strategy=strategy, live_risk_day=live_risk_day)
+    except Exception as exc:
+        return None, {
+            "risk_state_bootstrapped": False,
+            "risk_state_read_reason": "risk_state_unavailable",
+            "risk_state_error_type": type(exc).__name__,
+        }
+    if state is not None:
+        return state, {
+            "risk_state_bootstrapped": False,
+            "risk_state_read_reason": "existing_current_live_risk_day",
+        }
+    try:
+        state, created = repository.create_zero_state_if_missing(
+            strategy=strategy,
+            live_risk_day=live_risk_day,
+            updated_at=generated_at,
+            metadata={
+                "bootstrap_reason": "missing_current_live_risk_day",
+                "bootstrap_run_id": run_id,
+                "full_reconciliation_performed": False,
+            },
+        )
+    except Exception as exc:
+        return None, {
+            "risk_state_bootstrapped": False,
+            "risk_state_read_reason": "risk_state_unavailable",
+            "risk_state_error_type": type(exc).__name__,
+        }
+    return state, {
+        "risk_state_bootstrapped": created,
+        "risk_state_read_reason": "bootstrapped_missing_current_live_risk_day"
+        if created
+        else "existing_current_live_risk_day",
+    }
+
+
 def live_risk_accounting_report(
     state: LiveRiskAdmissionState | None,
     *,
     generated_at: datetime,
     live_risk_timezone: str,
+    stale_after_seconds: int = DEFAULT_LIVE_RISK_STALE_SECONDS,
 ) -> dict[str, Any]:
     live_risk_day, window_start_utc, window_end_utc = live_risk_window(
         generated_at=generated_at,
@@ -1056,7 +1190,7 @@ def live_risk_accounting_report(
     invalid_reason = state_denial_reason(
         state,
         now=generated_at,
-        stale_after_seconds=DEFAULT_LIVE_RISK_STALE_SECONDS,
+        stale_after_seconds=stale_after_seconds,
     )
     return {
         "schema_version": FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA,
