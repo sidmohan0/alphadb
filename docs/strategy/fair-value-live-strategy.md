@@ -2,13 +2,16 @@
 
 ## Heartbeat Snapshot
 
-Latest checked run: `fv_live_20260604T184914Z`.
+Latest checked live runtime state: paused after the overlapping-worker incident.
 
-- AWS rule: `alphadb-fair-value-live` is `ENABLED` at `rate(1 minute)`.
-- Live orders: enabled through `--submit-live-orders`, `ALPHADB_ENABLE_LIVE_ORDERS=1`, and `ALPHADB_HUMAN_CUTOVER_APPROVED=1`.
-- Latest order attempt: submitted 17 NO contracts on `KXBTC15M-26JUN041500-00`, but fill count was 0.
-- Current live P&L: `-$13.1152`.
-- Current settlement: reconciled, with `$0` unsettled exposure.
+- AWS rule: `alphadb-fair-value-live` must remain `DISABLED` until the
+  one-cycle smoke gate passes.
+- Deployed live config must preserve `min_contract_price=0.25` and
+  `min_edge=0`.
+- Prior P&L evidence is runtime-contaminated by overlapping five-minute workers
+  on a one-minute schedule.
+- Current runtime target: one scheduled invocation makes one bounded current
+  decision, writes compact evidence, and exits in under 45 seconds at p95.
 
 ## Strategy In One Sentence
 
@@ -57,9 +60,10 @@ selected edge is below `min_edge`, it skips with `edge_below_min`. In AWS live
 operation, both values come from the active dashboard-owned Postgres runtime
 config.
 
-Order sizing is configured by the dashboard-owned runtime config and recorded in
-each run manifest with config id, version, and full non-secret snapshot. The
-seeded canary defaults are:
+Order sizing is configured by the dashboard-owned runtime config and admitted by
+compact Live risk admission state in Operational State. Each run manifest
+records config id, version, full non-secret snapshot, quote freshness, risk
+admission result, and phase timings. The seeded canary defaults are:
 
 - Max order dollars: `$5`.
 - Max exposure per market: `$5`.
@@ -68,8 +72,10 @@ seeded canary defaults are:
 - Min contract price: `$0.25`.
 - Max markets: `20`.
 - Execution style: taker-only IOC.
-- No-fill attempts do not consume per-market exposure.
-- Filled/partially filled attempts consume per-market exposure.
+- No-fill attempts release pending exposure.
+- Filled/partially filled attempts convert pending exposure into open exposure.
+- Unknown exchange responses keep pending exposure reserved until reconciliation
+  refreshes state.
 
 Change the non-secret values in the dashboard and click `Save`. The next AWS
 run reads the latest active Postgres config. Secrets and infrastructure wiring
@@ -79,29 +85,33 @@ remain in AWS/Secrets Manager.
 
 ```mermaid
 flowchart TD
-    A["Every minute AWS trigger"] --> B["Read active dashboard config from Postgres"]
-    B --> C["Fetch open KXBTC15M markets from Kalshi"]
-    C --> D["Fetch live Coinbase BTC candles"]
-    D --> E["Build decision row: asks, threshold, time left, volatility, momentum"]
-    E --> F["Compute p_yes with threshold/volatility fair-value model"]
-    F --> G["Compute YES edge and NO edge after taker fees"]
-    G --> H["Pick side with larger edge"]
+    A["Every minute AWS trigger"] --> B{"Acquire live-decision lock"}
+    B -- "Held" --> C["Skip: live_run_lock_held; write compact evidence"]
+    B -- "Acquired" --> D["Read active dashboard config from Postgres"]
+    D --> E["Fetch current KXBTC15M market quotes and Coinbase context"]
+    E --> F{"Fresh quote and Coinbase context?"}
+    F -- "No" --> G["Skip: quote_stale or coinbase_context_stale"]
+    F -- "Yes" --> H["Compute one fair-value decision"]
     H --> I{"Selected price >= min_contract_price?"}
     I -- "No" --> J["Skip: price_below_min_contract"]
     I -- "Yes" --> K{"Selected edge >= min_edge?"}
     K -- "No" --> L["Skip: edge_below_min"]
-    K -- "Yes" --> M{"Caps allow order?"}
-    M -- "No" --> N["Skip: loss cap or market exposure cap"]
-    M -- "Yes" --> O["Submit taker IOC live order"]
-    O --> P{"Filled?"}
-    P -- "No" --> Q["No fill; exposure unchanged; retry allowed next minute"]
-    P -- "Yes/partial" --> R["Record fill, cost, fees, exposure"]
-    Q --> S["Write S3 report and Postgres live status"]
-    R --> S
-    J --> S
-    L --> S
-    N --> S
-    S --> T["Next minute repeats"]
+    K -- "Yes" --> M{"Fresh Live risk admission state?"}
+    M -- "No" --> N["Skip: risk_state_*"]
+    M -- "Yes" --> O["Atomically reserve pending exposure"]
+    O --> P["Submit taker IOC live order"]
+    P --> Q{"Immediate response"}
+    Q -- "No fill/reject" --> R["Release pending exposure"]
+    Q -- "Fill/partial" --> S["Convert pending to open exposure"]
+    Q -- "Unknown/error" --> T["Keep pending reserved"]
+    C --> U["Write compact manifest with phase timers"]
+    G --> U
+    J --> U
+    L --> U
+    N --> U
+    R --> U
+    S --> U
+    T --> U
 ```
 
 ## What Replay Means Here

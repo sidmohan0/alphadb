@@ -168,6 +168,12 @@ Resources:
             - !Ref MinEdgeValues
             - --min-contract-price
             - !Ref MinContractPrice
+            - --quote-stale-seconds
+            - "15"
+            - --coinbase-feature-stale-seconds
+            - "90"
+            - --live-risk-state-stale-seconds
+            - "60"
             - --runtime-config-source
             - postgres
             - --submit-live-orders
