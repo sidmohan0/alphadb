@@ -29,6 +29,7 @@ from alphadb.live_runtime import (
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
 )
+from alphadb.portfolio import cached_portfolio_balance_payload
 
 
 ConfigRepositoryFactory = Callable[[str], LiveRuntimeConfigRepository]
@@ -37,6 +38,7 @@ StrategyRepositoryFactory = Callable[[str], DashboardStrategyRepository]
 DataExplorerRepositoryFactory = Callable[[str], DashboardDataExplorerRepository]
 LabRepositoryFactory = Callable[[str], DashboardLabRepository]
 HealthCollector = Callable[[Settings], HealthReport]
+PortfolioBalanceProvider = Callable[[Settings], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class DashboardService:
     )
     lab_repository_factory: LabRepositoryFactory = DashboardLabRepository
     health_collector: HealthCollector = collect_health
+    portfolio_balance_provider: PortfolioBalanceProvider = cached_portfolio_balance_payload
 
     def api_health(self) -> dict[str, Any]:
         report = self.health_collector(self.settings)
@@ -78,6 +81,7 @@ class DashboardService:
             },
             "active_config": active.as_dict(),
             "config_history": [revision.as_dict() for revision in history],
+            "portfolio_balance": dict(self.portfolio_balance_provider(self.settings)),
             "live_status": live_status,
             "recent_runs": status_repository.recent_details(
                 strategy=FAIR_VALUE_LIVE_STRATEGY,
