@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -301,40 +302,31 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
 
 def test_fair_value_live_smoke_validator_requires_runtime_gate_evidence(tmp_path: Path) -> None:
     script = Path("scripts/validate-fair-value-live-smoke.py")
-    passing = tmp_path / "passing.json"
-    passing.write_text(
-        json.dumps(
-            {
-                "p95_runtime_seconds": 44.9,
-                "overlapping_task_count": 0,
-                "stale_task_count": 0,
-                "max_quote_age_seconds": 15,
-                "min_contract_price": 0.25,
-                "min_edge": 0,
-                "task_definition_one_cycle": True,
-                "live_order_guards_preserved": True,
-                "schedule_state_before": "DISABLED",
-            }
-        ),
-        encoding="utf-8",
-    )
-    failing = tmp_path / "failing.json"
-    failing.write_text(
-        json.dumps(
-            {
-                "p95_runtime_seconds": 45,
-                "overlapping_task_count": 1,
-                "stale_task_count": 0,
-                "max_quote_age_seconds": 16,
-                "min_contract_price": 0.2,
-                "min_edge": 0.01,
-                "task_definition_one_cycle": False,
-                "live_order_guards_preserved": True,
-                "schedule_state_before": "ENABLED",
-            }
-        ),
-        encoding="utf-8",
-    )
+    passing_payload = {
+        "p95_runtime_seconds": 44.9,
+        "overlapping_task_count": 0,
+        "stale_task_count": 0,
+        "executable_quote": {
+            "source": "kalshi_orderbook",
+            "max_quote_age_seconds": 15,
+        },
+        "runtime_guard": {
+            "credentials_present": True,
+            "can_submit_live_orders": True,
+        },
+        "live_risk_admission_state": {
+            "status": "active",
+            "reason": None,
+        },
+        "runtime_controls": {
+            "min_contract_price": 0.25,
+            "min_edge": 0,
+        },
+        "task_definition_one_cycle": True,
+        "live_order_guards_preserved": True,
+        "schedule_state_before": "DISABLED",
+    }
+    passing = write_smoke_payload(tmp_path, "passing", passing_payload)
 
     ok = subprocess.run(
         [sys.executable, str(script), str(passing)],
@@ -342,17 +334,75 @@ def test_fair_value_live_smoke_validator_requires_runtime_gate_evidence(tmp_path
         capture_output=True,
         text=True,
     )
-    bad = subprocess.run(
-        [sys.executable, str(script), str(failing)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
 
     assert ok.returncode == 0
-    assert bad.returncode == 1
-    assert "p95_runtime_seconds" in bad.stderr
-    assert "schedule_state_before" in bad.stderr
+
+    cases = {
+        "p95_runtime": (
+            lambda payload: payload.update({"p95_runtime_seconds": 45}),
+            "p95_runtime_seconds",
+        ),
+        "quote_age": (
+            lambda payload: payload["executable_quote"].update({"max_quote_age_seconds": 16}),
+            "executable quote age",
+        ),
+        "credentials": (
+            lambda payload: payload["runtime_guard"].update({"credentials_present": False}),
+            "credentials_present",
+        ),
+        "live_order_guards": (
+            lambda payload: payload.update({"live_order_guards_preserved": False}),
+            "live_order_guards_preserved",
+        ),
+        "risk_state": (
+            lambda payload: payload["live_risk_admission_state"].update(
+                {"status": "active", "reason": "risk_state_stale"}
+            ),
+            "live risk admission state must be fresh",
+        ),
+        "schedule": (
+            lambda payload: payload.update({"schedule_state_before": "ENABLED"}),
+            "schedule_state_before",
+        ),
+        "min_contract_price": (
+            lambda payload: payload["runtime_controls"].update({"min_contract_price": 0.2}),
+            "min_contract_price",
+        ),
+        "min_edge": (
+            lambda payload: payload["runtime_controls"].update({"min_edge": 0.01}),
+            "min_edge",
+        ),
+        "overlap": (
+            lambda payload: payload.update({"overlapping_task_count": 1}),
+            "overlapping_task_count",
+        ),
+        "stale_tasks": (
+            lambda payload: payload.update({"stale_task_count": 1}),
+            "stale_task_count",
+        ),
+        "one_cycle": (
+            lambda payload: payload.update({"task_definition_one_cycle": False}),
+            "task_definition_one_cycle",
+        ),
+    }
+    for name, (mutate, expected) in cases.items():
+        payload = deepcopy(passing_payload)
+        mutate(payload)
+        path = write_smoke_payload(tmp_path, name, payload)
+        bad = subprocess.run(
+            [sys.executable, str(script), str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert bad.returncode == 1
+        assert expected in bad.stderr
+
+
+def write_smoke_payload(tmp_path: Path, name: str, payload: dict) -> Path:
+    path = tmp_path / f"{name}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def test_runtime_config_status_reports_readable_active_config(monkeypatch) -> None:

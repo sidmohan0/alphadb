@@ -161,14 +161,35 @@ class FairValueDecisionRowCollector:
             or market.get("expiration_time"),
             open_time + timedelta(minutes=self.spec.horizon_minutes),
         )
-        yes_ask = quote_price(market, ("yes_ask_dollars", "yes_ask", "yes_price"))
-        no_ask = quote_price(market, ("no_ask_dollars", "no_ask", "no_price"))
+        market_list_yes_ask = quote_price(market, ("yes_ask_dollars", "yes_ask", "yes_price"))
+        market_list_no_ask = quote_price(market, ("no_ask_dollars", "no_ask", "no_price"))
         threshold = payout_threshold(market)
-        quote_observed_at = parse_kalshi_datetime(market.get("updated_time"), now)
+        market_metadata_updated_at = parse_kalshi_datetime(market.get("updated_time"), now)
         try:
             orderbook = self.kalshi_client.get_orderbook(market_ticker)
         except Exception as exc:
             return skip_row(base, "missing_quote", error_type=type(exc).__name__, error_message=str(exc))
+        quote_observed_at = now
+        if threshold is None:
+            return skip_row(
+                {
+                    **base,
+                    "market_open_time": open_time.isoformat(),
+                    "close_time": close_time.isoformat(),
+                    "yes_ask": market_list_yes_ask,
+                    "no_ask": market_list_no_ask,
+                    "quote_observed_at": quote_observed_at.isoformat(),
+                    "market_metadata_updated_at": market_metadata_updated_at.isoformat(),
+                    "market_list_yes_ask": market_list_yes_ask,
+                    "market_list_no_ask": market_list_no_ask,
+                    "orderbook_observed": True,
+                    "orderbook_shape": orderbook_shape(orderbook),
+                },
+                "unsupported_market_shape",
+            )
+        executable_quotes = executable_orderbook_quotes(orderbook)
+        yes_ask = executable_quotes["yes_ask"]
+        no_ask = executable_quotes["no_ask"]
         if yes_ask is None or no_ask is None:
             return skip_row(
                 {
@@ -176,22 +197,14 @@ class FairValueDecisionRowCollector:
                     "market_open_time": open_time.isoformat(),
                     "close_time": close_time.isoformat(),
                     "quote_observed_at": quote_observed_at.isoformat(),
-                },
-                "missing_quote",
-            )
-        if threshold is None:
-            return skip_row(
-                {
-                    **base,
-                    "market_open_time": open_time.isoformat(),
-                    "close_time": close_time.isoformat(),
-                    "yes_ask": yes_ask,
-                    "no_ask": no_ask,
-                    "quote_observed_at": quote_observed_at.isoformat(),
+                    "market_metadata_updated_at": market_metadata_updated_at.isoformat(),
+                    "market_list_yes_ask": market_list_yes_ask,
+                    "market_list_no_ask": market_list_no_ask,
                     "orderbook_observed": True,
                     "orderbook_shape": orderbook_shape(orderbook),
+                    "quote_source": "kalshi_orderbook",
                 },
-                "unsupported_market_shape",
+                "missing_orderbook_quote",
             )
 
         try:
@@ -205,6 +218,10 @@ class FairValueDecisionRowCollector:
                     "yes_ask": yes_ask,
                     "no_ask": no_ask,
                     "quote_observed_at": quote_observed_at.isoformat(),
+                    "market_metadata_updated_at": market_metadata_updated_at.isoformat(),
+                    "market_list_yes_ask": market_list_yes_ask,
+                    "market_list_no_ask": market_list_no_ask,
+                    **executable_quotes,
                     "payout_threshold": threshold,
                 },
                 "missing_feature_data",
@@ -221,9 +238,14 @@ class FairValueDecisionRowCollector:
             "yes_ask": yes_ask,
             "no_ask": no_ask,
             "quote_observed_at": quote_observed_at.isoformat(),
+            "quote_source": "kalshi_orderbook",
+            "market_metadata_updated_at": market_metadata_updated_at.isoformat(),
+            "market_list_yes_ask": market_list_yes_ask,
+            "market_list_no_ask": market_list_no_ask,
             "payout_threshold": threshold,
             "orderbook_observed": True,
             "orderbook_shape": orderbook_shape(orderbook),
+            **executable_quotes,
             **features,
             **feature_metadata,
         }
@@ -339,10 +361,54 @@ def quote_price(market: Mapping[str, Any], keys: Sequence[str]) -> float | None:
     return None
 
 
+def executable_orderbook_quotes(orderbook: Mapping[str, Any]) -> dict[str, float | None]:
+    payload = orderbook_payload(orderbook)
+    yes_bid = first_level_contract_price(payload.get("yes_dollars") or payload.get("yes") or [])
+    no_bid = first_level_contract_price(payload.get("no_dollars") or payload.get("no") or [])
+    yes_ask = round(1.0 - no_bid, 6) if no_bid is not None else None
+    no_ask = round(1.0 - yes_bid, 6) if yes_bid is not None else None
+    return {
+        "yes_ask": yes_ask,
+        "no_ask": no_ask,
+        "orderbook_yes_bid": yes_bid,
+        "orderbook_no_bid": no_bid,
+    }
+
+
+def orderbook_payload(orderbook: Mapping[str, Any]) -> Mapping[str, Any]:
+    if isinstance(orderbook.get("orderbook_fp"), Mapping):
+        return orderbook["orderbook_fp"]
+    if isinstance(orderbook.get("orderbook"), Mapping):
+        nested = orderbook["orderbook"]
+        if isinstance(nested.get("orderbook_fp"), Mapping):
+            return nested["orderbook_fp"]
+        return nested
+    return orderbook
+
+
+def first_level_contract_price(levels: Any) -> float | None:
+    price = first_level_price(levels)
+    if price is None:
+        return None
+    price = price / 100.0 if price > 1.0 else price
+    if price <= 0.0 or price >= 1.0:
+        return None
+    return round(price, 6)
+
+
+def first_level_price(levels: Any) -> float | None:
+    if not levels:
+        return None
+    first = levels[0]
+    if not isinstance(first, Sequence) or isinstance(first, (str, bytes)) or not first:
+        return None
+    return optional_float(first[0])
+
+
 def orderbook_shape(orderbook: Mapping[str, Any]) -> dict[str, Any]:
-    payload = orderbook.get("orderbook_fp") if isinstance(orderbook.get("orderbook_fp"), Mapping) else orderbook
-    yes = payload.get("yes_dollars") if isinstance(payload, Mapping) else None
-    no = payload.get("no_dollars") if isinstance(payload, Mapping) else None
+    payload = orderbook_payload(orderbook)
+    yes = (payload.get("yes_dollars") or payload.get("yes")) if isinstance(payload, Mapping) else None
+    no = (payload.get("no_dollars") or payload.get("no")) if isinstance(payload, Mapping) else None
     return {
         "yes_levels": len(yes) if isinstance(yes, list) else 0,
         "no_levels": len(no) if isinstance(no, list) else 0,

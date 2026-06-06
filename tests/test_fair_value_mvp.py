@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import psycopg
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from alphadb.collectors.coinbase import FixtureCoinbaseClient
 from alphadb.collectors.kalshi_rest import FixtureKalshiRestClient
@@ -237,7 +240,7 @@ def test_live_fair_value_collector_outputs_decision_rows_without_orders() -> Non
                 "status": "open",
                 "open_time": (now - timedelta(minutes=10)).isoformat(),
                 "close_time": (now + timedelta(minutes=5)).isoformat(),
-                "updated_time": (now - timedelta(seconds=1)).isoformat(),
+                "updated_time": (now - timedelta(minutes=5)).isoformat(),
                 "title": "Bitcoin above $100?",
                 "payout_threshold": "100.00",
                 "yes_ask_dollars": "0.40",
@@ -269,7 +272,12 @@ def test_live_fair_value_collector_outputs_decision_rows_without_orders() -> Non
     assert row["row_type"] == "decision"
     assert row["p_yes"] > 0.5
     assert row["no_lookahead_source_check"] is True
-    assert row["yes_ask"] == 0.40
+    assert row["yes_ask"] == 0.41
+    assert row["no_ask"] == 0.61
+    assert row["quote_source"] == "kalshi_orderbook"
+    assert row["quote_observed_at"] == now.isoformat()
+    assert row["market_metadata_updated_at"] == (now - timedelta(minutes=5)).isoformat()
+    assert row["market_list_yes_ask"] == 0.40
 
 
 def test_live_fair_value_collector_records_skip_reasons() -> None:
@@ -305,6 +313,42 @@ def test_live_fair_value_collector_records_skip_reasons() -> None:
     assert payload["counts"]["skips"] == 1
     assert payload["skip_reasons"] == [{"reason": "unsupported_market_shape", "count": 1}]
     assert payload["orders_placed"] == 0
+
+
+def test_live_fair_value_collector_skips_missing_orderbook_quotes() -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-MISSING-ORDERBOOK"
+    kalshi = FixtureKalshiRestClient(
+        markets=[
+            {
+                "ticker": ticker,
+                "series_ticker": "KXBTC15M",
+                "status": "open",
+                "open_time": (now - timedelta(minutes=10)).isoformat(),
+                "close_time": (now + timedelta(minutes=5)).isoformat(),
+                "updated_time": (now - timedelta(minutes=5)).isoformat(),
+                "title": "Bitcoin above $100?",
+                "payout_threshold": "100.00",
+                "yes_ask_dollars": "0.40",
+                "no_ask_dollars": "0.60",
+            }
+        ],
+        orderbooks={ticker: {"orderbook_fp": {"yes_dollars": [], "no_dollars": []}}},
+    )
+
+    payload = (
+        FairValueDecisionRowCollector(
+            kalshi_client=kalshi,
+            coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+            config=FairValueDecisionRowCollectorConfig(max_markets=1),
+        )
+        .collect(now=now)
+        .as_dict()
+    )
+
+    assert payload["counts"]["skips"] == 1
+    assert payload["skip_reasons"] == [{"reason": "missing_orderbook_quote", "count": 1}]
+    assert payload["rows"][0]["quote_source"] == "kalshi_orderbook"
 
 
 def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
@@ -379,6 +423,9 @@ def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
     assert manifest["runtime_controls"]["report_only"] is False
     assert manifest["runtime_controls"]["live_orders_enabled"] is True
     assert manifest["runtime_controls"]["orders_placed"] == 1
+    assert manifest["runtime_controls"]["admission_daily_loss_accounting"][
+        "risk_state_bootstrapped"
+    ] is False
     assert client.requests[0]["time_in_force"] == "immediate_or_cancel"
     assert float(client.requests[0]["count"]) >= 1
     assert manifest["hot_path_scope"] == "one_current_decision_no_replay_no_walk_forward_no_full_history"
@@ -392,6 +439,83 @@ def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
     assert reconciliation["scope"] == "current_attempt_compact"
     assert reconciliation["settlement"]["status"] == "unreconciled"
     assert reconciliation["pnl"]["filled_contracts"] == 2
+
+
+def test_live_trading_job_materializes_aws_pem_before_runtime_guard(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-PEM"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now)
+    monkeypatch.setenv("ALPHADB_RUNTIME_MODE", "gated-live")
+    monkeypatch.setenv("ALPHADB_ENABLE_LIVE_ORDERS", "1")
+    monkeypatch.setenv("ALPHADB_HUMAN_CUTOVER_APPROVED", "1")
+    monkeypatch.setenv("KALSHI_API_KEY_ID", "key-id")
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.setenv("KALSHI_PRIVATE_KEY_PEM", sample_private_key_pem())
+    client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        order_client=client,
+    ).run(now=now)
+    os.environ.pop("KALSHI_PRIVATE_KEY_PATH", None)
+
+    guard = manifest["runtime_controls"]["runtime_guard"]
+    assert guard["credentials_present"] is True
+    assert guard["can_submit_live_orders"] is True
+    assert len(client.requests) == 1
+    assert "BEGIN RSA PRIVATE KEY" not in json.dumps(manifest)
+
+
+def test_live_trading_job_fails_closed_for_invalid_aws_pem(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-BAD-PEM"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now)
+    monkeypatch.setenv("ALPHADB_RUNTIME_MODE", "gated-live")
+    monkeypatch.setenv("ALPHADB_ENABLE_LIVE_ORDERS", "1")
+    monkeypatch.setenv("ALPHADB_HUMAN_CUTOVER_APPROVED", "1")
+    monkeypatch.setenv("KALSHI_API_KEY_ID", "key-id")
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.setenv("KALSHI_PRIVATE_KEY_PEM", "not a private key")
+    client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    guard = manifest["runtime_controls"]["runtime_guard"]
+    assert client.requests == []
+    assert guard["credentials_present"] is False
+    assert guard["can_submit_live_orders"] is False
+    assert guard["denial_reason"] == "invalid_kalshi_credentials"
+    assert attempts["attempts"][0]["reason"] == "invalid_kalshi_credentials"
 
 
 def test_live_trading_cli_uses_env_caps_when_flags_are_omitted(
@@ -524,12 +648,12 @@ def test_live_trading_job_records_replay_skip_as_live_attempt(
     assert attempts["skip_reasons"] == [{"reason": "edge_below_min", "count": 1}]
 
 
-def test_live_trading_job_fails_closed_when_risk_state_is_missing(
+def test_live_trading_job_bootstraps_missing_current_live_risk_day_state(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
-    ticker = "KXBTC15M-FV-MISSING-RISK"
+    ticker = "KXBTC15M-FV-BOOTSTRAP-RISK"
     install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
     delete_live_risk_states(settings_from_env().database_url)
     client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
@@ -550,18 +674,65 @@ def test_live_trading_job_fails_closed_when_risk_state_is_missing(
     ).run(now=now)
 
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
-    assert client.requests == []
-    assert attempts["attempts"][0]["status"] == "skipped"
-    assert attempts["attempts"][0]["reason"] == "risk_state_missing"
+    assert len(client.requests) == 1
+    assert attempts["admission_daily_loss_accounting"]["risk_state_bootstrapped"] is True
+    assert (
+        attempts["admission_daily_loss_accounting"]["risk_state_read_reason"]
+        == "bootstrapped_missing_current_live_risk_day"
+    )
+    assert attempts["attempts"][0]["status"] == "submitted"
+    assert attempts["attempts"][0]["risk_admission"]["status"] == "approved"
+    state = live_risk_state(now=now)
+    assert state.metadata["bootstrap_reason"] == "missing_current_live_risk_day"
+    assert state.metadata["full_reconciliation_performed"] is False
 
 
-def test_live_trading_job_skips_stale_quote_before_risk_admission(
+def test_live_trading_job_does_not_bootstrap_over_stale_risk_state(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
-    ticker = "KXBTC15M-FV-STALE-QUOTE"
-    install_live_job_fixture(monkeypatch, now=now - timedelta(minutes=2), ticker=ticker)
+    ticker = "KXBTC15M-FV-STALE-RISK"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now - timedelta(minutes=5))
+    client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            live_risk_state_stale_seconds=60,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    assert client.requests == []
+    assert attempts["admission_daily_loss_accounting"]["risk_state_bootstrapped"] is False
+    assert attempts["admission_daily_loss_accounting"]["risk_state_reason"] == "risk_state_stale"
+    assert attempts["attempts"][0]["status"] == "skipped"
+    assert attempts["attempts"][0]["reason"] == "risk_state_stale"
+
+
+def test_live_trading_job_uses_orderbook_freshness_not_stale_market_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-FRESH-ORDERBOOK"
+    install_live_job_fixture(
+        monkeypatch,
+        now=now,
+        ticker=ticker,
+        market_updated_at=now - timedelta(minutes=2),
+    )
     seed_live_risk_state(now=now)
     client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
 
@@ -581,9 +752,13 @@ def test_live_trading_job_skips_stale_quote_before_risk_admission(
     ).run(now=now)
 
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
-    assert client.requests == []
-    assert attempts["attempts"][0]["reason"] == "quote_stale"
-    assert attempts["attempts"][0].get("risk_admission") is None
+    assert len(client.requests) == 1
+    assert attempts["attempts"][0]["status"] == "submitted"
+    assert attempts["attempts"][0]["quote_source"] == "kalshi_orderbook"
+    assert attempts["attempts"][0]["quote_age_seconds"] == 0.0
+    assert manifest["selected_row"]["market_metadata_updated_at"] == (
+        now - timedelta(minutes=2)
+    ).isoformat()
 
 
 def test_live_trading_job_blocks_duplicate_fill_after_ticker_cap(
@@ -1141,6 +1316,15 @@ def fixture_candles(now: datetime) -> list[list[float]]:
     ]
 
 
+def sample_private_key_pem() -> str:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+
+
 class SequencedOrderClient:
     def __init__(self, fills: list[dict], *, order_details: dict[str, dict] | None = None):
         self.fills = list(fills)
@@ -1183,7 +1367,14 @@ def live_enabled_settings():
     )
 
 
-def install_live_job_fixture(monkeypatch, *, now: datetime, ticker: str) -> None:
+def install_live_job_fixture(
+    monkeypatch,
+    *,
+    now: datetime,
+    ticker: str,
+    market_updated_at: datetime | None = None,
+) -> None:
+    market_updated_at = market_updated_at or now - timedelta(seconds=1)
     kalshi = FixtureKalshiRestClient(
         markets=[
             {
@@ -1193,7 +1384,7 @@ def install_live_job_fixture(monkeypatch, *, now: datetime, ticker: str) -> None
                 "status": "open",
                 "open_time": (now - timedelta(minutes=10)).isoformat(),
                 "close_time": (now + timedelta(minutes=5)).isoformat(),
-                "updated_time": (now - timedelta(seconds=1)).isoformat(),
+                "updated_time": market_updated_at.isoformat(),
                 "title": "Bitcoin above $100?",
                 "payout_threshold": "100.00",
                 "yes_ask_dollars": "0.40",
