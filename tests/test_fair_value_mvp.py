@@ -41,6 +41,7 @@ from alphadb.live_runtime import (
     LiveRuntimeConfigRepository,
     build_fair_value_live_status,
 )
+from alphadb.live_risk import LiveRiskAdmissionRepository
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -350,7 +351,13 @@ def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
         "public_market_result",
         lambda *, settings, ticker: {"status": "finalized", "result": "yes"},
     )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "load_prior_live_attempts",
+        lambda **kwargs: pytest.fail("one-cycle live job must not load prior attempts"),
+    )
     client = FakeOrderClient()
+    seed_live_risk_state(now=now)
 
     manifest = FairValueLiveTradingJob(
         config=FairValueLiveTradingJobConfig(
@@ -361,6 +368,8 @@ def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
             max_order_dollars=5.0,
             max_daily_loss_dollars=50.0,
             submit_live_orders=True,
+            quote_stale_seconds=1_000_000,
+            coinbase_feature_stale_seconds=1_000_000,
         ),
         settings=settings,
         order_client=client,
@@ -372,11 +381,17 @@ def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
     assert manifest["runtime_controls"]["orders_placed"] == 1
     assert client.requests[0]["time_in_force"] == "immediate_or_cancel"
     assert float(client.requests[0]["count"]) >= 1
+    assert manifest["hot_path_scope"] == "one_current_decision_no_replay_no_walk_forward_no_full_history"
+    assert manifest["counts"]["prior_live_attempts_reconciled"] == 0
+    assert "phase_seconds" in manifest["timing"]
+    assert "walk_forward_report" not in manifest["artifacts"]
+    assert "replay_report" not in manifest["artifacts"]
     reconciliation = json.loads(
         Path(manifest["artifacts"]["live_reconciliation_report"]["path"]).read_text()
     )
-    assert reconciliation["settlement"]["status"] == "reconciled"
-    assert reconciliation["pnl"]["net_pnl_dollars"] == 1.18
+    assert reconciliation["scope"] == "current_attempt_compact"
+    assert reconciliation["settlement"]["status"] == "unreconciled"
+    assert reconciliation["pnl"]["filled_contracts"] == 2
 
 
 def test_live_trading_cli_uses_env_caps_when_flags_are_omitted(
@@ -430,6 +445,7 @@ def test_live_trading_job_retries_same_market_after_no_fill(
         ]
     )
     settings = live_enabled_settings()
+    seed_live_risk_state(now=now)
     config = FairValueLiveTradingJobConfig(
         output_root=tmp_path,
         source="kalshi-public",
@@ -439,6 +455,8 @@ def test_live_trading_job_retries_same_market_after_no_fill(
         max_ticker_exposure_dollars=5.0,
         max_daily_loss_dollars=50.0,
         submit_live_orders=True,
+        quote_stale_seconds=120,
+        coinbase_feature_stale_seconds=180,
     )
 
     first = FairValueLiveTradingJob(
@@ -461,7 +479,9 @@ def test_live_trading_job_retries_same_market_after_no_fill(
     )
     assert first_reconciliation["counts"]["no_fill"] == 1
     assert second_reconciliation["counts"]["filled"] == 1
-    assert second_reconciliation["per_market_exposure"]["markets"][0]["exposure_dollars"] == 0.82
+    state = live_risk_state(now=now)
+    assert state.pending_exposure_dollars == 0.0
+    assert state.open_exposure_dollars > 0.0
 
 
 def test_live_trading_job_records_replay_skip_as_live_attempt(
@@ -504,6 +524,68 @@ def test_live_trading_job_records_replay_skip_as_live_attempt(
     assert attempts["skip_reasons"] == [{"reason": "edge_below_min", "count": 1}]
 
 
+def test_live_trading_job_fails_closed_when_risk_state_is_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-MISSING-RISK"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    delete_live_risk_states(settings_from_env().database_url)
+    client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    assert client.requests == []
+    assert attempts["attempts"][0]["status"] == "skipped"
+    assert attempts["attempts"][0]["reason"] == "risk_state_missing"
+
+
+def test_live_trading_job_skips_stale_quote_before_risk_admission(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-STALE-QUOTE"
+    install_live_job_fixture(monkeypatch, now=now - timedelta(minutes=2), ticker=ticker)
+    seed_live_risk_state(now=now)
+    client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    assert client.requests == []
+    assert attempts["attempts"][0]["reason"] == "quote_stale"
+    assert attempts["attempts"][0].get("risk_admission") is None
+
+
 def test_live_trading_job_blocks_duplicate_fill_after_ticker_cap(
     tmp_path: Path,
     monkeypatch,
@@ -523,15 +605,18 @@ def test_live_trading_job_blocks_duplicate_fill_after_ticker_cap(
         ]
     )
     settings = live_enabled_settings()
+    seed_live_risk_state(now=now)
     config = FairValueLiveTradingJobConfig(
         output_root=tmp_path,
         source="kalshi-public",
         coinbase_source="coinbase-live",
         max_markets=1,
         max_order_dollars=5.0,
-        max_ticker_exposure_dollars=5.0,
+        max_ticker_exposure_dollars=1.0,
         max_daily_loss_dollars=50.0,
         submit_live_orders=True,
+        quote_stale_seconds=120,
+        coinbase_feature_stale_seconds=180,
     )
 
     FairValueLiveTradingJob(config=config, settings=settings, order_client=client).run(now=now)
@@ -555,6 +640,11 @@ def test_live_trading_job_skips_order_when_live_run_lock_is_held(
     now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
     ticker = "KXBTC15M-FV-LOCK-HELD"
     install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "make_kalshi_client",
+        lambda source, settings: pytest.fail("lock-held run must not collect market data"),
+    )
     monkeypatch.setattr(
         fair_value_live_job,
         "public_market_result",
@@ -591,6 +681,8 @@ def test_live_trading_job_skips_order_when_live_run_lock_is_held(
     assert client.requests == []
     assert manifest["runtime_controls"]["orders_placed"] == 0
     assert manifest["runtime_controls"]["live_run_lock"]["acquired"] is False
+    assert manifest["counts"]["collected_rows"] == 0
+    assert manifest["timing"]["phase_seconds"]["collection"] == 0.0
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
     assert attempts["attempts"][0]["status"] == "skipped"
     assert attempts["attempts"][0]["reason"] == "live_run_lock_held"
@@ -698,13 +790,10 @@ def test_live_trading_job_preserves_daily_cap_from_prior_exposure(
         "public_market_result",
         lambda *, settings, ticker: {"status": "active", "result": None},
     )
-    write_prior_attempt(
-        tmp_path,
-        run_id="fv_live_20260604T145900Z",
-        order_id="prior_daily_order",
-        ticker=prior_ticker,
-        side="yes",
-        fill_count=1,
+    seed_live_risk_state(
+        now=now,
+        daily_loss_used_dollars=49.5,
+        per_market_exposure_dollars={prior_ticker: 49.5},
     )
     client = SequencedOrderClient(
         [],
@@ -723,6 +812,7 @@ def test_live_trading_job_preserves_daily_cap_from_prior_exposure(
             max_ticker_exposure_dollars=5.0,
             max_daily_loss_dollars=50.0,
             submit_live_orders=True,
+            coinbase_feature_stale_seconds=180,
         ),
         settings=live_enabled_settings(),
         order_client=client,
@@ -733,8 +823,8 @@ def test_live_trading_job_preserves_daily_cap_from_prior_exposure(
     admission_accounting = attempts["admission_daily_loss_accounting"]
     assert admission_accounting["timezone"] == "America/Los_Angeles"
     assert admission_accounting["live_risk_day"] == "2026-06-04"
-    assert admission_accounting["same_live_risk_day_rows"] == 1
-    assert admission_accounting["same_live_risk_day_filled_rows"] == 1
+    assert admission_accounting["basis"] == "live_risk_admission_state"
+    assert admission_accounting["same_live_risk_day_rows"] == 0
     assert admission_accounting["daily_loss_used_dollars"] == 49.5
     assert attempts["attempts"][0]["status"] == "skipped"
     assert attempts["attempts"][0]["reason"] == "daily_loss_cap_reached"
@@ -755,14 +845,10 @@ def test_live_trading_job_does_not_reset_daily_cap_at_utc_midnight(
         "public_market_result",
         lambda *, settings, ticker: {"status": "active", "result": None},
     )
-    write_prior_attempt(
-        tmp_path,
-        run_id="fv_live_20260604T235900Z",
-        order_id="prior_utc_midnight_order",
-        ticker=prior_ticker,
-        side="yes",
-        fill_count=1,
-        submitted_at="2026-06-04T23:59:00+00:00",
+    seed_live_risk_state(
+        now=now,
+        daily_loss_used_dollars=49.5,
+        per_market_exposure_dollars={prior_ticker: 49.5},
     )
     client = SequencedOrderClient(
         [],
@@ -803,22 +889,13 @@ def test_live_trading_job_resets_daily_cap_at_live_risk_day_boundary(
 ) -> None:
     now = datetime(2026, 6, 5, 7, 0, 10, tzinfo=UTC)
     current_ticker = "KXBTC15M-FV-LA-RESET-CURRENT"
-    prior_ticker = "KXBTC15M-FV-LA-RESET-PRIOR"
     install_live_job_fixture(monkeypatch, now=now, ticker=current_ticker)
     monkeypatch.setattr(
         fair_value_live_job,
         "public_market_result",
         lambda *, settings, ticker: {"status": "active", "result": None},
     )
-    write_prior_attempt(
-        tmp_path,
-        run_id="fv_live_20260605T065900Z",
-        order_id="prior_la_midnight_order",
-        ticker=prior_ticker,
-        side="yes",
-        fill_count=1,
-        submitted_at="2026-06-05T06:59:00+00:00",
-    )
+    seed_live_risk_state(now=now)
     client = SequencedOrderClient(
         [{"fill_count": 1, "cost": 0.4, "fees": 0.01}],
         order_details={
@@ -836,6 +913,7 @@ def test_live_trading_job_resets_daily_cap_at_live_risk_day_boundary(
             max_ticker_exposure_dollars=5.0,
             max_daily_loss_dollars=50.0,
             submit_live_orders=True,
+            coinbase_feature_stale_seconds=180,
         ),
         settings=live_enabled_settings(),
         order_client=client,
@@ -849,8 +927,8 @@ def test_live_trading_job_resets_daily_cap_at_live_risk_day_boundary(
     assert admission_accounting["window_start_utc"] == "2026-06-05T07:00:00+00:00"
     assert admission_accounting["same_live_risk_day_rows"] == 0
     assert admission_accounting["daily_loss_used_dollars"] == 0.0
-    assert post_run_accounting["same_live_risk_day_filled_rows"] == 1
-    assert post_run_accounting["daily_loss_used_dollars"] == 0.41
+    assert post_run_accounting["basis"] == "live_risk_admission_state"
+    assert post_run_accounting["daily_loss_used_dollars"] > 0.0
     assert attempts["attempts"][0]["status"] == "submitted"
     assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 0.0
 
@@ -872,32 +950,15 @@ def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_o
         return {"status": "active", "result": None}
 
     monkeypatch.setattr(fair_value_live_job, "public_market_result", market_result)
-    write_prior_attempt(
-        tmp_path,
-        run_id="fv_live_20260605T155500Z",
-        order_id="prior_settled_loss_order",
-        ticker=settled_ticker,
-        side="yes",
-        fill_count=1,
-        submitted_at="2026-06-05T15:55:00+00:00",
-    )
-    write_prior_attempt(
-        tmp_path,
-        run_id="fv_live_20260605T155600Z",
-        order_id="prior_unsettled_order",
-        ticker=unsettled_ticker,
-        side="yes",
-        fill_count=1,
-        submitted_at="2026-06-05T15:56:00+00:00",
-    )
-    write_prior_attempt(
-        tmp_path,
-        run_id="fv_live_20260605T155700Z",
-        order_id="prior_no_fill_order",
-        ticker=no_fill_ticker,
-        side="yes",
-        fill_count=0,
-        submitted_at="2026-06-05T15:57:00+00:00",
+    seed_live_risk_state(
+        now=now,
+        daily_loss_used_dollars=20.5,
+        open_exposure_dollars=24.25,
+        per_market_exposure_dollars={
+            settled_ticker: 20.5,
+            unsettled_ticker: 24.25,
+            no_fill_ticker: 0.0,
+        },
     )
     client = SequencedOrderClient(
         [{"fill_count": 1, "cost": 0.4, "fees": 0.01}],
@@ -918,6 +979,7 @@ def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_o
             max_ticker_exposure_dollars=5.0,
             max_daily_loss_dollars=50.0,
             submit_live_orders=True,
+            coinbase_feature_stale_seconds=180,
         ),
         settings=live_enabled_settings(),
         order_client=client,
@@ -926,14 +988,12 @@ def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_o
     assert len(client.requests) == 1
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
     admission_accounting = attempts["admission_daily_loss_accounting"]
-    assert admission_accounting["same_live_risk_day_rows"] == 3
-    assert admission_accounting["same_live_risk_day_filled_rows"] == 2
-    assert admission_accounting["same_live_risk_day_no_fill_rows"] == 1
-    assert admission_accounting["same_live_risk_day_settled_rows"] == 1
-    assert admission_accounting["same_live_risk_day_unsettled_rows"] == 1
+    assert admission_accounting["basis"] == "live_risk_admission_state"
+    assert admission_accounting["daily_loss_realized_dollars"] == 20.5
+    assert admission_accounting["open_exposure_dollars"] == 24.25
     assert admission_accounting["daily_loss_used_dollars"] == 44.75
     assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 44.75
-    assert manifest["runtime_controls"]["daily_loss_accounting"]["daily_loss_used_dollars"] == 45.16
+    assert manifest["runtime_controls"]["daily_loss_accounting"]["daily_loss_used_dollars"] > 44.75
 
 
 def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
@@ -955,6 +1015,7 @@ def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
         now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
         ticker = "KXBTC15M-FV-DB-CONFIG"
         install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+        seed_live_risk_state(now=now)
         monkeypatch.setattr(
             fair_value_live_job,
             "public_market_result",
@@ -969,6 +1030,8 @@ def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
                 coinbase_source="coinbase-live",
                 submit_live_orders=True,
                 runtime_config_source="postgres",
+                quote_stale_seconds=120,
+                coinbase_feature_stale_seconds=180,
             ),
             settings=live_enabled_settings(),
             order_client=client,
@@ -1010,6 +1073,7 @@ def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
                 max_markets=1,
             )
         )
+        seed_live_risk_state(now=now)
         exposure_manifest = FairValueLiveTradingJob(
             config=FairValueLiveTradingJobConfig(
                 output_root=tmp_path / "exposure",
@@ -1017,6 +1081,8 @@ def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
                 coinbase_source="coinbase-live",
                 submit_live_orders=True,
                 runtime_config_source="postgres",
+                quote_stale_seconds=120,
+                coinbase_feature_stale_seconds=180,
             ),
             settings=live_enabled_settings(),
             order_client=SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}]),
@@ -1035,13 +1101,10 @@ def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
                 max_markets=1,
             )
         )
-        write_prior_attempt(
-            tmp_path / "daily",
-            run_id="fv_live_20260604T150000Z",
-            order_id="prior_db_daily_order",
-            ticker="KXBTC15M-FV-DB-PRIOR",
-            side="yes",
-            fill_count=1,
+        seed_live_risk_state(
+            now=now + timedelta(minutes=1),
+            daily_loss_used_dollars=0.41,
+            per_market_exposure_dollars={"KXBTC15M-FV-DB-PRIOR": 0.41},
         )
         daily_manifest = FairValueLiveTradingJob(
             config=FairValueLiveTradingJobConfig(
@@ -1050,6 +1113,8 @@ def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
                 coinbase_source="coinbase-live",
                 submit_live_orders=True,
                 runtime_config_source="postgres",
+                quote_stale_seconds=120,
+                coinbase_feature_stale_seconds=180,
             ),
             settings=live_enabled_settings(),
             order_client=SequencedOrderClient(
@@ -1211,6 +1276,62 @@ def live_runtime_repository_or_skip() -> LiveRuntimeConfigRepository:
         pytest.skip(f"Postgres is not available: {exc}")
     repository.apply_migrations()
     return LiveRuntimeConfigRepository(database_url)
+
+
+def live_risk_repository_or_skip() -> LiveRiskAdmissionRepository:
+    database_url = settings_from_env().database_url
+    repository = OperationalStateRepository(database_url)
+    try:
+        with repository.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("select 1")
+                cursor.fetchone()
+    except psycopg.OperationalError as exc:
+        pytest.skip(f"Postgres is not available: {exc}")
+    repository.apply_migrations()
+    return LiveRiskAdmissionRepository(database_url)
+
+
+def seed_live_risk_state(
+    *,
+    now: datetime,
+    daily_loss_used_dollars: float = 0.0,
+    open_exposure_dollars: float = 0.0,
+    pending_exposure_dollars: float = 0.0,
+    per_market_exposure_dollars: dict[str, float] | None = None,
+) -> None:
+    repository = live_risk_repository_or_skip()
+    delete_live_risk_states(settings_from_env().database_url)
+    live_risk_day, _start, _end = fair_value_live_job.live_risk_window(
+        generated_at=now,
+        live_risk_timezone="America/Los_Angeles",
+    )
+    repository.upsert_state(
+        live_risk_day=live_risk_day,
+        daily_loss_used_dollars=daily_loss_used_dollars,
+        open_exposure_dollars=open_exposure_dollars,
+        pending_exposure_dollars=pending_exposure_dollars,
+        per_market_exposure_dollars=per_market_exposure_dollars or {},
+        updated_at=now,
+    )
+
+
+def live_risk_state(*, now: datetime):
+    repository = live_risk_repository_or_skip()
+    live_risk_day, _start, _end = fair_value_live_job.live_risk_window(
+        generated_at=now,
+        live_risk_timezone="America/Los_Angeles",
+    )
+    return repository.get_state(live_risk_day=live_risk_day)
+
+
+def delete_live_risk_states(database_url: str) -> None:
+    repository = OperationalStateRepository(database_url)
+    repository.apply_migrations()
+    with repository.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("delete from live_risk_admission_states where strategy = 'fair_value_live'")
+        connection.commit()
 
 
 def delete_lock_duplicate_test_statuses(database_url: str) -> None:

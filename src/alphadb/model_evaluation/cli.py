@@ -254,6 +254,9 @@ def build_parser() -> argparse.ArgumentParser:
     fair_live.add_argument("--step-market-count", type=int, default=None)
     fair_live.add_argument("--s3-prefix", default=None)
     fair_live.add_argument("--submit-live-orders", action="store_true")
+    fair_live.add_argument("--live-risk-state-stale-seconds", type=int, default=60)
+    fair_live.add_argument("--quote-stale-seconds", type=int, default=15)
+    fair_live.add_argument("--coinbase-feature-stale-seconds", type=int, default=90)
     fair_live.add_argument(
         "--runtime-config-source",
         choices=("auto", "postgres", "cli"),
@@ -446,6 +449,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 s3_prefix=args.s3_prefix,
                 submit_live_orders=args.submit_live_orders,
                 runtime_config_source=args.runtime_config_source,
+                live_risk_state_stale_seconds=args.live_risk_state_stale_seconds,
+                quote_stale_seconds=args.quote_stale_seconds,
+                coinbase_feature_stale_seconds=args.coinbase_feature_stale_seconds,
             )
         ).run()
     else:

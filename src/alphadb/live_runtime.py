@@ -594,6 +594,8 @@ def build_fair_value_live_status(
             "report_summary": dict(_mapping(manifest.get("report_summary"))),
             "daily_loss_accounting": dict(daily_loss_accounting),
             "full_history_daily_loss_used_dollars": full_history_daily_used,
+            "timing": dict(_mapping(manifest.get("timing"))),
+            "selected_decision": dict(_mapping(manifest.get("selected_decision"))),
             "runtime_controls": {
                 key: runtime_controls.get(key)
                 for key in (
