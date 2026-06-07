@@ -369,6 +369,8 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
         for run in runs
         if as_mapping(run.get("live_edge_attribution"))
     ]
+    live_risk_state = as_mapping(latest_value(runs, "live_risk_admission_state"))
+    live_risk_refresh = as_mapping(latest_value(runs, "live_risk_refresh"))
     return {
         "schedule_state": fair_rule.get("State"),
         "legacy_structural_schedule_state": structural_rule.get("State"),
@@ -387,7 +389,13 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
         ),
         "one_cycle": latest_value(runs, "one_cycle"),
         "hot_path_scope": latest_value(runs, "hot_path_scope"),
-        "live_risk_admission_state": latest_value(runs, "live_risk_admission_state"),
+        "live_risk_admission_state": dict(live_risk_state),
+        "live_risk_refresh": dict(live_risk_refresh),
+        "risk_state_classification": classify_risk_state(
+            live_risk_admission_state=live_risk_state,
+            live_risk_refresh=live_risk_refresh,
+            skip_reasons=dict(skip_reasons),
+        ),
         "orders": {
             "submitted": order_counter["submitted"],
             "skipped": order_counter["skipped"],
@@ -425,6 +433,12 @@ def summarize_run(*, run_id: str, artifacts: Mapping[str, Any]) -> dict[str, Any
         "one_cycle": manifest.get("one_cycle"),
         "hot_path_scope": manifest.get("hot_path_scope"),
         "live_risk_admission_state": manifest.get("live_risk_admission_state"),
+        "live_risk_refresh": manifest.get("live_risk_refresh"),
+        "risk_state_classification": classify_risk_state(
+            live_risk_admission_state=as_mapping(manifest.get("live_risk_admission_state")),
+            live_risk_refresh=as_mapping(manifest.get("live_risk_refresh")),
+            skip_reasons=orders.get("skip_reasons", {}),
+        ),
         "selected_decision": manifest.get("selected_decision"),
         "live_edge_attribution": dict(latest_attribution),
         "live_edge_attributions": [dict(attribution) for attribution in attempt_attributions],
@@ -480,6 +494,32 @@ def summarize_reconciliation(reconciliation: Mapping[str, Any]) -> dict[str, Any
         "unsettled_exposure_dollars": float(pnl.get("unsettled_exposure_dollars") or 0.0),
         "rows": [dict(as_mapping(row)) for row in rows],
     }
+
+
+def classify_risk_state(
+    *,
+    live_risk_admission_state: Mapping[str, Any],
+    live_risk_refresh: Mapping[str, Any],
+    skip_reasons: Mapping[str, Any],
+) -> str | None:
+    blocked_reason = (
+        live_risk_admission_state.get("blocked_reason")
+        or live_risk_refresh.get("reason")
+    )
+    if (
+        live_risk_admission_state.get("status") == "blocked"
+        or live_risk_refresh.get("status") == "blocked"
+        or skip_reasons.get("unresolved_pending_reservation")
+    ) and blocked_reason == "unresolved_pending_reservation":
+        return "blocked_unresolved_pending_reservation"
+    if (
+        live_risk_admission_state.get("reason") == "risk_state_stale"
+        or skip_reasons.get("risk_state_stale")
+    ):
+        return "stale_risk_state"
+    if any(str(reason).startswith("live_order_error:") for reason in skip_reasons):
+        return "execution_submit_error"
+    return None
 
 
 def strip_surface_values(surfaces: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:

@@ -585,6 +585,8 @@ def build_fair_value_live_status(
     latest_reconciliation = _matching_reconciliation(latest_attempt, reconciliation_rows)
     config = _mapping(manifest.get("runtime_config"))
     runtime_controls = _mapping(manifest.get("runtime_controls"))
+    live_risk_admission_state = _mapping(manifest.get("live_risk_admission_state"))
+    live_risk_refresh = _mapping(manifest.get("live_risk_refresh"))
     status_strategy = (
         strategy
         or _text(manifest.get("strategy"))
@@ -650,6 +652,13 @@ def build_fair_value_live_status(
             "timing": dict(_mapping(manifest.get("timing"))),
             "selected_decision": dict(_mapping(manifest.get("selected_decision"))),
             "live_edge_attribution": dict(_mapping(manifest.get("live_edge_attribution"))),
+            "live_risk_admission_state": dict(live_risk_admission_state),
+            "live_risk_refresh": dict(live_risk_refresh),
+            "risk_state_classification": classify_risk_state(
+                live_risk_admission_state=live_risk_admission_state,
+                live_risk_refresh=live_risk_refresh,
+                latest_reason=latest_reason,
+            ),
             "runtime_controls": {
                 key: runtime_controls.get(key)
                 for key in (
@@ -818,6 +827,30 @@ def _decision_outcome(status: str | None, manifest: Mapping[str, Any]) -> str:
             return "skipped"
         return "no_live_attempt"
     return "unknown"
+
+
+def classify_risk_state(
+    *,
+    live_risk_admission_state: Mapping[str, Any],
+    live_risk_refresh: Mapping[str, Any],
+    latest_reason: str | None,
+) -> str | None:
+    blocked_reason = (
+        live_risk_admission_state.get("blocked_reason")
+        or live_risk_refresh.get("reason")
+        or latest_reason
+    )
+    if (
+        live_risk_admission_state.get("status") == "blocked"
+        or live_risk_refresh.get("status") == "blocked"
+    ) and blocked_reason == "unresolved_pending_reservation":
+        return "blocked_unresolved_pending_reservation"
+    reason = live_risk_admission_state.get("reason") or latest_reason
+    if reason == "risk_state_stale":
+        return "stale_risk_state"
+    if latest_reason and str(latest_reason).startswith("live_order_error:"):
+        return "execution_submit_error"
+    return None
 
 
 def _fill_status(

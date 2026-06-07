@@ -388,3 +388,41 @@ def test_deployment_docs_name_report_command_as_scheduler_entrypoint() -> None:
     docs = Path("docs/deployment/live-money-cutover-checklist.md").read_text(encoding="utf-8")
 
     assert "alphadb-fair-value-live-report" in docs
+
+
+def test_report_summaries_classify_blocked_pending_refresh() -> None:
+    run = report_module.summarize_run(
+        run_id="fv_live_refresh_blocked",
+        artifacts={
+            "manifest": {
+                "generated_at": "2026-06-06T17:15:40+00:00",
+                "live_risk_admission_state": {
+                    "status": "blocked",
+                    "reason": "unresolved_pending_reservation",
+                    "blocked_reason": "unresolved_pending_reservation",
+                },
+                "live_risk_refresh": {
+                    "status": "blocked",
+                    "reason": "unresolved_pending_reservation",
+                    "lookup_count": 1,
+                    "lookup_limit": 3,
+                    "unresolved_reservation_ids": ["res_1"],
+                    "state_version_after": 7,
+                },
+            },
+            "live_order_attempts": {
+                "attempts": [
+                    {
+                        "status": "skipped",
+                        "reason": "unresolved_pending_reservation",
+                    }
+                ]
+            },
+            "live_reconciliation_report": {"rows": [], "pnl": {}, "settlement": {}},
+        },
+    )
+    summary = report_module.build_summary(values={}, runs=[run])
+
+    assert run["risk_state_classification"] == "blocked_unresolved_pending_reservation"
+    assert summary["risk_state_classification"] == "blocked_unresolved_pending_reservation"
+    assert summary["live_risk_refresh"]["unresolved_reservation_ids"] == ["res_1"]

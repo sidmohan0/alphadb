@@ -7,6 +7,7 @@ import pytest
 from alphadb.config import settings_from_env
 from alphadb.live_orders import (
     GatedLiveKalshiOrderAdapter,
+    LiveOrderAttempt,
     LiveOrderError,
     LiveOrderRepository,
     exchange_response_accepted,
@@ -226,4 +227,135 @@ def test_top_level_order_id_response_counts_as_accepted_ioc_attempt() -> None:
             "remaining_count": "0.00",
             "ts_ms": 1780292536260,
         }
+    )
+
+
+def test_live_order_repository_updates_exchange_response_evidence() -> None:
+    repository = live_order_repository_or_skip()
+    live_orders = LiveOrderRepository(repository.database_url)
+    risk_day = date(2026, 6, 4)
+    base_time = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+
+    accepted = live_orders.persist(
+        live_attempt(
+            "accepted",
+            risk_day=risk_day,
+            submitted_at=base_time,
+        )
+    )
+    rejected = live_orders.persist(
+        live_attempt(
+            "rejected",
+            risk_day=risk_day,
+            submitted_at=base_time,
+        )
+    )
+    no_fill = live_orders.persist(
+        live_attempt(
+            "no_fill",
+            risk_day=risk_day,
+            submitted_at=base_time,
+        )
+    )
+    partial = live_orders.persist(
+        live_attempt(
+            "partial",
+            risk_day=risk_day,
+            submitted_at=base_time,
+        )
+    )
+
+    accepted_row = live_orders.record_submit_response(
+        live_order_attempt_id=accepted.live_order_attempt_id,
+        response_payload={"order": {"status": "accepted", "order_id": "ord_accepted"}, "fill_count": "1.00"},
+        accepted=True,
+        observed_at=base_time,
+    )
+    rejected_row = live_orders.record_submit_response(
+        live_order_attempt_id=rejected.live_order_attempt_id,
+        response_payload={"order": {"status": "rejected", "order_id": "ord_rejected"}},
+        accepted=False,
+        observed_at=base_time,
+    )
+    no_fill_row = live_orders.record_submit_response(
+        live_order_attempt_id=no_fill.live_order_attempt_id,
+        response_payload={"order_id": "ord_none", "fill_count": "0.00", "remaining_count": "0.00"},
+        accepted=True,
+        observed_at=base_time,
+    )
+    partial_row = live_orders.record_submit_response(
+        live_order_attempt_id=partial.live_order_attempt_id,
+        response_payload={
+            "order_id": "ord_partial",
+            "fill_count": "0.50",
+            "remaining_count": "0.50",
+        },
+        accepted=True,
+        observed_at=base_time,
+    )
+
+    assert accepted_row["status"] == "accepted"
+    assert accepted_row["exchange_order_id"] == "ord_accepted"
+    assert accepted_row["exchange_status"] == "accepted"
+    assert accepted_row["fill_count"] == 1.0
+    assert rejected_row["status"] == "rejected"
+    assert rejected_row["exchange_status"] == "rejected"
+    assert no_fill_row["status"] == "accepted"
+    assert no_fill_row["fill_count"] == 0.0
+    assert no_fill_row["remaining_count"] == 0.0
+    assert partial_row["fill_count"] == 0.5
+    assert partial_row["remaining_count"] == 0.5
+
+
+def test_live_order_repository_records_safe_submit_error_metadata() -> None:
+    class FakeHttpError(RuntimeError):
+        code = 409
+        body = '{"message":"conflict","api_key":"secret-value"}'
+
+    repository = live_order_repository_or_skip()
+    live_orders = LiveOrderRepository(repository.database_url)
+    risk_day = date(2026, 6, 4)
+    submitted_at = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    attempt = live_orders.persist(
+        live_attempt("http_error", risk_day=risk_day, submitted_at=submitted_at)
+    )
+
+    row = live_orders.record_submit_error(
+        live_order_attempt_id=attempt.live_order_attempt_id,
+        exc=FakeHttpError("HTTP 409 conflict"),
+        observed_at=submitted_at,
+    )
+
+    assert row["status"] == "submit_error"
+    assert row["exchange_http_status"] == 409
+    assert row["exchange_error_class"] == "FakeHttpError"
+    assert row["exchange_error_metadata"]["http_status"] == 409
+    assert row["exchange_error_metadata"]["body"]["message"] == "conflict"
+    assert row["exchange_error_metadata"]["body"]["api_key"] == "[redacted]"
+
+
+def live_attempt(
+    suffix: str,
+    *,
+    risk_day: date,
+    submitted_at: datetime,
+) -> LiveOrderAttempt:
+    return LiveOrderAttempt(
+        live_order_attempt_id=f"live_order_{suffix}_{uuid4().hex[:8]}",
+        order_intent_id=None,
+        risk_decision_id=None,
+        strategy="test_strategy",
+        live_risk_day=risk_day,
+        reservation_id=f"res_{suffix}",
+        market_ticker=f"KXBTC15M-{suffix.upper()}",
+        client_order_id=f"client_{suffix}_{uuid4().hex[:8]}",
+        intended_side="yes",
+        intended_price_dollars=0.4,
+        intended_quantity=1.0,
+        intended_max_loss_dollars=0.41,
+        runtime_mode="gated-live",
+        status="submit_pending",
+        guard_reason=None,
+        request_payload={"client_order_id": f"client_{suffix}"},
+        submitted_at=submitted_at,
     )

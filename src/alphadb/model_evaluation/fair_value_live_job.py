@@ -19,6 +19,8 @@ from alphadb.config import Settings, settings_from_env
 from alphadb.live_orders import (
     HttpKalshiLiveOrderClient,
     KalshiLiveOrderClient,
+    LiveOrderAttempt,
+    LiveOrderRepository,
     exchange_response_accepted,
     materialize_private_key_from_env,
 )
@@ -36,6 +38,10 @@ from alphadb.live_risk import (
     LiveRiskAdmissionResult,
     LiveRiskAdmissionState,
     state_denial_reason,
+)
+from alphadb.live_risk_refresh import (
+    BoundedRefreshLimits,
+    bounded_refresh_before_admission,
 )
 from alphadb.model_evaluation.fair_value_live import (
     FairValueDecisionRowCollector,
@@ -87,6 +93,9 @@ class FairValueLiveTradingJobConfig:
     runtime_config_source: RuntimeConfigSource = "auto"
     live_risk_timezone: str = DEFAULT_LIVE_RISK_TIMEZONE
     live_risk_state_stale_seconds: int = DEFAULT_LIVE_RISK_STALE_SECONDS
+    live_risk_refresh_max_lookup_count: int = 3
+    live_risk_refresh_timeout_seconds: float = 2.0
+    live_risk_refresh_per_lookup_timeout_seconds: float = 1.0
     quote_stale_seconds: int = 15
     coinbase_feature_stale_seconds: int = 90
 
@@ -112,6 +121,11 @@ class FairValueLiveTradingJobConfig:
             "runtime_config_source": self.runtime_config_source,
             "live_risk_timezone": self.live_risk_timezone,
             "live_risk_state_stale_seconds": self.live_risk_state_stale_seconds,
+            "live_risk_refresh_max_lookup_count": self.live_risk_refresh_max_lookup_count,
+            "live_risk_refresh_timeout_seconds": self.live_risk_refresh_timeout_seconds,
+            "live_risk_refresh_per_lookup_timeout_seconds": (
+                self.live_risk_refresh_per_lookup_timeout_seconds
+            ),
             "quote_stale_seconds": self.quote_stale_seconds,
             "coinbase_feature_stale_seconds": self.coinbase_feature_stale_seconds,
         }
@@ -159,6 +173,8 @@ class FairValueLiveTradingJob:
                     "collection",
                     "decision",
                     "freshness",
+                    "risk_refresh",
+                    "submit_attempt_persist",
                     "risk_admission",
                     "submit",
                     "status_materialization",
@@ -273,6 +289,32 @@ class FairValueLiveTradingJob:
                         generated_at=generated_at,
                         run_id=run_id,
                     )
+                with timer.phase("risk_refresh"):
+                    refresh_result = bounded_refresh_before_admission(
+                        risk_repository=LiveRiskAdmissionRepository(settings.database_url),
+                        order_repository=LiveOrderRepository(settings.database_url),
+                        order_client=self.order_client,
+                        settings=settings,
+                        state=admission_state,
+                        strategy=self.config.strategy,
+                        live_risk_day=live_risk_day,
+                        now=generated_at,
+                        run_id=run_id,
+                        stale_after_seconds=self.config.live_risk_state_stale_seconds,
+                        limits=BoundedRefreshLimits(
+                            max_lookup_count=self.config.live_risk_refresh_max_lookup_count,
+                            max_elapsed_seconds=self.config.live_risk_refresh_timeout_seconds,
+                            per_lookup_timeout_seconds=(
+                                self.config.live_risk_refresh_per_lookup_timeout_seconds
+                            ),
+                        ),
+                    )
+                    risk_state_read = {
+                        **dict(risk_state_read),
+                        "risk_refresh": refresh_result.as_dict(),
+                    }
+                    if refresh_result.state is not None:
+                        admission_state = refresh_result.state
             admission_daily_loss_accounting = {
                 **live_risk_accounting_report(
                     admission_state,
@@ -407,8 +449,10 @@ class FairValueLiveTradingJob:
         )
         risk_before = admission_state.total_risk_used_dollars if admission_state else 0.0
         freshness = live_decision_freshness(decision_row, generated_at=generated_at)
+        attempt_id = f"{live_run_id_prefix(self.config.strategy)}_order_{uuid4().hex[:12]}"
         base = {
-            "attempt_id": f"{live_run_id_prefix(self.config.strategy)}_order_{uuid4().hex[:12]}",
+            "attempt_id": attempt_id,
+            "live_order_attempt_id": attempt_id,
             "run_id": run_id,
             "strategy": self.config.strategy,
             "submitted_at": generated_at.isoformat(),
@@ -481,6 +525,15 @@ class FairValueLiveTradingJob:
                 now=generated_at,
                 stale_after_seconds=self.config.live_risk_state_stale_seconds,
                 run_id=run_id,
+                reservation_metadata={
+                    "live_order_attempt_id": attempt_id,
+                    "client_order_id": request_payload.get("client_order_id"),
+                    "intended_side": effective_decision.get("side"),
+                    "intended_price_dollars": effective_decision.get("price"),
+                    "intended_quantity": effective_decision.get("contracts")
+                    or effective_decision.get("intended_contracts"),
+                    "intended_max_loss_dollars": round(max_loss, 6),
+                },
             )
         base = {
             **base,
@@ -491,6 +544,52 @@ class FairValueLiveTradingJob:
             return ({**base, "status": "skipped", "reason": risk_result.reason}, risk_result, None)
 
         order_submit_at = datetime.now(UTC)
+        attempt_record = LiveOrderAttempt(
+            live_order_attempt_id=attempt_id,
+            order_intent_id=None,
+            risk_decision_id=None,
+            strategy=self.config.strategy,
+            live_risk_day=live_risk_day,
+            reservation_id=str(risk_result.reservation_id),
+            market_ticker=market_ticker,
+            client_order_id=str(request_payload.get("client_order_id") or ""),
+            intended_side=str(effective_decision.get("side") or ""),
+            intended_price_dollars=float(effective_decision.get("price") or 0.0),
+            intended_quantity=float(
+                effective_decision.get("contracts")
+                or effective_decision.get("intended_contracts")
+                or 0.0
+            ),
+            intended_max_loss_dollars=round(max_loss, 6),
+            runtime_mode=str(runtime_guard.get("runtime_mode") or ""),
+            status="submit_pending",
+            guard_reason=None,
+            request_payload=request_payload,
+            submitted_at=order_submit_at,
+        )
+        try:
+            with timer.phase("submit_attempt_persist"):
+                LiveOrderRepository(settings.database_url).persist(attempt_record)
+        except Exception as exc:
+            transition = LiveRiskAdmissionRepository(settings.database_url).retain_reservation(
+                strategy=self.config.strategy,
+                live_risk_day=live_risk_day,
+                reservation_id=str(risk_result.reservation_id),
+                now=datetime.now(UTC),
+            )
+            return (
+                {
+                    **base,
+                    "order_submit_at": order_submit_at.isoformat(),
+                    "status": "error",
+                    "reason": f"live_order_attempt_persist_error:{type(exc).__name__}",
+                    "response_payload": {"message": str(exc)},
+                    "risk_transition": transition.as_dict(),
+                    "operational_state_attempt": attempt_record.as_dict(),
+                },
+                transition,
+                order_submit_at,
+            )
         try:
             with timer.phase("submit"):
                 response = self.order_client.create_order(
@@ -498,6 +597,17 @@ class FairValueLiveTradingJob:
                     settings=settings,
                 )
         except Exception as exc:
+            try:
+                recorded_attempt = LiveOrderRepository(settings.database_url).record_submit_error(
+                    live_order_attempt_id=attempt_id,
+                    exc=exc,
+                    observed_at=datetime.now(UTC),
+                )
+            except Exception as record_exc:
+                recorded_attempt = {
+                    **attempt_record.as_dict(),
+                    "record_error": f"{type(record_exc).__name__}: {record_exc}",
+                }
             transition = LiveRiskAdmissionRepository(settings.database_url).retain_reservation(
                 strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
@@ -512,12 +622,19 @@ class FairValueLiveTradingJob:
                     "reason": f"live_order_error:{type(exc).__name__}",
                     "response_payload": {"message": str(exc)},
                     "risk_transition": transition.as_dict(),
+                    "operational_state_attempt": recorded_attempt,
                 },
                 transition,
                 order_submit_at,
             )
         fill_count = int(numeric_response_value(response, ("fill_count", "fill_count_fp")) or 0)
         accepted = exchange_response_accepted(response)
+        recorded_attempt = LiveOrderRepository(settings.database_url).record_submit_response(
+            live_order_attempt_id=attempt_id,
+            response_payload=response,
+            accepted=accepted,
+            observed_at=datetime.now(UTC),
+        )
         if accepted and fill_count > 0:
             transition = LiveRiskAdmissionRepository(settings.database_url).convert_reservation(
                 strategy=self.config.strategy,
@@ -552,6 +669,7 @@ class FairValueLiveTradingJob:
                 "client_order_id": response.get("client_order_id")
                 or request_payload.get("client_order_id"),
                 "fill_count": fill_count,
+                "operational_state_attempt": recorded_attempt,
                 "remaining_count": numeric_response_value(
                     response,
                     ("remaining_count", "remaining_count_fp"),
@@ -589,6 +707,8 @@ class FairValueLiveTradingJob:
             "decision",
             "freshness",
             "risk_state_read",
+            "risk_refresh",
+            "submit_attempt_persist",
             "risk_admission",
             "submit",
             "status_materialization",
@@ -696,11 +816,18 @@ class FairValueLiveTradingJob:
             "live_risk_admission_state": {
                 "status": daily_loss_accounting.get("risk_state_status"),
                 "reason": daily_loss_accounting.get("risk_state_reason"),
+                "blocked_reason": daily_loss_accounting.get("risk_state_blocked_reason"),
                 "updated_at": daily_loss_accounting.get("risk_state_updated_at"),
                 "version": daily_loss_accounting.get("risk_state_version"),
                 "bootstrapped": daily_loss_accounting.get("risk_state_bootstrapped"),
                 "read_reason": daily_loss_accounting.get("risk_state_read_reason"),
+                "pending_reservation_count": daily_loss_accounting.get(
+                    "pending_reservation_count"
+                ),
+                "pending_reservation_ids": daily_loss_accounting.get("pending_reservation_ids"),
             },
+            "live_risk_refresh": admission_daily_loss_accounting.get("risk_refresh")
+            or daily_loss_accounting.get("risk_refresh"),
             "selected_decision": dict(selected_decision or {}),
             "selected_decisions": [
                 dict(attempt.get("original_decision") or attempt.get("decision") or {})
@@ -1437,6 +1564,7 @@ def live_risk_accounting_report(
         now=generated_at,
         stale_after_seconds=stale_after_seconds,
     )
+    state_payload = state.as_dict()
     return {
         "schema_version": FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA,
         "basis": "live_risk_admission_state",
@@ -1446,6 +1574,7 @@ def live_risk_accounting_report(
         "window_end_utc": window_end_utc.isoformat(),
         "risk_state_status": state.status,
         "risk_state_reason": invalid_reason,
+        "risk_state_blocked_reason": state_payload.get("blocked_reason"),
         "risk_state_updated_at": state.updated_at.isoformat(),
         "risk_state_version": state.version,
         "prior_reconciliation_rows": 0,
@@ -1457,6 +1586,8 @@ def live_risk_accounting_report(
         "daily_loss_realized_dollars": round(state.daily_loss_used_dollars, 6),
         "open_exposure_dollars": round(state.open_exposure_dollars, 6),
         "pending_exposure_dollars": round(state.pending_exposure_dollars, 6),
+        "pending_reservation_count": len(state.pending_reservations),
+        "pending_reservation_ids": sorted(state.pending_reservations),
         "daily_loss_used_dollars": state.total_risk_used_dollars,
         "per_market_exposure_dollars": dict(state.per_market_exposure_dollars),
     }
@@ -1481,6 +1612,7 @@ def empty_live_risk_accounting(
         "window_end_utc": window_end_utc.isoformat(),
         "risk_state_status": "missing",
         "risk_state_reason": reason,
+        "risk_state_blocked_reason": None,
         "prior_reconciliation_rows": 0,
         "same_live_risk_day_rows": 0,
         "same_live_risk_day_filled_rows": 0,
@@ -1490,6 +1622,8 @@ def empty_live_risk_accounting(
         "daily_loss_realized_dollars": 0.0,
         "open_exposure_dollars": 0.0,
         "pending_exposure_dollars": 0.0,
+        "pending_reservation_count": 0,
+        "pending_reservation_ids": [],
         "daily_loss_used_dollars": 0.0,
         "per_market_exposure_dollars": {},
     }
