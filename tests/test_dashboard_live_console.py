@@ -12,6 +12,10 @@ from alphadb.config import settings_from_env
 from alphadb.dashboard.app import DASHBOARD_HTML, DashboardService
 from alphadb.health import ComponentHealth, HealthReport, HealthStatus
 from alphadb.live_runtime import (
+    DEFAULT_EXPENSIVE_YES_LIVE_CONFIG,
+    DEFAULT_FAIR_VALUE_LIVE_CONFIG,
+    EXPENSIVE_YES_LIVE_STRATEGY,
+    FAIR_VALUE_LIVE_STRATEGY,
     LiveRunStatus,
     LiveRuntimeConfig,
     LiveRuntimeConfigRevision,
@@ -37,23 +41,38 @@ class FakeConfigRepository:
 
     def __post_init__(self) -> None:
         if self.active is None:
-            self.active = revision(1, LiveRuntimeConfig(5.0, 5.0, 50.0, 0.0, 20))
+            self.active = revision(
+                1,
+                LiveRuntimeConfig(5.0, 5.0, 50.0, 0.0, 20),
+                strategy=FAIR_VALUE_LIVE_STRATEGY,
+            )
         if self.history is None:
             self.history = [self.active]
+        self.by_strategy: dict[str, list[LiveRuntimeConfigRevision]] = {
+            self.active.strategy: list(self.history)
+        }
 
     def seed_defaults(self, *, strategy: str):
-        return self.active
+        if strategy not in self.by_strategy:
+            config = (
+                DEFAULT_EXPENSIVE_YES_LIVE_CONFIG
+                if strategy == EXPENSIVE_YES_LIVE_STRATEGY
+                else DEFAULT_FAIR_VALUE_LIVE_CONFIG
+            )
+            self.by_strategy[strategy] = [revision(1, config, strategy=strategy)]
+        return self.by_strategy[strategy][0]
 
     def recent_revisions(self, *, strategy: str, limit: int):
-        return list(self.history or [])[:limit]
+        self.seed_defaults(strategy=strategy)
+        return list(self.by_strategy[strategy])[:limit]
 
     def save_config(self, config: LiveRuntimeConfig, *, strategy: str, created_by: str):
-        saved = revision((self.active.version if self.active else 0) + 1, config)
-        if self.active is not None:
-            self.history = [saved, self.active]
-        else:
-            self.history = [saved]
-        self.active = saved
+        current = self.seed_defaults(strategy=strategy)
+        saved = revision(current.version + 1, config, strategy=strategy)
+        self.by_strategy[strategy] = [saved, *self.by_strategy.get(strategy, [])]
+        if strategy == FAIR_VALUE_LIVE_STRATEGY:
+            self.history = self.by_strategy[strategy]
+            self.active = saved
         return saved
 
 
@@ -63,16 +82,23 @@ class FakeStatusRepository:
     status: LiveRunStatus = no_recent_live_run_status()
 
     def latest_status(self, *, strategy: str) -> LiveRunStatus:
-        return self.status
+        if strategy == self.status.strategy:
+            return self.status
+        return no_recent_live_run_status(strategy=strategy)
 
     def recent_details(self, *, strategy: str, limit: int) -> list[dict[str, Any]]:
         return []
 
 
-def revision(version: int, config: LiveRuntimeConfig) -> LiveRuntimeConfigRevision:
+def revision(
+    version: int,
+    config: LiveRuntimeConfig,
+    *,
+    strategy: str,
+) -> LiveRuntimeConfigRevision:
     return LiveRuntimeConfigRevision(
         config_id=f"cfg_{version}",
-        strategy="fair_value_live",
+        strategy=strategy,
         version=version,
         is_active=True,
         config=config,
@@ -186,6 +212,34 @@ def test_dashboard_service_saves_config_and_reloads_active_values() -> None:
     assert payload["active_config"]["max_market_exposure_dollars"] == 3.5
     assert payload["active_config"]["min_contract_price"] == 0.25
     assert [row["version"] for row in payload["config_history"]] == [2, 1]
+
+
+def test_dashboard_service_keeps_expensive_yes_config_isolated() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    dashboard = service(repository)
+
+    expensive_payload = dashboard.live_payload(strategy=EXPENSIVE_YES_LIVE_STRATEGY)
+    saved = dashboard.save_config(
+        {
+            "strategy": EXPENSIVE_YES_LIVE_STRATEGY,
+            "max_order_dollars": 0.95,
+            "max_market_exposure_dollars": 1.0,
+            "max_daily_loss_dollars": 9.0,
+            "min_edge": 0.0,
+            "min_contract_price": 0.7,
+            "max_markets": 8,
+        }
+    )
+    fair_value_payload = dashboard.live_payload()
+    expensive_after = dashboard.live_payload(strategy=EXPENSIVE_YES_LIVE_STRATEGY)
+
+    assert expensive_payload["active_config"]["strategy"] == EXPENSIVE_YES_LIVE_STRATEGY
+    assert expensive_payload["active_config"]["min_contract_price"] == 0.65
+    assert expensive_payload["strategy_metadata"]["threshold_label"] == "YES ask threshold"
+    assert saved["active_config"]["min_contract_price"] == 0.7
+    assert expensive_after["active_config"]["max_order_dollars"] == 0.95
+    assert fair_value_payload["active_config"]["strategy"] == FAIR_VALUE_LIVE_STRATEGY
+    assert fair_value_payload["active_config"]["max_order_dollars"] == 5.0
 
 
 def test_dashboard_service_rejects_invalid_config_without_saving() -> None:

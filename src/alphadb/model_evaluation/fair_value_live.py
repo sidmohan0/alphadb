@@ -43,6 +43,8 @@ class FairValueDecisionRowCollectorConfig:
     source_mode: str = "fixture"
     coinbase_source_mode: str = "fixture"
     model_config: ThresholdVolatilityFairValueConfig = ThresholdVolatilityFairValueConfig()
+    include_coinbase_features: bool = True
+    include_fair_value_score: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +55,8 @@ class FairValueDecisionRowCollectorConfig:
             "source_mode": self.source_mode,
             "coinbase_source_mode": self.coinbase_source_mode,
             "model_config": self.model_config.as_dict(),
+            "include_coinbase_features": self.include_coinbase_features,
+            "include_fair_value_score": self.include_fair_value_score,
         }
 
 
@@ -207,28 +211,6 @@ class FairValueDecisionRowCollector:
                 "missing_orderbook_quote",
             )
 
-        try:
-            features, feature_metadata = self._coinbase_features(now)
-        except Exception as exc:
-            return skip_row(
-                {
-                    **base,
-                    "market_open_time": open_time.isoformat(),
-                    "close_time": close_time.isoformat(),
-                    "yes_ask": yes_ask,
-                    "no_ask": no_ask,
-                    "quote_observed_at": quote_observed_at.isoformat(),
-                    "market_metadata_updated_at": market_metadata_updated_at.isoformat(),
-                    "market_list_yes_ask": market_list_yes_ask,
-                    "market_list_no_ask": market_list_no_ask,
-                    **executable_quotes,
-                    "payout_threshold": threshold,
-                },
-                "missing_feature_data",
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-
         decision_input = {
             **base,
             "row_type": "decision",
@@ -246,9 +228,31 @@ class FairValueDecisionRowCollector:
             "orderbook_observed": True,
             "orderbook_shape": orderbook_shape(orderbook),
             **executable_quotes,
-            **features,
-            **feature_metadata,
         }
+        if not self.config.include_coinbase_features:
+            return {
+                **decision_input,
+                "fair_value_status": "not_applicable",
+                "fair_value_skip_reason": None,
+                "p_yes": None,
+            }
+        try:
+            features, feature_metadata = self._coinbase_features(now)
+        except Exception as exc:
+            return skip_row(
+                decision_input,
+                "missing_feature_data",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+        decision_input = {**decision_input, **features, **feature_metadata}
+        if not self.config.include_fair_value_score:
+            return {
+                **decision_input,
+                "fair_value_status": "not_applicable",
+                "fair_value_skip_reason": None,
+                "p_yes": None,
+            }
         scored = build_threshold_volatility_fair_value_rows(
             [decision_input],
             config=self.config.model_config,

@@ -8,7 +8,9 @@ import pytest
 
 from alphadb.config import settings_from_env
 from alphadb.live_runtime import (
+    DEFAULT_EXPENSIVE_YES_LIVE_CONFIG,
     DEFAULT_FAIR_VALUE_LIVE_CONFIG,
+    EXPENSIVE_YES_LIVE_STRATEGY,
     LiveRunStatusRepository,
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
@@ -61,6 +63,22 @@ def test_runtime_config_repository_seeds_reads_saves_and_lists_history() -> None
     assert [revision.version for revision in history] == [2, 1]
     assert history[0].is_active is True
     assert history[1].is_active is False
+
+
+def test_expensive_yes_runtime_config_defaults_are_strategy_specific() -> None:
+    strategy = f"{EXPENSIVE_YES_LIVE_STRATEGY}_{uuid4().hex[:8]}"
+    repository = repository_or_skip()
+
+    seeded = repository.seed_defaults(strategy=strategy)
+    fair_value_seeded = repository.seed_defaults(strategy=f"fair_{uuid4().hex[:8]}")
+
+    assert seeded.config == DEFAULT_EXPENSIVE_YES_LIVE_CONFIG
+    assert seeded.config.min_contract_price == 0.65
+    assert seeded.config.max_order_dollars == 1.0
+    assert seeded.config.max_market_exposure_dollars == 1.0
+    assert seeded.config.max_daily_loss_dollars == 10.0
+    assert seeded.config.max_markets == 10
+    assert fair_value_seeded.config == DEFAULT_FAIR_VALUE_LIVE_CONFIG
 
 
 def test_runtime_config_validation_blocks_malformed_values() -> None:
@@ -123,6 +141,46 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
             "per_market_exposure": {"markets": []},
         },
     )
+    expensive = build_fair_value_live_status(
+        manifest={
+            **manifest,
+            "run_id": "expensive_yes_live_status",
+            "strategy": EXPENSIVE_YES_LIVE_STRATEGY,
+            "runtime_config": {
+                "config_id": "cfg_expensive",
+                "version": 1,
+                "strategy": EXPENSIVE_YES_LIVE_STRATEGY,
+                "snapshot": {"min_contract_price": 0.65},
+            },
+            "runtime_controls": {
+                "strategy": EXPENSIVE_YES_LIVE_STRATEGY,
+                "live_orders_enabled": False,
+                "orders_placed": 0,
+            },
+        },
+        attempts_payload={
+            "attempts": [
+                {
+                    "attempt_id": "attempt_expensive",
+                    "submitted_at": "2026-06-04T15:00:00+00:00",
+                    "market_ticker": "KXBTC15M-EXPENSIVE",
+                    "side": "yes",
+                    "status": "skipped",
+                    "reason": "submit_live_orders_false",
+                    "decision": {
+                        "decision": "trade",
+                        "side": "yes",
+                        "observed_yes_ask": 0.7,
+                        "yes_ask_threshold": 0.65,
+                        "intended_contracts": 1,
+                    },
+                    "market_exposure": {"intended_contracts": 1, "sized_contracts": 1},
+                    "max_loss_dollars": 0.70147,
+                }
+            ]
+        },
+        reconciliation={"rows": [], "per_market_exposure": {"markets": []}},
+    )
     skipped = build_fair_value_live_status(
         manifest={**manifest, "run_id": "fv_live_skipped"},
         attempts_payload={
@@ -145,6 +203,11 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert submitted.recent_no_fill_count == 1
     assert skipped.decision_outcome == "skipped"
     assert skipped.skip_reason == "daily_loss_cap_reached"
+    assert expensive.strategy == EXPENSIVE_YES_LIVE_STRATEGY
+    assert expensive.recent_attempts[0]["observed_yes_ask"] == 0.7
+    assert expensive.recent_attempts[0]["yes_ask_threshold"] == 0.65
+    assert expensive.recent_attempts[0]["sized_contracts"] == 1
+    assert expensive.recent_attempts[0]["max_loss_dollars"] == 0.70147
     assert no_recent.decision_outcome == "no_recent_run"
 
 

@@ -23,6 +23,7 @@ from alphadb.live_orders import (
     materialize_private_key_from_env,
 )
 from alphadb.live_runtime import (
+    EXPENSIVE_YES_LIVE_STRATEGY,
     FAIR_VALUE_LIVE_STRATEGY,
     LiveRunStatusRepository,
     LiveRuntimeConfigRepository,
@@ -59,12 +60,15 @@ FAIR_VALUE_LIVE_DAILY_LOSS_ACCOUNTING_SCHEMA = "kxbtc_fair_value_live_daily_loss
 FAIR_VALUE_LIVE_LOCK_TTL_SECONDS = 180
 DEFAULT_LIVE_RISK_TIMEZONE = "America/Los_Angeles"
 RuntimeConfigSource = Literal["auto", "postgres", "cli"]
+LiveDecisionPolicy = Literal["fair_value", "expensive_yes"]
 AWS_LIKE_ENVIRONMENTS = {"aws", "prod", "production"}
 
 
 @dataclass(frozen=True)
 class FairValueLiveTradingJobConfig:
     output_root: Path
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY
+    decision_policy: LiveDecisionPolicy = "fair_value"
     source: str = "fixture"
     coinbase_source: str = "fixture"
     max_markets: int = 20
@@ -88,6 +92,8 @@ class FairValueLiveTradingJobConfig:
     def as_dict(self) -> dict[str, Any]:
         return {
             "output_root": str(self.output_root),
+            "strategy": self.strategy,
+            "decision_policy": self.decision_policy,
             "source": self.source,
             "coinbase_source": self.coinbase_source,
             "max_markets": self.max_markets,
@@ -126,7 +132,7 @@ class FairValueLiveTradingJob:
         settings, credential_materialization = settings_with_materialized_private_key(self._settings)
         original_config = self.config
         generated_at = ensure_utc(now or datetime.now(UTC))
-        run_id = f"fv_live_{generated_at.strftime('%Y%m%dT%H%M%SZ')}"
+        run_id = f"{live_run_id_prefix(self.config.strategy)}_{generated_at.strftime('%Y%m%dT%H%M%SZ')}"
         run_dir = self.config.output_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         timer = PhaseTimer()
@@ -137,6 +143,7 @@ class FairValueLiveTradingJob:
                 run_id=run_id,
                 generated_at=generated_at,
                 enabled=self.config.submit_live_orders,
+                strategy=self.config.strategy,
             )
         try:
             if not live_run_lock.acquired:
@@ -144,6 +151,7 @@ class FairValueLiveTradingJob:
                     run_id=run_id,
                     generated_at=generated_at,
                     live_run_lock=live_run_lock,
+                    strategy=self.config.strategy,
                 )
                 timer.ensure_phases(
                     "runtime_config",
@@ -209,11 +217,13 @@ class FairValueLiveTradingJob:
                         run_id=run_id,
                         source_mode=self.config.source,
                         coinbase_source_mode=self.config.coinbase_source,
+                        include_coinbase_features=self.config.decision_policy == "fair_value",
+                        include_fair_value_score=self.config.decision_policy == "fair_value",
                     ),
                 )
                 collected = collector.collect(now=generated_at).as_dict()
             with timer.phase("decision"):
-                selected_decision, selected_row = select_one_cycle_live_decision(
+                selected_pairs = select_live_decision_pairs(
                     collected.get("rows", []),
                     config=FairValueReplayConfig(
                         min_edge=self.config.min_edge,
@@ -221,15 +231,24 @@ class FairValueLiveTradingJob:
                         max_order_dollars=self.config.max_order_dollars,
                         max_loss_dollars=self.config.max_daily_loss_dollars,
                     ),
+                    decision_policy=self.config.decision_policy,
                 )
             with timer.phase("freshness"):
-                selected_decision = apply_live_freshness_gates(
-                    selected_decision,
-                    selected_row,
-                    generated_at=generated_at,
-                    quote_stale_seconds=self.config.quote_stale_seconds,
-                    coinbase_feature_stale_seconds=self.config.coinbase_feature_stale_seconds,
-                )
+                selected_pairs = [
+                    (
+                        apply_live_freshness_gates(
+                            decision,
+                            row,
+                            generated_at=generated_at,
+                            quote_stale_seconds=self.config.quote_stale_seconds,
+                            coinbase_feature_stale_seconds=self.config.coinbase_feature_stale_seconds,
+                            require_coinbase_freshness=self.config.decision_policy == "fair_value",
+                        ),
+                        row,
+                    )
+                    for decision, row in selected_pairs
+                ]
+            selected_decision, selected_row = selected_pairs[0]
             live_risk_day, _window_start, _window_end = live_risk_window(
                 generated_at=generated_at,
                 live_risk_timezone=self.config.live_risk_timezone,
@@ -242,13 +261,13 @@ class FairValueLiveTradingJob:
             should_prepare_risk_state = (
                 self.config.submit_live_orders
                 and guard.can_submit_live_orders
-                and selected_decision.get("decision") == "trade"
+                and any(decision.get("decision") == "trade" for decision, _row in selected_pairs)
             )
             if should_prepare_risk_state:
                 with timer.phase("risk_state_read"):
                     admission_state, risk_state_read = live_risk_state_for_admission(
                         settings=settings,
-                        strategy=FAIR_VALUE_LIVE_STRATEGY,
+                        strategy=self.config.strategy,
                         live_risk_day=live_risk_day,
                         generated_at=generated_at,
                         run_id=run_id,
@@ -262,20 +281,32 @@ class FairValueLiveTradingJob:
                 ),
                 **dict(risk_state_read),
             }
-            live_attempt, risk_transition, order_submit_at = self._submit_one_cycle_attempt(
-                decision=selected_decision,
-                decision_row=selected_row,
-                settings=settings,
-                run_id=run_id,
-                generated_at=generated_at,
-                live_risk_day=live_risk_day,
-                admission_state=admission_state,
-                daily_loss_accounting=admission_daily_loss_accounting,
-                runtime_guard=guard.as_dict(),
-                live_run_lock=live_run_lock,
-                timer=timer,
-            )
-            live_attempts = [live_attempt]
+            live_attempts: list[dict[str, Any]] = []
+            risk_transition: LiveRiskAdmissionResult | None = None
+            order_submit_at: datetime | None = None
+            for decision, row in selected_pairs:
+                live_attempt, attempt_risk_transition, attempt_submit_at = (
+                    self._submit_one_cycle_attempt(
+                        decision=decision,
+                        decision_row=row,
+                        settings=settings,
+                        run_id=run_id,
+                        generated_at=generated_at,
+                        live_risk_day=live_risk_day,
+                        admission_state=admission_state,
+                        daily_loss_accounting=admission_daily_loss_accounting,
+                        runtime_guard=guard.as_dict(),
+                        live_run_lock=live_run_lock,
+                        timer=timer,
+                    )
+                )
+                live_attempts.append(live_attempt)
+                if attempt_risk_transition is not None:
+                    risk_transition = attempt_risk_transition
+                    if attempt_risk_transition.state is not None:
+                        admission_state = attempt_risk_transition.state
+                if attempt_submit_at is not None:
+                    order_submit_at = attempt_submit_at
             live_reconciliation = compact_live_reconciliation(
                 live_attempts,
                 generated_at=generated_at,
@@ -283,7 +314,7 @@ class FairValueLiveTradingJob:
             )
             final_state = live_risk_state_for_day(
                 settings=settings,
-                strategy=FAIR_VALUE_LIVE_STRATEGY,
+                strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
                 apply_migrations=False,
             ) if self.config.submit_live_orders else None
@@ -296,6 +327,7 @@ class FairValueLiveTradingJob:
             live_attempts_payload = {
                 "schema_version": FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA,
                 "run_id": run_id,
+                "strategy": self.config.strategy,
                 "generated_at": generated_at.isoformat(),
                 "admission_daily_loss_accounting": admission_daily_loss_accounting,
                 "risk_transition": risk_transition.as_dict() if risk_transition else None,
@@ -375,8 +407,9 @@ class FairValueLiveTradingJob:
         risk_before = admission_state.total_risk_used_dollars if admission_state else 0.0
         freshness = live_decision_freshness(decision_row, generated_at=generated_at)
         base = {
-            "attempt_id": f"fv_live_order_{uuid4().hex[:12]}",
+            "attempt_id": f"{live_run_id_prefix(self.config.strategy)}_order_{uuid4().hex[:12]}",
             "run_id": run_id,
+            "strategy": self.config.strategy,
             "submitted_at": generated_at.isoformat(),
             "market_ticker": market_ticker,
             "side": effective_decision.get("side"),
@@ -438,6 +471,7 @@ class FairValueLiveTradingJob:
 
         with timer.phase("risk_admission"):
             risk_result = LiveRiskAdmissionRepository(settings.database_url).admit_order(
+                strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
                 market_ticker=market_ticker,
                 max_loss_dollars=max_loss,
@@ -464,6 +498,7 @@ class FairValueLiveTradingJob:
                 )
         except Exception as exc:
             transition = LiveRiskAdmissionRepository(settings.database_url).retain_reservation(
+                strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
                 reservation_id=str(risk_result.reservation_id),
                 now=datetime.now(UTC),
@@ -484,6 +519,7 @@ class FairValueLiveTradingJob:
         accepted = exchange_response_accepted(response)
         if accepted and fill_count > 0:
             transition = LiveRiskAdmissionRepository(settings.database_url).convert_reservation(
+                strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
                 reservation_id=str(risk_result.reservation_id),
                 filled_max_loss_dollars=filled_max_loss_estimate(effective_decision, fill_count),
@@ -491,12 +527,14 @@ class FairValueLiveTradingJob:
             )
         elif accepted:
             transition = LiveRiskAdmissionRepository(settings.database_url).release_reservation(
+                strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
                 reservation_id=str(risk_result.reservation_id),
                 now=datetime.now(UTC),
             )
         else:
             transition = LiveRiskAdmissionRepository(settings.database_url).release_reservation(
+                strategy=self.config.strategy,
                 live_risk_day=live_risk_day,
                 reservation_id=str(risk_result.reservation_id),
                 now=datetime.now(UTC),
@@ -560,6 +598,7 @@ class FairValueLiveTradingJob:
             or {
                 "schema_version": FAIR_VALUE_LIVE_ATTEMPTS_SCHEMA,
                 "run_id": run_id,
+                "strategy": self.config.strategy,
                 "generated_at": generated_at.isoformat(),
                 "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
                 "daily_loss_accounting": dict(daily_loss_accounting),
@@ -589,12 +628,16 @@ class FairValueLiveTradingJob:
         manifest = {
             "schema_version": FAIR_VALUE_LIVE_JOB_SCHEMA,
             "run_id": run_id,
+            "strategy": self.config.strategy,
+            "decision_policy": self.config.decision_policy,
             "generated_at": generated_at.isoformat(),
             "one_cycle": True,
             "hot_path_scope": "one_current_decision_no_replay_no_walk_forward_no_full_history",
             "config": self.config.as_dict(),
             "runtime_config": dict(runtime_config),
             "runtime_controls": {
+                "strategy": self.config.strategy,
+                "decision_policy": self.config.decision_policy,
                 "report_only": False,
                 "submit_live_orders_requested": self.config.submit_live_orders,
                 "live_orders_enabled": bool(runtime_guard.get("can_submit_live_orders")),
@@ -627,6 +670,10 @@ class FairValueLiveTradingJob:
                 "read_reason": daily_loss_accounting.get("risk_state_read_reason"),
             },
             "selected_decision": dict(selected_decision or {}),
+            "selected_decisions": [
+                dict(attempt.get("original_decision") or attempt.get("decision") or {})
+                for attempt in live_attempts
+            ],
             "selected_row": dict(selected_row or {}),
             "counts": {
                 "collected_rows": int(collected_counts.get("rows") or 0),
@@ -905,9 +952,12 @@ class PhaseTimer:
 def runtime_config_snapshot(config: FairValueLiveTradingJobConfig) -> dict[str, Any]:
     return {
         "source": "not_read_lock_held",
+        "strategy": config.strategy,
         "config_id": None,
         "version": None,
         "snapshot": {
+            "strategy": config.strategy,
+            "decision_policy": config.decision_policy,
             "max_order_dollars": config.max_order_dollars,
             "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
             "max_daily_loss_dollars": config.max_daily_loss_dollars,
@@ -967,10 +1017,12 @@ def lock_held_attempt(
     run_id: str,
     generated_at: datetime,
     live_run_lock: "LiveRunLock",
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
 ) -> dict[str, Any]:
     return {
-        "attempt_id": f"fv_live_order_{uuid4().hex[:12]}",
+        "attempt_id": f"{live_run_id_prefix(strategy)}_order_{uuid4().hex[:12]}",
         "run_id": run_id,
+        "strategy": strategy,
         "submitted_at": generated_at.isoformat(),
         "market_ticker": "",
         "side": None,
@@ -987,6 +1039,24 @@ def lock_held_attempt(
         "status": "skipped",
         "reason": live_run_lock.reason or "live_run_lock_held",
     }
+
+
+def live_run_id_prefix(strategy: str) -> str:
+    if strategy == EXPENSIVE_YES_LIVE_STRATEGY:
+        return "expensive_yes_live"
+    return "fv_live"
+
+
+def select_live_decision_pairs(
+    rows: object,
+    *,
+    config: FairValueReplayConfig,
+    decision_policy: LiveDecisionPolicy = "fair_value",
+) -> list[tuple[dict[str, Any], Mapping[str, Any] | None]]:
+    if decision_policy == "expensive_yes":
+        return select_expensive_yes_live_decisions(rows, config=config)
+    decision, row = select_one_cycle_live_decision(rows, config=config)
+    return [(decision, row)]
 
 
 def select_one_cycle_live_decision(
@@ -1042,6 +1112,111 @@ def select_one_cycle_live_decision(
     )
 
 
+def select_expensive_yes_live_decisions(
+    rows: object,
+    *,
+    config: FairValueReplayConfig,
+) -> list[tuple[dict[str, Any], Mapping[str, Any] | None]]:
+    row_list = [dict(row) for row in rows if isinstance(row, Mapping)] if isinstance(rows, list) else []
+    decisions: list[tuple[dict[str, Any], Mapping[str, Any] | None]] = []
+    eligible_rows = sorted(
+        [row for row in row_list if row.get("row_type") == "decision"],
+        key=replay_sort_key,
+    )
+    for row in eligible_rows:
+        decisions.append((expensive_yes_decision(row, config=config), row))
+    for row in sorted(
+        [row for row in row_list if row.get("row_type") == "skip"],
+        key=replay_sort_key,
+    ):
+        decisions.append(
+            (
+                {
+                    "ticker": str(row.get("ticker") or row.get("market_ticker") or ""),
+                    "market_ticker": str(row.get("ticker") or row.get("market_ticker") or ""),
+                    "decision_timestamp": row.get("decision_timestamp"),
+                    "decision": "skip",
+                    "reason": str(row.get("skip_reason") or "collector_skip"),
+                    "decision_policy": "expensive_yes",
+                },
+                row,
+            )
+        )
+    if decisions:
+        return decisions
+    return [
+        (
+            {
+                "ticker": "",
+                "market_ticker": "",
+                "decision_timestamp": None,
+                "decision": "skip",
+                "reason": "no_current_market",
+                "decision_policy": "expensive_yes",
+            },
+            None,
+        )
+    ]
+
+
+def expensive_yes_decision(
+    row: Mapping[str, Any],
+    *,
+    config: FairValueReplayConfig,
+) -> dict[str, Any]:
+    ticker = str(row.get("ticker") or row.get("market_ticker") or "")
+    yes_ask = optional_float(row.get("yes_ask"))
+    threshold = float(config.min_contract_price)
+    base = {
+        "ticker": ticker,
+        "market_ticker": ticker,
+        "decision_timestamp": row.get("decision_timestamp"),
+        "decision_policy": "expensive_yes",
+        "side": "yes",
+        "observed_yes_ask": yes_ask,
+        "yes_ask_threshold": threshold,
+    }
+    if not ticker:
+        return {**base, "decision": "skip", "reason": "malformed_market"}
+    if yes_ask is None:
+        return {**base, "decision": "skip", "reason": "missing_yes_ask"}
+    if yes_ask < threshold:
+        return {**base, "decision": "skip", "reason": "yes_ask_below_threshold"}
+    fee_per_contract = taker_fee(yes_ask, config.taker_fee_multiplier)
+    max_loss_per_contract = yes_ask + fee_per_contract
+    if max_loss_per_contract <= 0:
+        return {**base, "decision": "skip", "reason": "sizing_impossible"}
+    intended_contracts = int(config.max_order_dollars // max_loss_per_contract)
+    if intended_contracts < 1:
+        return {**base, "decision": "skip", "reason": "sizing_impossible"}
+    cost = yes_ask * intended_contracts
+    fees = fee_per_contract * intended_contracts
+    max_loss = cost + fees
+    if max_loss > config.max_loss_dollars:
+        allowed_contracts = int(config.max_loss_dollars // max_loss_per_contract)
+        if allowed_contracts < 1:
+            return {**base, "decision": "skip", "reason": "sizing_impossible"}
+        intended_contracts = allowed_contracts
+        cost = yes_ask * intended_contracts
+        fees = fee_per_contract * intended_contracts
+        max_loss = cost + fees
+    return {
+        **base,
+        "decision": "trade",
+        "reason": "yes_ask_at_or_above_threshold",
+        "price": round(yes_ask, 6),
+        "yes_ask": round(yes_ask, 6),
+        "fee_per_contract": round(fee_per_contract, 6),
+        "intended_contracts": intended_contracts,
+        "contracts": intended_contracts,
+        "cost_dollars": round(cost, 6),
+        "fees_dollars": round(fees, 6),
+        "payout_dollars": 0.0,
+        "pnl_dollars": 0.0,
+        "max_loss_dollars": round(max_loss, 6),
+    }
+
+
 def apply_live_freshness_gates(
     decision: Mapping[str, Any],
     row: Mapping[str, Any] | None,
@@ -1049,6 +1224,7 @@ def apply_live_freshness_gates(
     generated_at: datetime,
     quote_stale_seconds: int,
     coinbase_feature_stale_seconds: int,
+    require_coinbase_freshness: bool = True,
 ) -> dict[str, Any]:
     result = dict(decision)
     if result.get("decision") != "trade":
@@ -1057,9 +1233,10 @@ def apply_live_freshness_gates(
     quote_age = freshness.get("quote_age_seconds")
     if quote_age is None or float(quote_age) > quote_stale_seconds:
         return {**result, "decision": "skip", "reason": "quote_stale"}
-    coinbase_age = freshness.get("coinbase_feature_age_seconds")
-    if coinbase_age is None or float(coinbase_age) > coinbase_feature_stale_seconds:
-        return {**result, "decision": "skip", "reason": "coinbase_context_stale"}
+    if require_coinbase_freshness:
+        coinbase_age = freshness.get("coinbase_feature_age_seconds")
+        if coinbase_age is None or float(coinbase_age) > coinbase_feature_stale_seconds:
+            return {**result, "decision": "skip", "reason": "coinbase_context_stale"}
     return result
 
 
@@ -1402,6 +1579,7 @@ def acquire_live_run_lock(
     run_id: str,
     generated_at: datetime,
     enabled: bool,
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
     ttl_seconds: int = FAIR_VALUE_LIVE_LOCK_TTL_SECONDS,
 ) -> LiveRunLock:
     if not enabled:
@@ -1421,12 +1599,14 @@ def acquire_live_run_lock(
     if s3_prefix:
         return acquire_s3_live_run_lock(
             s3_prefix=s3_prefix,
+            strategy=strategy,
             token=token,
             payload=payload,
             now=generated_at,
         )
     return acquire_local_live_run_lock(
         output_root=output_root,
+        strategy=strategy,
         token=token,
         payload=payload,
         now=generated_at,
@@ -1453,11 +1633,12 @@ def live_run_lock_payload(
 def acquire_local_live_run_lock(
     *,
     output_root: Path,
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
     token: str,
     payload: Mapping[str, Any],
     now: datetime,
 ) -> LiveRunLock:
-    path = output_root / ".fair_value_live_run.lock"
+    path = output_root / f".{strategy}_run.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     for _attempt in range(2):
         try:
@@ -1504,12 +1685,13 @@ def release_local_live_run_lock(path: Path, *, token: str) -> None:
 def acquire_s3_live_run_lock(
     *,
     s3_prefix: str,
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
     token: str,
     payload: Mapping[str, Any],
     now: datetime,
 ) -> LiveRunLock:
     bucket, prefix = parse_s3_prefix(s3_prefix)
-    key = live_run_lock_s3_key(prefix)
+    key = live_run_lock_s3_key(prefix, strategy=strategy)
     try:
         import boto3  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover - depends on AWS image environment
@@ -1572,9 +1754,14 @@ def release_s3_live_run_lock(client: Any, *, bucket: str, key: str, token: str) 
         pass
 
 
-def live_run_lock_s3_key(prefix: str) -> str:
+def live_run_lock_s3_key(prefix: str, *, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> str:
+    filename = (
+        "fair-value-live-run.lock"
+        if strategy == FAIR_VALUE_LIVE_STRATEGY
+        else f"{strategy}-run.lock"
+    )
     return "/".join(
-        part.strip("/") for part in (prefix, "_locks", "fair-value-live-run.lock") if part
+        part.strip("/") for part in (prefix, "_locks", filename) if part
     )
 
 
@@ -2106,9 +2293,12 @@ def resolve_live_runtime_config(
     if source == "auto" and settings.environment.lower() not in AWS_LIKE_ENVIRONMENTS:
         return config, {
             "source": "cli_local_fallback",
+            "strategy": config.strategy,
             "config_id": None,
             "version": None,
             "snapshot": {
+                "strategy": config.strategy,
+                "decision_policy": config.decision_policy,
                 "max_order_dollars": config.max_order_dollars,
                 "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": config.max_daily_loss_dollars,
@@ -2120,9 +2310,12 @@ def resolve_live_runtime_config(
     if source == "cli":
         return config, {
             "source": "cli",
+            "strategy": config.strategy,
             "config_id": None,
             "version": None,
             "snapshot": {
+                "strategy": config.strategy,
+                "decision_policy": config.decision_policy,
                 "max_order_dollars": config.max_order_dollars,
                 "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": config.max_daily_loss_dollars,
@@ -2132,16 +2325,21 @@ def resolve_live_runtime_config(
             },
         }
     try:
-        revision = LiveRuntimeConfigRepository(settings.database_url).seed_defaults()
+        revision = LiveRuntimeConfigRepository(settings.database_url).seed_defaults(
+            strategy=config.strategy
+        )
     except Exception as exc:
         if source == "postgres" or settings.environment.lower() in AWS_LIKE_ENVIRONMENTS:
             raise RuntimeError("dashboard-owned live runtime config is unavailable") from exc
         return config, {
             "source": "cli_db_unavailable_fallback",
+            "strategy": config.strategy,
             "config_id": None,
             "version": None,
             "error": f"{type(exc).__name__}: {exc}",
             "snapshot": {
+                "strategy": config.strategy,
+                "decision_policy": config.decision_policy,
                 "max_order_dollars": config.max_order_dollars,
                 "max_market_exposure_dollars": config.max_ticker_exposure_dollars,
                 "max_daily_loss_dollars": config.max_daily_loss_dollars,
