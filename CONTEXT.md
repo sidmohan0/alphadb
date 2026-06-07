@@ -1,5 +1,14 @@
 # Context
 
+## How to use this file
+
+This file is AlphaDB's domain glossary and architecture context. It is not a task list.
+
+Agents should use it to preserve vocabulary, boundaries, and invariants. For day-to-day coding rules, read `AGENTS.md` first.
+
+Stable terms and invariants should remain here. Short-lived task plans, PR-specific goals, and temporary implementation notes should live in issues, PRDs, or docs under `docs/`.
+
+
 ## Project
 
 AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trading platform. It starts with `KXBTC15M`, but the architecture should support future crypto market families through explicit market specifications.
