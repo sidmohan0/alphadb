@@ -1,0 +1,10 @@
+metric,value,detail
+row_count,3064,normalized side rows
+market_count,96,unique markets
+market_close_date_range,2026-06-05:2026-06-05,market close date coverage
+decision_date_range,2026-06-04:2026-06-05,decision timestamp coverage
+unique_market_close_days,1,2026-06-05
+missing_prices,186,missing last/price close
+missing_asks,0,missing executable side ask
+missing_outcomes,0,unsettled or missing labels
+excluded_rows,0,{}

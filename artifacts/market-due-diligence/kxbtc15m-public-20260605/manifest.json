@@ -1,0 +1,340 @@
+{
+  "schema_version": "kxbtc15m_market_structure_due_diligence_mvp.v3",
+  "created_at": "2026-06-07T16:30:45.391694Z",
+  "market_series": "KXBTC15M",
+  "date_start": "2026-06-05",
+  "date_end": "2026-06-05",
+  "source_mode": "kalshi_public",
+  "source_provenance": {
+    "source_mode": "kalshi_public",
+    "source_status": "cached_source",
+    "retrieved_at": "2026-06-07T16:17:49.882058Z",
+    "window": "current",
+    "market_series": "KXBTC15M",
+    "start_date": "2026-06-05",
+    "end_date": "2026-06-05",
+    "expected_days": [
+      "2026-06-05"
+    ],
+    "market_identifiers": [
+      "KXBTC15M-26JUN051945-45",
+      "KXBTC15M-26JUN051930-30",
+      "KXBTC15M-26JUN051915-15",
+      "KXBTC15M-26JUN051900-00",
+      "KXBTC15M-26JUN051845-45",
+      "KXBTC15M-26JUN051830-30",
+      "KXBTC15M-26JUN051815-15",
+      "KXBTC15M-26JUN051800-00",
+      "KXBTC15M-26JUN051745-45",
+      "KXBTC15M-26JUN051730-30",
+      "KXBTC15M-26JUN051715-15",
+      "KXBTC15M-26JUN051700-00",
+      "KXBTC15M-26JUN051645-45",
+      "KXBTC15M-26JUN051630-30",
+      "KXBTC15M-26JUN051615-15",
+      "KXBTC15M-26JUN051600-00",
+      "KXBTC15M-26JUN051545-45",
+      "KXBTC15M-26JUN051530-30",
+      "KXBTC15M-26JUN051515-15",
+      "KXBTC15M-26JUN051500-00",
+      "KXBTC15M-26JUN051445-45",
+      "KXBTC15M-26JUN051430-30",
+      "KXBTC15M-26JUN051415-15",
+      "KXBTC15M-26JUN051400-00",
+      "KXBTC15M-26JUN051345-45",
+      "KXBTC15M-26JUN051330-30",
+      "KXBTC15M-26JUN051315-15",
+      "KXBTC15M-26JUN051300-00",
+      "KXBTC15M-26JUN051245-45",
+      "KXBTC15M-26JUN051230-30",
+      "KXBTC15M-26JUN051215-15",
+      "KXBTC15M-26JUN051200-00",
+      "KXBTC15M-26JUN051145-45",
+      "KXBTC15M-26JUN051130-30",
+      "KXBTC15M-26JUN051115-15",
+      "KXBTC15M-26JUN051100-00",
+      "KXBTC15M-26JUN051045-45",
+      "KXBTC15M-26JUN051030-30",
+      "KXBTC15M-26JUN051015-15",
+      "KXBTC15M-26JUN051000-00",
+      "KXBTC15M-26JUN050945-45",
+      "KXBTC15M-26JUN050930-30",
+      "KXBTC15M-26JUN050915-15",
+      "KXBTC15M-26JUN050900-00",
+      "KXBTC15M-26JUN050845-45",
+      "KXBTC15M-26JUN050830-30",
+      "KXBTC15M-26JUN050815-15",
+      "KXBTC15M-26JUN050800-00",
+      "KXBTC15M-26JUN050745-45",
+      "KXBTC15M-26JUN050730-30",
+      "KXBTC15M-26JUN050715-15",
+      "KXBTC15M-26JUN050700-00",
+      "KXBTC15M-26JUN050645-45",
+      "KXBTC15M-26JUN050630-30",
+      "KXBTC15M-26JUN050615-15",
+      "KXBTC15M-26JUN050600-00",
+      "KXBTC15M-26JUN050545-45",
+      "KXBTC15M-26JUN050530-30",
+      "KXBTC15M-26JUN050515-15",
+      "KXBTC15M-26JUN050500-00",
+      "KXBTC15M-26JUN050445-45",
+      "KXBTC15M-26JUN050430-30",
+      "KXBTC15M-26JUN050415-15",
+      "KXBTC15M-26JUN050400-00",
+      "KXBTC15M-26JUN050345-45",
+      "KXBTC15M-26JUN050330-30",
+      "KXBTC15M-26JUN050315-15",
+      "KXBTC15M-26JUN050300-00",
+      "KXBTC15M-26JUN050245-45",
+      "KXBTC15M-26JUN050230-30",
+      "KXBTC15M-26JUN050215-15",
+      "KXBTC15M-26JUN050200-00",
+      "KXBTC15M-26JUN050145-45",
+      "KXBTC15M-26JUN050130-30",
+      "KXBTC15M-26JUN050115-15",
+      "KXBTC15M-26JUN050100-00",
+      "KXBTC15M-26JUN050045-45",
+      "KXBTC15M-26JUN050030-30",
+      "KXBTC15M-26JUN050015-15",
+      "KXBTC15M-26JUN050000-00",
+      "KXBTC15M-26JUN042345-45",
+      "KXBTC15M-26JUN042330-30",
+      "KXBTC15M-26JUN042315-15",
+      "KXBTC15M-26JUN042300-00",
+      "KXBTC15M-26JUN042245-45",
+      "KXBTC15M-26JUN042230-30",
+      "KXBTC15M-26JUN042215-15",
+      "KXBTC15M-26JUN042200-00",
+      "KXBTC15M-26JUN042145-45",
+      "KXBTC15M-26JUN042130-30",
+      "KXBTC15M-26JUN042115-15",
+      "KXBTC15M-26JUN042100-00",
+      "KXBTC15M-26JUN042045-45",
+      "KXBTC15M-26JUN042030-30",
+      "KXBTC15M-26JUN042015-15",
+      "KXBTC15M-26JUN042000-00"
+    ],
+    "source_files": [
+      "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-source-cache/kxbtc15m-current-2026-06-05-2026-06-05/source.json"
+    ],
+    "request_paths": [
+      "/markets?series_ticker=KXBTC15M&min_close_ts=1780617600&max_close_ts=1780703999&mve_filter=exclude&limit=1000",
+      "/markets/candlesticks?market_tickers=KXBTC15M-26JUN051945-45%2CKXBTC15M-26JUN051930-30%2CKXBTC15M-26JUN051915-15%2CKXBTC15M-26JUN051900-00%2CKXBTC15M-26JUN051845-45%2CKXBTC15M-26JUN051830-30%2CKXBTC15M-26JUN051815-15%2CKXBTC15M-26JUN051800-00%2CKXBTC15M-26JUN051745-45%2CKXBTC15M-26JUN051730-30%2CKXBTC15M-26JUN051715-15%2CKXBTC15M-26JUN051700-00%2CKXBTC15M-26JUN051645-45%2CKXBTC15M-26JUN051630-30%2CKXBTC15M-26JUN051615-15%2CKXBTC15M-26JUN051600-00%2CKXBTC15M-26JUN051545-45%2CKXBTC15M-26JUN051530-30%2CKXBTC15M-26JUN051515-15%2CKXBTC15M-26JUN051500-00%2CKXBTC15M-26JUN051445-45%2CKXBTC15M-26JUN051430-30%2CKXBTC15M-26JUN051415-15%2CKXBTC15M-26JUN051400-00&start_ts=1780681500&end_ts=1780703100&period_interval=1",
+      "/markets/candlesticks?market_tickers=KXBTC15M-26JUN051345-45%2CKXBTC15M-26JUN051330-30%2CKXBTC15M-26JUN051315-15%2CKXBTC15M-26JUN051300-00%2CKXBTC15M-26JUN051245-45%2CKXBTC15M-26JUN051230-30%2CKXBTC15M-26JUN051215-15%2CKXBTC15M-26JUN051200-00%2CKXBTC15M-26JUN051145-45%2CKXBTC15M-26JUN051130-30%2CKXBTC15M-26JUN051115-15%2CKXBTC15M-26JUN051100-00%2CKXBTC15M-26JUN051045-45%2CKXBTC15M-26JUN051030-30%2CKXBTC15M-26JUN051015-15%2CKXBTC15M-26JUN051000-00%2CKXBTC15M-26JUN050945-45%2CKXBTC15M-26JUN050930-30%2CKXBTC15M-26JUN050915-15%2CKXBTC15M-26JUN050900-00%2CKXBTC15M-26JUN050845-45%2CKXBTC15M-26JUN050830-30%2CKXBTC15M-26JUN050815-15%2CKXBTC15M-26JUN050800-00&start_ts=1780659900&end_ts=1780681500&period_interval=1",
+      "/markets/candlesticks?market_tickers=KXBTC15M-26JUN050745-45%2CKXBTC15M-26JUN050730-30%2CKXBTC15M-26JUN050715-15%2CKXBTC15M-26JUN050700-00%2CKXBTC15M-26JUN050645-45%2CKXBTC15M-26JUN050630-30%2CKXBTC15M-26JUN050615-15%2CKXBTC15M-26JUN050600-00%2CKXBTC15M-26JUN050545-45%2CKXBTC15M-26JUN050530-30%2CKXBTC15M-26JUN050515-15%2CKXBTC15M-26JUN050500-00%2CKXBTC15M-26JUN050445-45%2CKXBTC15M-26JUN050430-30%2CKXBTC15M-26JUN050415-15%2CKXBTC15M-26JUN050400-00%2CKXBTC15M-26JUN050345-45%2CKXBTC15M-26JUN050330-30%2CKXBTC15M-26JUN050315-15%2CKXBTC15M-26JUN050300-00%2CKXBTC15M-26JUN050245-45%2CKXBTC15M-26JUN050230-30%2CKXBTC15M-26JUN050215-15%2CKXBTC15M-26JUN050200-00&start_ts=1780638300&end_ts=1780659900&period_interval=1",
+      "/markets/candlesticks?market_tickers=KXBTC15M-26JUN050145-45%2CKXBTC15M-26JUN050130-30%2CKXBTC15M-26JUN050115-15%2CKXBTC15M-26JUN050100-00%2CKXBTC15M-26JUN050045-45%2CKXBTC15M-26JUN050030-30%2CKXBTC15M-26JUN050015-15%2CKXBTC15M-26JUN050000-00%2CKXBTC15M-26JUN042345-45%2CKXBTC15M-26JUN042330-30%2CKXBTC15M-26JUN042315-15%2CKXBTC15M-26JUN042300-00%2CKXBTC15M-26JUN042245-45%2CKXBTC15M-26JUN042230-30%2CKXBTC15M-26JUN042215-15%2CKXBTC15M-26JUN042200-00%2CKXBTC15M-26JUN042145-45%2CKXBTC15M-26JUN042130-30%2CKXBTC15M-26JUN042115-15%2CKXBTC15M-26JUN042100-00%2CKXBTC15M-26JUN042045-45%2CKXBTC15M-26JUN042030-30%2CKXBTC15M-26JUN042015-15%2CKXBTC15M-26JUN042000-00&start_ts=1780616700&end_ts=1780638300&period_interval=1"
+    ]
+  },
+  "window_source_summary": [
+    {
+      "window": "current",
+      "start": "2026-06-05",
+      "end": "2026-06-05",
+      "expected_days": 1,
+      "market_close_days": 1,
+      "markets_loaded": 96,
+      "candlestick_rows_loaded": 1532,
+      "normalized_side_rows": 3064,
+      "source_status": "cached_source",
+      "source_file": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-source-cache/kxbtc15m-current-2026-06-05-2026-06-05/source.json"
+    },
+    {
+      "window": "7d",
+      "start": "2026-05-30",
+      "end": "2026-06-05",
+      "expected_days": 7,
+      "market_close_days": 7,
+      "markets_loaded": 660,
+      "candlestick_rows_loaded": 10532,
+      "normalized_side_rows": 21064,
+      "source_status": "cached_source",
+      "source_file": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-source-cache/kxbtc15m-7d-2026-05-30-2026-06-05/source.json"
+    },
+    {
+      "window": "30d",
+      "start": "2026-05-07",
+      "end": "2026-06-05",
+      "expected_days": 30,
+      "market_close_days": 30,
+      "markets_loaded": 2820,
+      "candlestick_rows_loaded": 44961,
+      "normalized_side_rows": 89922,
+      "source_status": "cached_source",
+      "source_file": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-source-cache/kxbtc15m-30d-2026-05-07-2026-06-05/source.json"
+    }
+  ],
+  "assumptions": [
+    {
+      "assumption": "market_series",
+      "value": "KXBTC15M"
+    },
+    {
+      "assumption": "date_start",
+      "value": "2026-06-05"
+    },
+    {
+      "assumption": "date_end",
+      "value": "2026-06-05"
+    },
+    {
+      "assumption": "source_mode",
+      "value": "kalshi_public"
+    },
+    {
+      "assumption": "data_path",
+      "value": "None"
+    },
+    {
+      "assumption": "output_dir",
+      "value": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605"
+    },
+    {
+      "assumption": "source_cache_root",
+      "value": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-source-cache"
+    },
+    {
+      "assumption": "REFRESH_SOURCE_DATA",
+      "value": false
+    },
+    {
+      "assumption": "primary_policy",
+      "value": "expensive_yes"
+    },
+    {
+      "assumption": "fee_per_contract",
+      "value": 0.01
+    },
+    {
+      "assumption": "slippage_per_contract",
+      "value": 0.0
+    },
+    {
+      "assumption": "stress_slippage_per_contract",
+      "value": 0.02
+    },
+    {
+      "assumption": "cheap_price_max",
+      "value": 0.35
+    },
+    {
+      "assumption": "expensive_price_min",
+      "value": 0.65
+    },
+    {
+      "assumption": "final_window_seconds",
+      "value": 180
+    },
+    {
+      "assumption": "minimum_candidate_trades",
+      "value": 100
+    },
+    {
+      "assumption": "minimum_candidate_markets",
+      "value": 10
+    }
+  ],
+  "price_buckets": [
+    {
+      "label": "cheap",
+      "min_price": null,
+      "max_price": 0.35
+    },
+    {
+      "label": "mid",
+      "min_price": 0.35,
+      "max_price": 0.65
+    },
+    {
+      "label": "expensive",
+      "min_price": 0.65,
+      "max_price": null
+    }
+  ],
+  "time_to_expiry_buckets": [
+    {
+      "label": "final_3m",
+      "min_seconds": null,
+      "max_seconds": 180
+    },
+    {
+      "label": "middle_9m",
+      "min_seconds": 180,
+      "max_seconds": 720
+    },
+    {
+      "label": "early",
+      "min_seconds": 720,
+      "max_seconds": null
+    }
+  ],
+  "top_policy_price_sub_buckets": [
+    {
+      "label": "65_75c",
+      "min_price": 0.65,
+      "max_price": 0.75,
+      "include_max": false
+    },
+    {
+      "label": "75_90c",
+      "min_price": 0.75,
+      "max_price": 0.9,
+      "include_max": false
+    },
+    {
+      "label": "90_100c",
+      "min_price": 0.9,
+      "max_price": 1.0,
+      "include_max": true
+    }
+  ],
+  "candidate_gate_thresholds": {
+    "minimum_candidate_trades": 100,
+    "minimum_candidate_markets": 10,
+    "requires_positive_net_roi": true,
+    "requires_positive_stressed_roi": true
+  },
+  "candidate_edge_gate": [
+    {
+      "gate": "Positive net ROI",
+      "result": "failed"
+    },
+    {
+      "gate": "Positive stressed ROI",
+      "result": "failed"
+    },
+    {
+      "gate": "Enough trades >= 100",
+      "result": "passed"
+    },
+    {
+      "gate": "Enough markets >= 10",
+      "result": "passed"
+    },
+    {
+      "gate": "Candidate structural edge",
+      "result": "no"
+    }
+  ],
+  "row_counts": {
+    "normalized_rows": 3064,
+    "markets": 96,
+    "trades_in_all_baselines": 6468
+  },
+  "primary_policy": "expensive_yes",
+  "least_bad_current_policy": "cheap_yes",
+  "least_bad_current_policy_positive": false,
+  "overall_recommendation": "no_coarse_dumb_baseline_edge",
+  "final_verdict": "No coarse dumb-baseline structural edge found. Reject expensive_yes. Continue with deeper segmentation, not live deployment or model training.",
+  "artifact_paths": {
+    "manifest": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/manifest.json",
+    "report": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/report.md",
+    "data_quality_audit": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/data_quality_audit.csv",
+    "baseline_results": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/baseline_results.csv",
+    "calibration_results": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/calibration_results.csv",
+    "pnl_attribution": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/pnl_attribution.csv",
+    "top_opportunities": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/top_opportunities.csv",
+    "window_comparison": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/window_comparison.csv",
+    "candidate_edge_gate": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/candidate_edge_gate.csv",
+    "candidate_policy_gate": "/Users/sid/projects/alphadb/artifacts/market-due-diligence/kxbtc15m-public-20260605/candidate_policy_gate.csv"
+  }
+}

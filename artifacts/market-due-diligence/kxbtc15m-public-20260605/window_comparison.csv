@@ -1,0 +1,4 @@
+window,start,end,expected_days,observed_market_close_days,source_status,primary_policy,primary_trades,primary_markets,primary_net_pnl,primary_net_roi,primary_stressed_roi,least_bad_policy,least_bad_policy_positive,least_bad_policy_net_pnl,least_bad_policy_net_roi,least_bad_policy_stressed_roi
+current,2026-06-05,2026-06-05,1,1,cached_source,expensive_yes,584,93,-22.516000000000002,-0.04268306553734864,-0.06342035178302512,cheap_yes,False,-7.385000000000006,-0.08548937894310363,-0.20350859504965477
+7d,2026-05-30,2026-06-05,7,7,cached_source,expensive_yes,4180,649,-407.772,-0.10814018986032568,-0.12748432170013688,cheap_no,False,-38.680000000000014,-0.08046933510859618,-0.19636363636363643
+30d,2026-05-07,2026-06-05,30,30,cached_source,expensive_yes,18220,2749,-1706.8960000000002,-0.10439797292900213,-0.12392361604700551,cheap_no,False,-95.48500000000011,-0.04403304611283921,-0.1614637372505477

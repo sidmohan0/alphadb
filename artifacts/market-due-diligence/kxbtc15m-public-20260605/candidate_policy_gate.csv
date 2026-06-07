@@ -1,0 +1,9 @@
+policy,trades,markets,net_pnl,net_roi,stressed_roi,positive_net_roi,positive_stressed_roi,enough_trades,enough_markets,candidate_structural_edge
+cheap_yes,640,71,-7.385000000000006,-0.08548937894310363,-0.20350859504965477,False,False,True,True,False
+expensive_yes,584,93,-22.516000000000002,-0.04268306553734864,-0.06342035178302512,False,False,True,True,False
+cheap_no,482,58,-37.894000000000005,-0.5664783089664245,-0.621083440039721,False,False,True,True,False
+final_window_yes,476,96,-45.154999999999994,-0.1677657855139232,-0.19619628599623215,False,False,True,True,False
+buy_every_yes,1532,96,-50.691,-0.06585889662215097,-0.10162170401996176,False,False,True,True,False
+expensive_no,746,95,-53.724999999999994,-0.07986175628971719,-0.09982621847028629,False,False,True,True,False
+final_window_no,476,96,-57.61899999999999,-0.1860964604885359,-0.21037541635462914,False,False,True,True,False
+buy_every_no,1532,96,-82.91900000000001,-0.09255189364217078,-0.12255992332922137,False,False,True,True,False
