@@ -25,6 +25,7 @@ from alphadb.model_evaluation.fair_value_live_job import (
     FairValueLiveTradingJob,
     FairValueLiveTradingJobConfig,
 )
+from alphadb.live_orders import LiveOrderAttempt, LiveOrderRepository
 from alphadb.model_evaluation.fair_value_model import (
     FAIR_VALUE_MODEL_REPORT_SCHEMA,
     ThresholdVolatilityFairValueConfig,
@@ -441,6 +442,151 @@ def test_live_trading_job_submits_capped_order_and_reports_settled_pnl(
     assert reconciliation["pnl"]["filled_contracts"] == 2
 
 
+def test_live_trading_job_persists_submit_pending_attempt_before_exchange_submit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class InspectingOrderClient:
+        def __init__(self) -> None:
+            self.observed_attempt: dict | None = None
+            self.requests: list[dict] = []
+
+        def create_order(self, *, request_payload, settings):
+            self.requests.append(dict(request_payload))
+            with OperationalStateRepository(settings.database_url).connect() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        select *
+                        from live_order_attempts
+                        where client_order_id = %s
+                        """,
+                        (request_payload["client_order_id"],),
+                    )
+                    row = cursor.fetchone()
+            self.observed_attempt = dict(row) if row else None
+            return {
+                "order_id": "ord_presubmit",
+                "client_order_id": request_payload["client_order_id"],
+                "fill_count": "0.00",
+                "remaining_count": "0.00",
+            }
+
+        def get_order(self, *, order_id, settings):
+            return {"order": {"order_id": order_id, "fill_count_fp": "0.00"}}
+
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-PRESUBMIT"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now)
+    client = InspectingOrderClient()
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    attempt = attempts["attempts"][0]
+    observed = client.observed_attempt
+
+    assert observed is not None
+    assert observed["status"] == "submit_pending"
+    assert observed["strategy"] == "fair_value_live"
+    assert str(observed["live_risk_day"]) == "2026-06-04"
+    assert observed["reservation_id"] == attempt["risk_reservation_id"]
+    assert observed["client_order_id"] == client.requests[0]["client_order_id"]
+    assert observed["market_ticker"] == ticker
+    assert float(observed["intended_max_loss_dollars"]) == attempt["max_loss_dollars"]
+    assert attempt["operational_state_attempt"]["status"] == "accepted"
+    assert attempt["operational_state_attempt"]["exchange_order_id"] == "ord_presubmit"
+
+
+def test_live_trading_job_preserves_submit_pending_attempt_on_submit_exception(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FailingOrderClient:
+        def __init__(self) -> None:
+            self.client_order_id: str | None = None
+
+        def create_order(self, *, request_payload, settings):
+            self.client_order_id = str(request_payload["client_order_id"])
+            raise RuntimeError("exchange connection dropped after submit was reachable")
+
+        def get_order(self, *, order_id, settings):
+            return {}
+
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-SUBMIT-EXCEPTION"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now)
+    client = FailingOrderClient()
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    attempt = attempts["attempts"][0]
+    with OperationalStateRepository(settings_from_env().database_url).connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select
+                    status,
+                    reservation_id,
+                    client_order_id,
+                    response_payload,
+                    exchange_error_class,
+                    exchange_error_metadata
+                from live_order_attempts
+                where client_order_id = %s
+                """,
+                (client.client_order_id,),
+            )
+            row = cursor.fetchone()
+    state = live_risk_state(now=now)
+
+    assert attempt["status"] == "error"
+    assert attempt["reason"] == "live_order_error:RuntimeError"
+    assert row is not None
+    assert row["status"] == "submit_error"
+    assert row["reservation_id"] == attempt["risk_reservation_id"]
+    assert row["client_order_id"] == client.client_order_id
+    assert row["response_payload"] is None
+    assert row["exchange_error_class"] == "RuntimeError"
+    assert row["exchange_error_metadata"]["message"] == (
+        "exchange connection dropped after submit was reachable"
+    )
+    assert state.pending_exposure_dollars == attempt["max_loss_dollars"]
+
+
 def test_live_trading_job_materializes_aws_pem_before_runtime_guard(
     tmp_path: Path,
     monkeypatch,
@@ -692,13 +838,18 @@ def test_live_trading_job_bootstraps_missing_current_live_risk_day_state(
     assert state.metadata["full_reconciliation_performed"] is False
 
 
-def test_live_trading_job_does_not_bootstrap_over_stale_risk_state(
+def test_live_trading_job_refreshes_stale_risk_state_before_admission(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
     ticker = "KXBTC15M-FV-STALE-RISK"
     install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "public_market_result",
+        lambda *, settings, ticker: {"status": "active", "result": None},
+    )
     seed_live_risk_state(now=now - timedelta(minutes=5))
     client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
 
@@ -719,11 +870,166 @@ def test_live_trading_job_does_not_bootstrap_over_stale_risk_state(
     ).run(now=now)
 
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
-    assert client.requests == []
+    assert len(client.requests) == 1
     assert attempts["admission_daily_loss_accounting"]["risk_state_bootstrapped"] is False
-    assert attempts["admission_daily_loss_accounting"]["risk_state_reason"] == "risk_state_stale"
-    assert attempts["attempts"][0]["status"] == "skipped"
-    assert attempts["attempts"][0]["reason"] == "risk_state_stale"
+    assert attempts["admission_daily_loss_accounting"]["risk_state_reason"] is None
+    assert attempts["admission_daily_loss_accounting"]["risk_refresh"]["status"] == "active"
+    assert attempts["admission_daily_loss_accounting"]["risk_refresh"]["reason"] == "refresh_resolved"
+    assert attempts["attempts"][0]["status"] == "submitted"
+    assert attempts["attempts"][0]["risk_admission"]["status"] == "approved"
+
+
+def test_live_trading_job_refresh_releases_prior_pending_reservation_before_admission(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class RefreshReleaseClient:
+        def __init__(self) -> None:
+            self.lookups: list[str] = []
+            self.requests: list[dict] = []
+
+        def get_order(self, *, order_id, settings, timeout_seconds=None):
+            self.lookups.append(str(order_id))
+            return {
+                "order": {
+                    "order_id": order_id,
+                    "status": "canceled",
+                    "fill_count_fp": "0.00",
+                    "remaining_count_fp": "0.00",
+                }
+            }
+
+        def create_order(self, *, request_payload, settings):
+            self.requests.append(dict(request_payload))
+            return {
+                "order_id": "ord_after_refresh",
+                "client_order_id": request_payload["client_order_id"],
+                "fill_count": "0.00",
+                "remaining_count": "0.00",
+            }
+
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    current_ticker = "KXBTC15M-FV-REFRESH-RELEASE-CURRENT"
+    prior_ticker = "KXBTC15M-FV-REFRESH-RELEASE-PRIOR"
+    install_live_job_fixture(monkeypatch, now=now, ticker=current_ticker)
+    seed_pending_refresh_state(
+        now=now - timedelta(minutes=5),
+        reservation_id="res_refresh_release",
+        ticker=prior_ticker,
+        order_id="ord_refresh_release",
+        max_loss_dollars=0.41,
+    )
+    persist_refresh_attempt(
+        reservation_id="res_refresh_release",
+        ticker=prior_ticker,
+        order_id="ord_refresh_release",
+        client_order_id="client_refresh_release",
+        now=now - timedelta(minutes=5),
+    )
+    client = RefreshReleaseClient()
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    state = live_risk_state(now=now)
+
+    assert client.lookups == ["ord_refresh_release"]
+    assert len(client.requests) == 1
+    assert attempts["admission_daily_loss_accounting"]["risk_refresh"]["status"] == "active"
+    assert attempts["admission_daily_loss_accounting"]["risk_refresh"]["lookup_count"] == 1
+    assert attempts["attempts"][0]["status"] == "submitted"
+    assert state.pending_exposure_dollars == 0.0
+
+
+def test_live_trading_job_blocks_when_refresh_cannot_resolve_pending_reservation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class TimeoutRefreshClient:
+        def __init__(self) -> None:
+            self.lookups: list[str] = []
+            self.requests: list[dict] = []
+
+        def get_order(self, *, order_id, settings, timeout_seconds=None):
+            self.lookups.append(str(order_id))
+            raise TimeoutError("refresh lookup timed out")
+
+        def create_order(self, *, request_payload, settings):
+            self.requests.append(dict(request_payload))
+            return {}
+
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    current_ticker = "KXBTC15M-FV-REFRESH-BLOCK-CURRENT"
+    prior_ticker = "KXBTC15M-FV-REFRESH-BLOCK-PRIOR"
+    install_live_job_fixture(monkeypatch, now=now, ticker=current_ticker)
+    seed_pending_refresh_state(
+        now=now - timedelta(minutes=5),
+        reservation_id="res_refresh_block",
+        ticker=prior_ticker,
+        order_id="ord_refresh_block",
+        max_loss_dollars=0.41,
+    )
+    persist_refresh_attempt(
+        reservation_id="res_refresh_block",
+        ticker=prior_ticker,
+        order_id="ord_refresh_block",
+        client_order_id="client_refresh_block",
+        now=now - timedelta(minutes=5),
+    )
+    client = TimeoutRefreshClient()
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=live_enabled_settings(),
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    attempt = attempts["attempts"][0]
+    refresh = attempts["admission_daily_loss_accounting"]["risk_refresh"]
+    state = live_risk_state(now=now)
+
+    assert client.lookups == ["ord_refresh_block"]
+    assert client.requests == []
+    assert manifest["live_risk_admission_state"]["status"] == "blocked"
+    assert manifest["live_risk_admission_state"]["blocked_reason"] == (
+        "unresolved_pending_reservation"
+    )
+    assert manifest["live_risk_refresh"]["status"] == "blocked"
+    assert manifest["live_risk_refresh"]["lookup_count"] == 1
+    assert manifest["live_risk_refresh"]["state_version_after"] is not None
+    assert refresh["status"] == "blocked"
+    assert refresh["unresolved_reservation_ids"] == ["res_refresh_block"]
+    assert attempt["status"] == "skipped"
+    assert attempt["reason"] == "unresolved_pending_reservation"
+    assert state.status == "blocked"
+    assert state.pending_exposure_dollars == 0.41
 
 
 def test_live_trading_job_uses_orderbook_freshness_not_stale_market_metadata(
@@ -1495,6 +1801,9 @@ def seed_live_risk_state(
     open_exposure_dollars: float = 0.0,
     pending_exposure_dollars: float = 0.0,
     per_market_exposure_dollars: dict[str, float] | None = None,
+    pending_reservations: dict[str, dict] | None = None,
+    status: str = "active",
+    metadata: dict | None = None,
 ) -> None:
     repository = live_risk_repository_or_skip()
     delete_live_risk_states(settings_from_env().database_url)
@@ -1508,7 +1817,79 @@ def seed_live_risk_state(
         open_exposure_dollars=open_exposure_dollars,
         pending_exposure_dollars=pending_exposure_dollars,
         per_market_exposure_dollars=per_market_exposure_dollars or {},
+        pending_reservations=pending_reservations or {},
         updated_at=now,
+        status=status,
+        metadata=metadata,
+    )
+
+
+def seed_pending_refresh_state(
+    *,
+    now: datetime,
+    reservation_id: str,
+    ticker: str,
+    order_id: str,
+    max_loss_dollars: float,
+) -> None:
+    seed_live_risk_state(
+        now=now,
+        pending_exposure_dollars=max_loss_dollars,
+        per_market_exposure_dollars={ticker: max_loss_dollars},
+        pending_reservations={
+            reservation_id: {
+                "reservation_id": reservation_id,
+                "market_ticker": ticker,
+                "max_loss_dollars": max_loss_dollars,
+                "created_at": now.isoformat(),
+                "client_order_id": f"client_{reservation_id}",
+                "order_id": order_id,
+                "intended_quantity": 1.0,
+                "time_in_force": "immediate_or_cancel",
+            }
+        },
+    )
+
+
+def persist_refresh_attempt(
+    *,
+    reservation_id: str,
+    ticker: str,
+    order_id: str,
+    client_order_id: str,
+    now: datetime,
+) -> None:
+    live_risk_day, _start, _end = fair_value_live_job.live_risk_window(
+        generated_at=now,
+        live_risk_timezone="America/Los_Angeles",
+    )
+    LiveOrderRepository(settings_from_env().database_url).persist(
+        LiveOrderAttempt(
+            live_order_attempt_id=f"live_order_refresh_{uuid4().hex[:8]}",
+            order_intent_id=None,
+            risk_decision_id=None,
+            strategy="fair_value_live",
+            live_risk_day=live_risk_day,
+            reservation_id=reservation_id,
+            market_ticker=ticker,
+            client_order_id=client_order_id,
+            intended_side="yes",
+            intended_price_dollars=0.4,
+            intended_quantity=1.0,
+            intended_max_loss_dollars=0.41,
+            runtime_mode="gated-live",
+            status="submit_error",
+            guard_reason=None,
+            request_payload={
+                "client_order_id": client_order_id,
+                "time_in_force": "immediate_or_cancel",
+            },
+            response_payload={"order_id": order_id, "client_order_id": client_order_id},
+            submitted_at=now,
+            exchange_order_id=order_id,
+            exchange_status="unknown",
+            exchange_response_at=now,
+        )
     )
 
 

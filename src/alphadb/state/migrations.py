@@ -370,13 +370,31 @@ STRATEGY_RUNTIME = Migration(
             live_order_attempt_id text primary key,
             order_intent_id text references order_intents(order_intent_id),
             risk_decision_id text,
+            strategy text,
+            live_risk_day date,
+            reservation_id text,
             market_ticker text,
+            client_order_id text,
+            intended_side text,
+            intended_price_dollars numeric,
+            intended_quantity numeric,
+            intended_max_loss_dollars numeric,
             runtime_mode text not null,
             status text not null,
             guard_reason text,
             request_payload jsonb not null default '{}'::jsonb,
             response_payload jsonb,
-            created_at timestamptz not null default now()
+            submitted_at timestamptz,
+            exchange_order_id text,
+            exchange_status text,
+            exchange_http_status integer,
+            exchange_error_class text,
+            exchange_error_metadata jsonb not null default '{}'::jsonb,
+            exchange_response_at timestamptz,
+            fill_count numeric,
+            remaining_count numeric,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
         )
         """,
         "alter table shadow_comparisons alter column alpha_payload drop not null",
@@ -600,7 +618,7 @@ LIVE_RISK_ADMISSION_STATE = Migration(
             updated_at timestamptz not null,
             version integer not null default 1 check (version >= 1),
             status text not null default 'active'
-                check (status in ('active', 'locked', 'stale', 'reconciling')),
+                check (status in ('active', 'locked', 'stale', 'reconciling', 'blocked')),
             metadata jsonb not null default '{}'::jsonb,
             created_at timestamptz not null default now(),
             primary key (strategy, live_risk_day)
@@ -609,6 +627,117 @@ LIVE_RISK_ADMISSION_STATE = Migration(
         """
         create index if not exists live_risk_admission_states_updated_idx
         on live_risk_admission_states(strategy, updated_at desc)
+        """,
+    ),
+)
+
+
+LIVE_RISK_ADMISSION_BLOCKED_STATUS = Migration(
+    version="0014_live_risk_admission_blocked_status",
+    statements=(
+        """
+        do $$
+        begin
+            if to_regclass('public.live_risk_admission_states') is not null then
+                alter table live_risk_admission_states
+                    drop constraint if exists live_risk_admission_states_status_check;
+                alter table live_risk_admission_states
+                    add constraint live_risk_admission_states_status_check
+                    check (status in ('active', 'locked', 'stale', 'reconciling', 'blocked'));
+            end if;
+        end
+        $$;
+        """,
+    ),
+)
+
+
+LIVE_ORDER_ATTEMPT_REFRESH_EVIDENCE = Migration(
+    version="0015_live_order_attempt_refresh_evidence",
+    statements=(
+        """
+        alter table live_order_attempts
+        add column if not exists strategy text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists live_risk_day date
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists reservation_id text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists client_order_id text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists intended_side text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists intended_price_dollars numeric
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists intended_quantity numeric
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists intended_max_loss_dollars numeric
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists submitted_at timestamptz
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists exchange_order_id text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists exchange_status text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists exchange_http_status integer
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists exchange_error_class text
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists exchange_error_metadata jsonb not null default '{}'::jsonb
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists exchange_response_at timestamptz
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists fill_count numeric
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists remaining_count numeric
+        """,
+        """
+        alter table live_order_attempts
+        add column if not exists updated_at timestamptz not null default now()
+        """,
+        """
+        create index if not exists live_order_attempts_risk_reservation_idx
+        on live_order_attempts(strategy, live_risk_day, reservation_id)
+        """,
+        """
+        create index if not exists live_order_attempts_client_order_idx
+        on live_order_attempts(client_order_id)
+        """,
+        """
+        create index if not exists live_order_attempts_strategy_day_status_idx
+        on live_order_attempts(strategy, live_risk_day, status, created_at desc)
         """,
     ),
 )
@@ -628,4 +757,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     AGENT_FIRST_DASHBOARD,
     LIVE_RUNTIME_MIN_CONTRACT_PRICE,
     LIVE_RISK_ADMISSION_STATE,
+    LIVE_RISK_ADMISSION_BLOCKED_STATUS,
+    LIVE_ORDER_ATTEMPT_REFRESH_EVIDENCE,
 )

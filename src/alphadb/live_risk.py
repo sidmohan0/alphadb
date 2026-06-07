@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -20,6 +20,7 @@ from alphadb.state.repository import OperationalStateRepository
 DEFAULT_LIVE_RISK_STALE_SECONDS = 60
 LIVE_RISK_ADMISSION_STATE_SCHEMA = "live_risk_admission_state.v1"
 LIVE_RISK_ADMISSION_RESULT_SCHEMA = "live_risk_admission_result.v1"
+UNRESOLVED_PENDING_RESERVATION_REASON = "unresolved_pending_reservation"
 RiskAdmissionStatus = Literal["approved", "denied"]
 
 
@@ -50,6 +51,7 @@ class LiveRiskAdmissionState:
         return round(float(self.per_market_exposure_dollars.get(market_ticker, 0.0)), 6)
 
     def as_dict(self) -> dict[str, Any]:
+        reason = state_status_reason(self)
         return {
             "schema_version": LIVE_RISK_ADMISSION_STATE_SCHEMA,
             "strategy": self.strategy,
@@ -65,6 +67,8 @@ class LiveRiskAdmissionState:
             "updated_at": self.updated_at.isoformat(),
             "version": self.version,
             "status": self.status,
+            "reason": reason,
+            "blocked_reason": reason if self.status == "blocked" else None,
             "metadata": dict(self.metadata or {}),
         }
 
@@ -268,6 +272,7 @@ class LiveRiskAdmissionRepository:
         stale_after_seconds: int = DEFAULT_LIVE_RISK_STALE_SECONDS,
         reservation_id: str | None = None,
         run_id: str | None = None,
+        reservation_metadata: Mapping[str, Any] | None = None,
     ) -> LiveRiskAdmissionResult:
         if max_loss_dollars <= 0:
             return denied("risk_state_inconsistent", market_ticker=market_ticker)
@@ -323,13 +328,15 @@ class LiveRiskAdmissionRepository:
                     reservations = {
                         key: dict(value) for key, value in state.pending_reservations.items()
                     }
-                    reservations[reservation_id] = {
+                    reservation = {
                         "reservation_id": reservation_id,
                         "market_ticker": market_ticker,
                         "max_loss_dollars": round(max_loss_dollars, 6),
                         "created_at": observed_at.isoformat(),
                         "run_id": run_id,
                     }
+                    reservation.update(dict(reservation_metadata or {}))
+                    reservations[reservation_id] = reservation
                     cursor.execute(
                         """
                         update live_risk_admission_states
@@ -438,6 +445,161 @@ class LiveRiskAdmissionRepository:
             state_version_after=state.version if state else None,
             state=state,
         )
+
+    def claim_refresh(
+        self,
+        *,
+        strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+        live_risk_day: date,
+        now: datetime | None = None,
+        run_id: str | None = None,
+    ) -> LiveRiskAdmissionResult:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        observed_at = ensure_utc(now or datetime.now(UTC))
+        try:
+            with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+                with connection.cursor() as cursor:
+                    row = locked_state_row(
+                        cursor,
+                        strategy=strategy,
+                        live_risk_day=live_risk_day,
+                    )
+                    if row is None:
+                        connection.rollback()
+                        return denied("risk_state_missing")
+                    state = state_from_row(row)
+                    if state.status in {"locked", "reconciling"}:
+                        connection.rollback()
+                        return denied(state_status_reason(state) or "risk_state_locked", state=state)
+                    metadata = dict(state.metadata or {})
+                    metadata["refresh_claim"] = {
+                        "run_id": run_id,
+                        "claimed_at": observed_at.isoformat(),
+                        "previous_status": state.status,
+                        "previous_version": state.version,
+                    }
+                    cursor.execute(
+                        """
+                        update live_risk_admission_states
+                        set status = 'reconciling',
+                            metadata = %s,
+                            version = version + 1
+                        where strategy = %s
+                          and live_risk_day = %s
+                          and version = %s
+                        returning *
+                        """,
+                        (
+                            Jsonb(metadata),
+                            strategy,
+                            live_risk_day,
+                            state.version,
+                        ),
+                    )
+                    updated = cursor.fetchone()
+                    if updated is None:
+                        connection.rollback()
+                        return denied("risk_state_conflict", state=state)
+                connection.commit()
+            next_state = state_from_row(updated)
+            return LiveRiskAdmissionResult(
+                status="approved",
+                reason="refresh_claimed",
+                state_version_before=state.version,
+                state_version_after=next_state.version,
+                state=next_state,
+            )
+        except psycopg.errors.LockNotAvailable:
+            return denied("risk_state_locked")
+        except Exception as exc:
+            return denied("risk_state_unavailable", message=f"{type(exc).__name__}: {exc}")
+
+    def complete_refresh(
+        self,
+        *,
+        strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+        live_risk_day: date,
+        expected_version: int,
+        resolutions: Sequence[Mapping[str, Any]],
+        now: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> LiveRiskAdmissionResult:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        observed_at = ensure_utc(now or datetime.now(UTC))
+        try:
+            with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+                with connection.cursor() as cursor:
+                    row = locked_state_row(
+                        cursor,
+                        strategy=strategy,
+                        live_risk_day=live_risk_day,
+                    )
+                    if row is None:
+                        connection.rollback()
+                        return denied("risk_state_missing")
+                    state = state_from_row(row)
+                    if state.version != expected_version or state.status != "reconciling":
+                        connection.rollback()
+                        return denied("risk_state_conflict", state=state)
+                    next_state_values = refreshed_state_values(state, resolutions)
+                    refresh_blocks = any(
+                        str(resolution.get("action") or "") in {"block", "preserve"}
+                        for resolution in resolutions
+                    )
+                    next_status = "blocked" if refresh_blocks else "active"
+                    next_metadata = dict(state.metadata or {})
+                    next_metadata.update(dict(metadata or {}))
+                    next_metadata["last_refresh_completed_at"] = observed_at.isoformat()
+                    if refresh_blocks:
+                        next_metadata["blocked_reason"] = UNRESOLVED_PENDING_RESERVATION_REASON
+                    else:
+                        next_metadata.pop("blocked_reason", None)
+                    cursor.execute(
+                        """
+                        update live_risk_admission_states
+                        set open_exposure_dollars = %s,
+                            pending_exposure_dollars = %s,
+                            per_market_exposure = %s,
+                            pending_reservations = %s,
+                            updated_at = %s,
+                            status = %s,
+                            metadata = %s,
+                            version = version + 1
+                        where strategy = %s
+                          and live_risk_day = %s
+                          and version = %s
+                        returning *
+                        """,
+                        (
+                            round(next_state_values["open_exposure_dollars"], 6),
+                            round(next_state_values["pending_exposure_dollars"], 6),
+                            Jsonb(next_state_values["per_market_exposure"]),
+                            Jsonb(next_state_values["pending_reservations"]),
+                            observed_at,
+                            next_status,
+                            Jsonb(next_metadata),
+                            strategy,
+                            live_risk_day,
+                            state.version,
+                        ),
+                    )
+                    updated = cursor.fetchone()
+                    if updated is None:
+                        connection.rollback()
+                        return denied("risk_state_conflict", state=state)
+                connection.commit()
+            next_state = state_from_row(updated)
+            return LiveRiskAdmissionResult(
+                status="approved",
+                reason="refresh_blocked" if refresh_blocks else "refresh_active",
+                state_version_before=state.version,
+                state_version_after=next_state.version,
+                state=next_state,
+            )
+        except psycopg.errors.LockNotAvailable:
+            return denied("risk_state_locked")
+        except Exception as exc:
+            return denied("risk_state_unavailable", message=f"{type(exc).__name__}: {exc}")
 
     def _settle_reservation(
         self,
@@ -571,7 +733,7 @@ def state_denial_reason(
     stale_after_seconds: int,
 ) -> str | None:
     if state.status != "active":
-        return "risk_state_locked"
+        return state_status_reason(state) or f"risk_state_{state.status}"
     if state.updated_at < ensure_utc(now) - timedelta(seconds=stale_after_seconds):
         return "risk_state_stale"
     if state.version < 1:
@@ -585,6 +747,60 @@ def state_denial_reason(
     if any(value < 0 for value in values):
         return "risk_state_inconsistent"
     return None
+
+
+def state_status_reason(state: LiveRiskAdmissionState) -> str | None:
+    metadata = dict(state.metadata or {})
+    if state.status == "active":
+        return None
+    if state.status == "blocked":
+        reason = metadata.get("blocked_reason") or metadata.get("reason")
+        return str(reason or UNRESOLVED_PENDING_RESERVATION_REASON)
+    if state.status == "locked":
+        return "risk_state_locked"
+    if state.status == "stale":
+        return "risk_state_stale"
+    if state.status == "reconciling":
+        return "risk_state_reconciling"
+    return f"risk_state_{state.status}"
+
+
+def refreshed_state_values(
+    state: LiveRiskAdmissionState,
+    resolutions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    reservations = {
+        key: dict(value) for key, value in state.pending_reservations.items()
+    }
+    per_market = dict(state.per_market_exposure_dollars)
+    pending_exposure = state.pending_exposure_dollars
+    open_exposure = state.open_exposure_dollars
+    for resolution in resolutions:
+        action = str(resolution.get("action") or "")
+        if action not in {"release", "convert"}:
+            continue
+        reservation_id = str(resolution.get("reservation_id") or "")
+        reservation = reservations.pop(reservation_id, None)
+        if not reservation:
+            continue
+        market_ticker = str(reservation.get("market_ticker") or "")
+        reserved = _float(reservation.get("max_loss_dollars"))
+        converted = _float(resolution.get("convert_max_loss_dollars"))
+        pending_exposure = max(0.0, pending_exposure - reserved)
+        open_exposure = round(open_exposure + converted, 6)
+        if market_ticker:
+            per_market[market_ticker] = round(
+                max(0.0, _float(per_market.get(market_ticker)) - reserved + converted),
+                6,
+            )
+            if per_market[market_ticker] == 0.0:
+                per_market.pop(market_ticker, None)
+    return {
+        "open_exposure_dollars": round(open_exposure, 6),
+        "pending_exposure_dollars": round(pending_exposure, 6),
+        "per_market_exposure": per_market,
+        "pending_reservations": reservations,
+    }
 
 
 def denied(

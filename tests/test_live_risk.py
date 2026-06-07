@@ -173,3 +173,114 @@ def test_live_risk_admission_fails_closed_for_missing_stale_locked_and_caps() ->
     assert stale.reason == "risk_state_stale"
     assert locked.reason == "risk_state_locked"
     assert cap.reason == "daily_loss_cap_reached"
+
+
+def test_live_risk_admission_persists_blocked_reason_and_denies_non_active_states() -> None:
+    repository = repository_or_skip()
+    strategy = f"test_strategy_{uuid4().hex[:8]}"
+    risk_day = date(2026, 6, 4)
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+
+    blocked_state = repository.upsert_state(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        updated_at=now,
+        status="blocked",
+        metadata={"blocked_reason": "unresolved_pending_reservation"},
+    )
+    blocked = repository.admit_order(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        market_ticker="KXBTC15M-BLOCKED",
+        max_loss_dollars=0.5,
+        max_daily_loss_dollars=10.0,
+        max_market_exposure_dollars=2.0,
+        now=now,
+    )
+    stale_status = repository.upsert_state(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        updated_at=now,
+        status="stale",
+    )
+    stale = repository.admit_order(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        market_ticker="KXBTC15M-STALE-STATUS",
+        max_loss_dollars=0.5,
+        max_daily_loss_dollars=10.0,
+        max_market_exposure_dollars=2.0,
+        now=now,
+    )
+    repository.upsert_state(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        updated_at=now,
+        status="reconciling",
+    )
+    reconciling = repository.admit_order(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        market_ticker="KXBTC15M-RECONCILING",
+        max_loss_dollars=0.5,
+        max_daily_loss_dollars=10.0,
+        max_market_exposure_dollars=2.0,
+        now=now,
+    )
+
+    assert blocked_state.status == "blocked"
+    assert blocked_state.as_dict()["blocked_reason"] == "unresolved_pending_reservation"
+    assert blocked.status == "denied"
+    assert blocked.reason == "unresolved_pending_reservation"
+    assert blocked.state.as_dict()["reason"] == "unresolved_pending_reservation"
+    assert stale_status.as_dict()["reason"] == "risk_state_stale"
+    assert stale.reason == "risk_state_stale"
+    assert reconciling.reason == "risk_state_reconciling"
+
+
+def test_live_risk_refresh_claim_serializes_admission_and_version_conflicts() -> None:
+    repository = repository_or_skip()
+    strategy = f"test_strategy_{uuid4().hex[:8]}"
+    risk_day = date(2026, 6, 4)
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    repository.upsert_state(strategy=strategy, live_risk_day=risk_day, updated_at=now)
+
+    claim = repository.claim_refresh(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        now=now,
+        run_id="run_refresh_claim",
+    )
+    denied_during_refresh = repository.admit_order(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        market_ticker="KXBTC15M-REFRESH-LOCK",
+        max_loss_dollars=0.5,
+        max_daily_loss_dollars=10.0,
+        max_market_exposure_dollars=2.0,
+        now=now,
+    )
+    conflict = repository.complete_refresh(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        expected_version=claim.state_version_after - 1,
+        resolutions=[],
+        now=now,
+    )
+    completed = repository.complete_refresh(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        expected_version=claim.state_version_after,
+        resolutions=[],
+        now=now,
+    )
+
+    assert claim.approved is True
+    assert claim.state.status == "reconciling"
+    assert denied_during_refresh.status == "denied"
+    assert denied_during_refresh.reason == "risk_state_reconciling"
+    assert conflict.status == "denied"
+    assert conflict.reason == "risk_state_conflict"
+    assert completed.approved is True
+    assert completed.reason == "refresh_active"
+    assert completed.state.status == "active"

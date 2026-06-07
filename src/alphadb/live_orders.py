@@ -10,6 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -46,6 +47,7 @@ class KalshiLiveOrderClient(Protocol):
         *,
         order_id: str,
         settings: Settings,
+        timeout_seconds: float | None = None,
     ) -> Mapping[str, Any]:
         """Return an authenticated Kalshi order detail response."""
 
@@ -82,6 +84,7 @@ class HttpKalshiLiveOrderClient:
         *,
         order_id: str,
         settings: Settings,
+        timeout_seconds: float | None = None,
     ) -> Mapping[str, Any]:
         path = f"/portfolio/orders/{order_id}"
         url = settings.kalshi_base_url.rstrip("/") + path
@@ -94,7 +97,7 @@ class HttpKalshiLiveOrderClient:
             ),
             method="GET",
         )
-        with request.urlopen(http_request, timeout=10) as response:
+        with request.urlopen(http_request, timeout=timeout_seconds or 10) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if not isinstance(payload, Mapping):
             raise LiveOrderError("Kalshi get-order response was not a JSON object")
@@ -112,18 +115,54 @@ class LiveOrderAttempt:
     guard_reason: str | None
     request_payload: Mapping[str, Any]
     response_payload: Mapping[str, Any] | None = None
+    strategy: str | None = None
+    live_risk_day: date | None = None
+    reservation_id: str | None = None
+    client_order_id: str | None = None
+    intended_side: str | None = None
+    intended_price_dollars: float | None = None
+    intended_quantity: float | None = None
+    intended_max_loss_dollars: float | None = None
+    submitted_at: datetime | None = None
+    exchange_order_id: str | None = None
+    exchange_status: str | None = None
+    exchange_http_status: int | None = None
+    exchange_error_class: str | None = None
+    exchange_error_metadata: Mapping[str, Any] | None = None
+    exchange_response_at: datetime | None = None
+    fill_count: float | None = None
+    remaining_count: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "live_order_attempt_id": self.live_order_attempt_id,
             "order_intent_id": self.order_intent_id,
             "risk_decision_id": self.risk_decision_id,
+            "strategy": self.strategy,
+            "live_risk_day": self.live_risk_day.isoformat() if self.live_risk_day else None,
+            "reservation_id": self.reservation_id,
             "market_ticker": self.market_ticker,
+            "client_order_id": self.client_order_id,
+            "intended_side": self.intended_side,
+            "intended_price_dollars": self.intended_price_dollars,
+            "intended_quantity": self.intended_quantity,
+            "intended_max_loss_dollars": self.intended_max_loss_dollars,
             "runtime_mode": self.runtime_mode,
             "status": self.status,
             "guard_reason": self.guard_reason,
             "request_payload": dict(self.request_payload),
             "response_payload": None if self.response_payload is None else dict(self.response_payload),
+            "submitted_at": self.submitted_at.isoformat() if self.submitted_at else None,
+            "exchange_order_id": self.exchange_order_id,
+            "exchange_status": self.exchange_status,
+            "exchange_http_status": self.exchange_http_status,
+            "exchange_error_class": self.exchange_error_class,
+            "exchange_error_metadata": dict(self.exchange_error_metadata or {}),
+            "exchange_response_at": self.exchange_response_at.isoformat()
+            if self.exchange_response_at
+            else None,
+            "fill_count": self.fill_count,
+            "remaining_count": self.remaining_count,
         }
 
 
@@ -141,21 +180,50 @@ class LiveOrderRepository:
                         live_order_attempt_id,
                         order_intent_id,
                         risk_decision_id,
+                        strategy,
+                        live_risk_day,
+                        reservation_id,
                         market_ticker,
+                        client_order_id,
+                        intended_side,
+                        intended_price_dollars,
+                        intended_quantity,
+                        intended_max_loss_dollars,
                         runtime_mode,
                         status,
                         guard_reason,
                         request_payload,
-                        response_payload
+                        response_payload,
+                        submitted_at,
+                        exchange_order_id,
+                        exchange_status,
+                        exchange_http_status,
+                        exchange_error_class,
+                        exchange_error_metadata,
+                        exchange_response_at,
+                        fill_count,
+                        remaining_count,
+                        updated_at
                     )
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    values (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now()
+                    )
                     returning live_order_attempt_id
                     """,
                     (
                         attempt.live_order_attempt_id,
                         attempt.order_intent_id,
                         attempt.risk_decision_id,
+                        attempt.strategy,
+                        attempt.live_risk_day,
+                        attempt.reservation_id,
                         attempt.market_ticker,
+                        attempt.client_order_id,
+                        attempt.intended_side,
+                        attempt.intended_price_dollars,
+                        attempt.intended_quantity,
+                        attempt.intended_max_loss_dollars,
                         attempt.runtime_mode,
                         attempt.status,
                         attempt.guard_reason,
@@ -163,10 +231,118 @@ class LiveOrderRepository:
                         None
                         if attempt.response_payload is None
                         else Jsonb(dict(attempt.response_payload)),
+                        attempt.submitted_at,
+                        attempt.exchange_order_id,
+                        attempt.exchange_status,
+                        attempt.exchange_http_status,
+                        attempt.exchange_error_class,
+                        Jsonb(dict(attempt.exchange_error_metadata or {})),
+                        attempt.exchange_response_at,
+                        attempt.fill_count,
+                        attempt.remaining_count,
                     ),
                 )
             connection.commit()
         return attempt
+
+    def record_submit_response(
+        self,
+        *,
+        live_order_attempt_id: str,
+        response_payload: Mapping[str, Any],
+        accepted: bool,
+        observed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        response_at = observed_at or datetime.now(UTC)
+        exchange_order = _exchange_order(response_payload)
+        fill_count = _numeric_response_value(response_payload, ("fill_count", "fill_count_fp"))
+        remaining_count = _numeric_response_value(
+            response_payload,
+            ("remaining_count", "remaining_count_fp"),
+        )
+        status = "accepted" if accepted else "rejected"
+        exchange_status = (
+            _text(exchange_order.get("status"))
+            or _text(response_payload.get("status"))
+            or status
+        )
+        exchange_order_id = (
+            _text(response_payload.get("order_id"))
+            or _text(exchange_order.get("order_id"))
+            or _text(exchange_order.get("id"))
+        )
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    update live_order_attempts
+                    set status = %s,
+                        response_payload = %s,
+                        exchange_order_id = %s,
+                        exchange_status = %s,
+                        exchange_response_at = %s,
+                        fill_count = %s,
+                        remaining_count = %s,
+                        updated_at = now()
+                    where live_order_attempt_id = %s
+                    returning *
+                    """,
+                    (
+                        status,
+                        Jsonb(dict(response_payload)),
+                        exchange_order_id,
+                        exchange_status,
+                        response_at,
+                        fill_count,
+                        remaining_count,
+                        live_order_attempt_id,
+                    ),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+        if row is None:
+            raise LiveOrderError(f"unknown live order attempt: {live_order_attempt_id}")
+        return _json_ready(row)
+
+    def record_submit_error(
+        self,
+        *,
+        live_order_attempt_id: str,
+        exc: Exception,
+        observed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        response_at = observed_at or datetime.now(UTC)
+        http_status = safe_http_status(exc)
+        metadata = safe_exchange_error_metadata(exc)
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    update live_order_attempts
+                    set status = 'submit_error',
+                        exchange_http_status = %s,
+                        exchange_error_class = %s,
+                        exchange_error_metadata = %s,
+                        exchange_response_at = %s,
+                        updated_at = now()
+                    where live_order_attempt_id = %s
+                    returning *
+                    """,
+                    (
+                        http_status,
+                        type(exc).__name__,
+                        Jsonb(metadata),
+                        response_at,
+                        live_order_attempt_id,
+                    ),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+        if row is None:
+            raise LiveOrderError(f"unknown live order attempt: {live_order_attempt_id}")
+        return _json_ready(row)
 
     def recent(self, *, limit: int = 10) -> list[dict[str, Any]]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
@@ -176,12 +352,25 @@ class LiveOrderRepository:
                     select
                         live_order_attempt_id,
                         order_intent_id,
+                        strategy,
+                        live_risk_day,
+                        reservation_id,
                         market_ticker,
+                        client_order_id,
                         runtime_mode,
                         status,
                         guard_reason,
                         request_payload,
                         response_payload,
+                        submitted_at,
+                        exchange_order_id,
+                        exchange_status,
+                        exchange_http_status,
+                        exchange_error_class,
+                        exchange_error_metadata,
+                        exchange_response_at,
+                        fill_count,
+                        remaining_count,
                         created_at
                     from live_order_attempts
                     order by created_at desc, live_order_attempt_id desc
@@ -191,6 +380,35 @@ class LiveOrderRepository:
                 )
                 rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    def attempts_for_reservations(
+        self,
+        *,
+        strategy: str,
+        live_risk_day: date,
+        reservation_ids: Sequence[str],
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        if not reservation_ids:
+            return []
+        OperationalStateRepository(self.database_url).apply_migrations()
+        placeholders = ", ".join(["%s"] * len(reservation_ids))
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    select *
+                    from live_order_attempts
+                    where strategy = %s
+                      and live_risk_day = %s
+                      and reservation_id in ({placeholders})
+                    order by created_at desc, live_order_attempt_id desc
+                    limit %s
+                    """,
+                    (strategy, live_risk_day, *reservation_ids, limit),
+                )
+                rows = cursor.fetchall()
+        return [_json_ready(row) for row in rows]
 
     def submitted_max_cost_dollars(self, *, trading_day: date) -> float:
         day_start = datetime.combine(trading_day, datetime.min.time(), tzinfo=UTC)
@@ -403,6 +621,116 @@ def exchange_response_accepted(response: Mapping[str, Any]) -> bool:
     if status:
         return status in {"accepted", "resting", "executed", "filled", "pending"}
     return bool(response.get("order_id"))
+
+
+def safe_http_status(exc: Exception) -> int | None:
+    for attr in ("code", "status"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+    response = getattr(exc, "response", None)
+    if isinstance(response, Mapping):
+        for key in ("status", "status_code", "StatusCode"):
+            if response.get(key) is not None:
+                try:
+                    return int(response[key])
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def safe_exchange_error_metadata(exc: Exception) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "message": _truncate(str(exc)),
+    }
+    http_status = safe_http_status(exc)
+    if http_status is not None:
+        metadata["http_status"] = http_status
+    body = _error_body(exc)
+    if body:
+        metadata["body"] = redact_secretish(body)
+    return metadata
+
+
+def redact_secretish(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if any(token in key_text.lower() for token in ("secret", "token", "key", "signature", "password")):
+                redacted[key_text] = "[redacted]"
+            else:
+                redacted[key_text] = redact_secretish(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_secretish(item) for item in value]
+    if isinstance(value, str):
+        return _truncate(value)
+    return value
+
+
+def _error_body(exc: Exception) -> Any:
+    body = getattr(exc, "body", None)
+    if body is None and hasattr(exc, "read"):
+        try:
+            body = exc.read()
+        except Exception:
+            body = None
+    if isinstance(body, bytes):
+        body = body.decode("utf-8", errors="replace")
+    if isinstance(body, str):
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return _truncate(body)
+        return payload
+    return body
+
+
+def _exchange_order(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    order = payload.get("order")
+    return order if isinstance(order, Mapping) else {}
+
+
+def _numeric_response_value(payload: Mapping[str, Any], keys: Sequence[str]) -> float | None:
+    order = _exchange_order(payload)
+    for source in (payload, order):
+        for key in keys:
+            value = source.get(key)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+    return None
+
+
+def _text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _truncate(value: str, *, limit: int = 2000) -> str:
+    return value if len(value) <= limit else value[:limit]
+
+
+def _json_ready(row: Mapping[str, Any]) -> dict[str, Any]:
+    output = {}
+    for key, value in row.items():
+        if isinstance(value, datetime):
+            output[key] = value.isoformat()
+        elif isinstance(value, date) and not isinstance(value, datetime):
+            output[key] = value.isoformat()
+        elif isinstance(value, Decimal):
+            output[key] = float(value)
+        else:
+            output[key] = value
+    return output
 
 
 def live_adapter_status_rows(settings: Settings | None = None) -> list[dict[str, str | bool]]:

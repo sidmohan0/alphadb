@@ -285,6 +285,53 @@ def test_live_status_prefers_live_risk_day_accounting_over_full_history() -> Non
     assert status.summary["full_history_daily_loss_used_dollars"] == 49.91
 
 
+def test_live_status_surfaces_refresh_blocked_classification() -> None:
+    status = build_fair_value_live_status(
+        manifest={
+            "run_id": "fv_live_status_refresh_blocked",
+            "generated_at": "2026-06-05T07:00:10+00:00",
+            "runtime_config": {"config_id": "cfg_1", "version": 3, "snapshot": {}},
+            "runtime_controls": {
+                "live_orders_enabled": True,
+                "daily_loss_accounting": {"daily_loss_used_dollars": 0.41},
+            },
+            "live_risk_admission_state": {
+                "status": "blocked",
+                "reason": "unresolved_pending_reservation",
+                "blocked_reason": "unresolved_pending_reservation",
+                "pending_reservation_count": 1,
+                "pending_reservation_ids": ["res_blocked"],
+            },
+            "live_risk_refresh": {
+                "status": "blocked",
+                "reason": "unresolved_pending_reservation",
+                "lookup_count": 1,
+                "unresolved_reservation_ids": ["res_blocked"],
+                "state_version_after": 4,
+            },
+            "counts": {"live_attempts": 1, "replay_trades": 1},
+        },
+        attempts_payload={
+            "attempts": [
+                {
+                    "attempt_id": "attempt_blocked",
+                    "market_ticker": "KXBTC15M-BLOCKED",
+                    "side": "yes",
+                    "status": "skipped",
+                    "reason": "unresolved_pending_reservation",
+                }
+            ]
+        },
+        reconciliation={"rows": [], "per_market_exposure": {"markets": []}},
+    )
+
+    assert status.skip_reason == "unresolved_pending_reservation"
+    assert status.summary["live_risk_refresh"]["status"] == "blocked"
+    assert status.summary["risk_state_classification"] == (
+        "blocked_unresolved_pending_reservation"
+    )
+
+
 def test_live_run_status_repository_persists_dashboard_ready_summary() -> None:
     database_url = settings_from_env().database_url
     repository_or_skip()
