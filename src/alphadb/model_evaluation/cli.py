@@ -51,6 +51,7 @@ from alphadb.model_evaluation.models import (
 )
 from alphadb.model_evaluation.policy import build_holdout_policy_selection_report
 from alphadb.model_evaluation.walk_forward import build_walk_forward_report
+from alphadb.research.execution_attribution import generate_execution_attribution
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
     live = subparsers.add_parser("live-attribution", help="Summarize live/paper attribution")
     live.add_argument("--report", default=None)
     live.add_argument("--output", default=None)
+
+    execution = subparsers.add_parser(
+        "execution-attribution",
+        help="Generate execution/fill-speed attribution CSV and Markdown from live artifacts",
+    )
+    execution.add_argument("--input", required=True)
+    execution.add_argument("--output-dir", required=True)
+    execution.add_argument("--output", default=None)
 
     fair = subparsers.add_parser(
         "fair-value-replay",
@@ -403,6 +412,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.command == "live-attribution":
         payload = summarize_live_attribution(args.report).as_dict()
+    elif args.command == "execution-attribution":
+        payload = generate_execution_attribution(args.input, args.output_dir).as_dict()
     elif args.command == "fair-value-replay":
         payload = build_fair_value_replay_report(
             load_tabular_rows(Path(args.rows)),
