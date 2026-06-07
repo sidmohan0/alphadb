@@ -12,6 +12,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from alphadb.live_runtime import FAIR_VALUE_LIVE_STRATEGY
+from alphadb.live_edge_attribution import summarize_live_edge_attribution_buckets
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -101,6 +102,8 @@ def build_performance_summary(
         stale_after_seconds=stale_after_seconds,
     )
     risk_budget = summarize_risk_budget(rows)
+    live_edge_attribution = latest_live_edge_attribution(rows)
+    live_edge_attribution_buckets = recent_live_edge_attribution_buckets(rows)
     data_status = _overall_data_status(execution, pnl, freshness)
     return {
         "schema_version": PERFORMANCE_SCHEMA_VERSION,
@@ -112,6 +115,8 @@ def build_performance_summary(
         "config": _config_payload(config_row),
         "freshness": freshness,
         "risk_budget": risk_budget,
+        "live_edge_attribution": live_edge_attribution,
+        "live_edge_attribution_buckets": live_edge_attribution_buckets,
         "execution": execution,
         "pnl": pnl,
         "recent_runs": execution["recent_runs"],
@@ -370,7 +375,9 @@ def _recent_status_rows(
             recent_submitted_count,
             recent_skipped_count,
             recent_no_fill_count,
-            recent_filled_count
+            recent_filled_count,
+            summary,
+            recent_attempts
         from live_run_statuses
         where strategy = %s
         order by generated_at desc, run_id desc
@@ -535,6 +542,7 @@ def _recent_run_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "market_exposure_used_dollars": _money(
             _float(row.get("market_exposure_used_dollars"))
         ),
+        "live_edge_attribution": _row_live_edge_attribution(row),
     }
 
 
@@ -544,6 +552,41 @@ def _skip_reason(row: Mapping[str, Any]) -> str | None:
     if outcome != "skipped" and attempt_status != "skipped":
         return None
     return _text(row.get("skip_reason")) or _text(row.get("latest_attempt_reason"))
+
+
+def latest_live_edge_attribution(status_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    for row in status_rows:
+        attribution = _row_live_edge_attribution(row)
+        if attribution:
+            return attribution
+    return {}
+
+
+def recent_live_edge_attribution_buckets(
+    status_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    attributions = [
+        attribution
+        for row in status_rows
+        if _skip_reason(row)
+        for attribution in (_row_live_edge_attribution(row),)
+        if attribution
+    ]
+    return summarize_live_edge_attribution_buckets(attributions)
+
+
+def _row_live_edge_attribution(row: Mapping[str, Any]) -> dict[str, Any]:
+    summary = _mapping(row.get("summary"))
+    attribution = _mapping(summary.get("live_edge_attribution"))
+    if attribution:
+        return dict(attribution)
+    attempts = row.get("recent_attempts")
+    if isinstance(attempts, Sequence) and not isinstance(attempts, (str, bytes)):
+        for attempt in reversed(list(attempts)):
+            attempt_attribution = _mapping(_mapping(attempt).get("live_edge_attribution"))
+            if attempt_attribution:
+                return dict(attempt_attribution)
+    return {}
 
 
 def _settlement_state(
@@ -727,6 +770,10 @@ def _text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _datetime(value: Any) -> datetime | None:

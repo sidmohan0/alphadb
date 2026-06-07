@@ -114,6 +114,11 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
         },
         "runtime_controls": {"live_orders_enabled": True, "orders_placed": 1},
         "counts": {"live_attempts": 1, "replay_trades": 1},
+        "live_edge_attribution": {
+            "attribution_class": "threshold_drag",
+            "edge": 0.03,
+            "edge_shortfall": 0.02,
+        },
     }
     submitted = build_fair_value_live_status(
         manifest=manifest,
@@ -189,8 +194,13 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
                     "attempt_id": "attempt_2",
                     "submitted_at": "2026-06-04T15:01:00+00:00",
                     "market_ticker": "KXBTC15M-TEST",
+                    "side": "yes",
                     "status": "skipped",
                     "reason": "daily_loss_cap_reached",
+                    "live_edge_attribution": {
+                        "attribution_class": "threshold_drag",
+                        "edge": 0.03,
+                    },
                 }
             ]
         },
@@ -203,6 +213,9 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert submitted.recent_no_fill_count == 1
     assert skipped.decision_outcome == "skipped"
     assert skipped.skip_reason == "daily_loss_cap_reached"
+    assert skipped.selected_side == "yes"
+    assert skipped.summary["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert skipped.recent_attempts[0]["live_edge_attribution"]["edge"] == 0.03
     assert expensive.strategy == EXPENSIVE_YES_LIVE_STRATEGY
     assert expensive.recent_attempts[0]["observed_yes_ask"] == 0.7
     assert expensive.recent_attempts[0]["yes_ask_threshold"] == 0.65
