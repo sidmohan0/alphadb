@@ -1,8 +1,9 @@
 "use client"
 
-import { useEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { apiGet } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
+import { useSelectedStrategy } from "@/components/strategy/strategy-context"
 import { Activity, CircleDollarSign, RefreshCw, ShieldAlert, TrendingUp } from "lucide-react"
 
 type Tone = "good" | "warn" | "bad" | "muted"
@@ -111,27 +112,30 @@ function shortTime(value: unknown) {
 }
 
 export function PerformanceSection() {
+  const { selectedStrategy, selectedStrategyLabel, strategyReady } = useSelectedStrategy()
   const [payload, setPayload] = useState<PerformancePayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setPayload(await apiGet<PerformancePayload>("/performance"))
+      setPayload(await apiGet<PerformancePayload>(`/performance?strategy=${encodeURIComponent(selectedStrategy)}`))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load performance")
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedStrategy])
 
   useEffect(() => {
+    if (!strategyReady) return
+    setPayload(null)
     load()
     const id = window.setInterval(load, 30000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [load, strategyReady])
 
   const pnl = payload?.pnl
   const execution = payload?.execution
@@ -148,7 +152,7 @@ export function PerformanceSection() {
             <StatusDot tone={statusTone} label={text(payload?.data_status, loading ? "loading" : "unknown")} />
           </div>
           <p className="text-sm text-muted-foreground">
-            {text(payload?.strategy, "strategy unknown")} · {text(payload?.market_series, "series unknown")} · {shortTime(payload?.generated_at_utc)}
+            {selectedStrategyLabel} · {text(payload?.market_series, "series unknown")} · {shortTime(payload?.generated_at_utc)}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>

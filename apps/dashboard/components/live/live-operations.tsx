@@ -1,11 +1,14 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { apiGet, apiPost } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
+import { useSelectedStrategy } from "@/components/strategy/strategy-context"
 import { Activity, RefreshCw, Save, ShieldAlert, Square } from "lucide-react"
 
 interface LivePayload {
+  strategy?: string
+  strategy_metadata?: Record<string, unknown>
   health?: {
     ok: boolean
     environment: string
@@ -120,6 +123,7 @@ function validateConfigForm(values: ConfigFormValues) {
 }
 
 export function LiveOperations() {
+  const { selectedStrategy, selectedStrategyLabel, strategyReady } = useSelectedStrategy()
   const [payload, setPayload] = useState<LivePayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -129,26 +133,32 @@ export function LiveOperations() {
   const [configSaving, setConfigSaving] = useState(false)
   const [configSaveMessage, setConfigSaveMessage] = useState<string | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setPayload(await apiGet<LivePayload>("/live"))
+      setPayload(await apiGet<LivePayload>(`/live?strategy=${encodeURIComponent(selectedStrategy)}`))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load live status")
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedStrategy])
 
   useEffect(() => {
+    if (!strategyReady) return
+    setPayload(null)
+    setConfigDirty(false)
+    setConfigSaveMessage(null)
+    setConfigErrors({})
     load()
     const id = window.setInterval(load, 15000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [load, strategyReady])
 
   const status = payload?.live_status || {}
   const config = payload?.active_config
+  const thresholdLabel = text(payload?.strategy_metadata?.threshold_label, "Min price")
   const recentRuns = payload?.recent_runs || []
   const attempts = useMemo(() => {
     const raw = status.recent_attempts
@@ -215,7 +225,10 @@ export function LiveOperations() {
     setConfigSaving(true)
     setConfigSaveMessage(null)
     try {
-      const saved = await apiPost<SaveConfigResponse>("/live/config", validated.payload)
+      const saved = await apiPost<SaveConfigResponse>(
+        `/live/config?strategy=${encodeURIComponent(selectedStrategy)}`,
+        { ...validated.payload, strategy: selectedStrategy },
+      )
       setPayload((current) => ({
         ...(current ?? {}),
         active_config: saved.active_config ?? current?.active_config,
@@ -239,7 +252,7 @@ export function LiveOperations() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Live Operations</h1>
           <p className="text-sm text-muted-foreground">
-            {text(payload?.health?.environment, "environment unknown")} · {shortTime(payload?.health?.generated_at_utc)}
+            {selectedStrategyLabel} · {text(payload?.health?.environment, "environment unknown")} · {shortTime(payload?.health?.generated_at_utc)}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -324,7 +337,9 @@ export function LiveOperations() {
               <div className="grid grid-cols-2 gap-3">
                 {CONFIG_FIELDS.map((field) => (
                   <label key={field.key} className="space-y-1 text-sm">
-                    <span className="block text-xs text-muted-foreground">{field.label}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {field.key === "min_contract_price" ? thresholdLabel : field.label}
+                    </span>
                     <input
                       className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
                       inputMode="decimal"
