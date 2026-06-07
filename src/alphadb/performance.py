@@ -44,21 +44,26 @@ class PerformanceSummaryRepository:
                     strategy=strategy,
                     limit=recent_limit,
                 )
-                order_rows = _paper_order_rows(
-                    cursor,
-                    market_series=market_series,
-                    limit=DEFAULT_PAPER_ROW_LIMIT,
-                )
-                fill_rows = _paper_fill_rows(
-                    cursor,
-                    market_series=market_series,
-                    limit=DEFAULT_PAPER_ROW_LIMIT,
-                )
-                position_rows = _paper_position_rows(
-                    cursor,
-                    market_series=market_series,
-                    limit=DEFAULT_PAPER_ROW_LIMIT,
-                )
+                if strategy == FAIR_VALUE_LIVE_STRATEGY:
+                    order_rows = _paper_order_rows(
+                        cursor,
+                        market_series=market_series,
+                        limit=DEFAULT_PAPER_ROW_LIMIT,
+                    )
+                    fill_rows = _paper_fill_rows(
+                        cursor,
+                        market_series=market_series,
+                        limit=DEFAULT_PAPER_ROW_LIMIT,
+                    )
+                    position_rows = _paper_position_rows(
+                        cursor,
+                        market_series=market_series,
+                        limit=DEFAULT_PAPER_ROW_LIMIT,
+                    )
+                else:
+                    order_rows = []
+                    fill_rows = []
+                    position_rows = []
         return build_performance_summary(
             strategy=strategy,
             market_series=market_series,

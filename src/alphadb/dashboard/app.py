@@ -24,10 +24,12 @@ from alphadb.dashboard.skills import (
 from alphadb.dashboard.strategy import DashboardStrategyRepository, compile_strategy_brief
 from alphadb.health import HealthReport, collect_health
 from alphadb.live_runtime import (
+    EXPENSIVE_YES_LIVE_STRATEGY,
     FAIR_VALUE_LIVE_STRATEGY,
     LiveRunStatusRepository,
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
+    runtime_strategy_metadata,
 )
 from alphadb.performance import PerformanceSummaryRepository
 from alphadb.portfolio import cached_portfolio_balance_payload
@@ -41,6 +43,7 @@ LabRepositoryFactory = Callable[[str], DashboardLabRepository]
 PerformanceRepositoryFactory = Callable[[str], PerformanceSummaryRepository]
 HealthCollector = Callable[[Settings], HealthReport]
 PortfolioBalanceProvider = Callable[[Settings], Mapping[str, Any]]
+LIVE_DASHBOARD_STRATEGIES = (FAIR_VALUE_LIVE_STRATEGY, EXPENSIVE_YES_LIVE_STRATEGY)
 
 
 @dataclass(frozen=True)
@@ -66,16 +69,20 @@ class DashboardService:
             "components": report.as_rows(),
         }
 
-    def live_payload(self) -> dict[str, Any]:
+    def live_payload(self, *, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> dict[str, Any]:
+        strategy = _live_strategy(strategy)
         config_repository = self.config_repository_factory(self.settings.database_url)
-        active = config_repository.seed_defaults(strategy=FAIR_VALUE_LIVE_STRATEGY)
-        history = config_repository.recent_revisions(strategy=FAIR_VALUE_LIVE_STRATEGY, limit=6)
+        active = config_repository.seed_defaults(strategy=strategy)
+        history = config_repository.recent_revisions(strategy=strategy, limit=6)
         status_repository = self.status_repository_factory(self.settings.database_url)
-        latest_status = status_repository.latest_status(strategy=FAIR_VALUE_LIVE_STRATEGY)
+        latest_status = status_repository.latest_status(strategy=strategy)
         live_status = latest_status.as_dict()
         live_status.pop("summary", None)
         report = self.health_collector(self.settings)
         return {
+            "strategy": strategy,
+            "strategies": [runtime_strategy_metadata(name) for name in LIVE_DASHBOARD_STRATEGIES],
+            "strategy_metadata": runtime_strategy_metadata(strategy),
             "health": {
                 "ok": report.ok,
                 "environment": report.environment,
@@ -87,34 +94,38 @@ class DashboardService:
             "portfolio_balance": dict(self.portfolio_balance_provider(self.settings)),
             "live_status": live_status,
             "recent_runs": status_repository.recent_details(
-                strategy=FAIR_VALUE_LIVE_STRATEGY,
+                strategy=strategy,
                 limit=8,
             ),
         }
 
-    def performance_payload(self) -> dict[str, Any]:
+    def performance_payload(self, *, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> dict[str, Any]:
+        strategy = _live_strategy(strategy)
         return dict(
             self.performance_repository_factory(self.settings.database_url).summary(
-                strategy=FAIR_VALUE_LIVE_STRATEGY
+                strategy=strategy
             )
         )
 
     def save_config(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        strategy = _live_strategy(str(payload.get("strategy") or FAIR_VALUE_LIVE_STRATEGY))
         config_repository = self.config_repository_factory(self.settings.database_url)
-        current = config_repository.seed_defaults(strategy=FAIR_VALUE_LIVE_STRATEGY).config
+        current = config_repository.seed_defaults(strategy=strategy).config
         config = LiveRuntimeConfig.from_payload(payload, current=current)
         saved = config_repository.save_config(
             config,
-            strategy=FAIR_VALUE_LIVE_STRATEGY,
+            strategy=strategy,
             created_by="dashboard",
         )
         return {
             "ok": True,
+            "strategy": strategy,
+            "strategy_metadata": runtime_strategy_metadata(strategy),
             "active_config": saved.as_dict(),
             "config_history": [
                 revision.as_dict()
                 for revision in config_repository.recent_revisions(
-                    strategy=FAIR_VALUE_LIVE_STRATEGY,
+                    strategy=strategy,
                     limit=6,
                 )
             ],
@@ -257,7 +268,9 @@ class DashboardService:
         if skill == "capabilities.list":
             result: Any = self.capabilities()
         elif skill == "live.summary":
-            result = self.live_payload()
+            result = self.live_payload(
+                strategy=_live_strategy(_optional_text(params.get("strategy")))
+            )
         elif skill == "strategy.compile":
             result = self.compile_strategy(params)
         elif skill == "strategy.list":
@@ -331,6 +344,13 @@ def _query_text(query: Mapping[str, Sequence[str]], key: str) -> str | None:
         return None
     text = str(values[0]).strip()
     return text or None
+
+
+def _live_strategy(value: str | None) -> str:
+    strategy = str(value or FAIR_VALUE_LIVE_STRATEGY).strip() or FAIR_VALUE_LIVE_STRATEGY
+    if strategy not in LIVE_DASHBOARD_STRATEGIES:
+        raise ValueError(f"unsupported live strategy: {strategy}")
+    return strategy
 
 
 def _query_int(query: Mapping[str, Sequence[str]], key: str, default: int) -> int:
@@ -412,7 +432,11 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                         {"ok": False, "error": "unauthorized"}, status=HTTPStatus.UNAUTHORIZED
                     )
                     return
-                self._json(service.live_payload())
+                self._json(
+                    service.live_payload(
+                        strategy=_live_strategy(_query_text(parse_qs(parsed.query), "strategy"))
+                    )
+                )
                 return
             if path.startswith("/api/"):
                 if not self._authenticated():
@@ -444,7 +468,11 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                     payload = json.loads(self._body().decode("utf-8"))
                     if not isinstance(payload, Mapping):
                         raise ValueError("request body must be a JSON object")
-                    self._json(service.save_config(payload))
+                    query_strategy = _query_text(parse_qs(parsed.query), "strategy")
+                    effective_payload = dict(payload)
+                    if query_strategy is not None:
+                        effective_payload["strategy"] = query_strategy
+                    self._json(service.save_config(effective_payload))
                 except Exception as exc:
                     self._json(
                         {"ok": False, "error": str(exc)},
@@ -515,7 +543,11 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                     self._json_ok(service.api_health())
                     return
                 if path == "/api/performance":
-                    self._json_ok(service.performance_payload())
+                    self._json_ok(
+                        service.performance_payload(
+                            strategy=_live_strategy(_query_text(query, "strategy"))
+                        )
+                    )
                     return
                 if path == "/api/strategies":
                     self._json_ok(
@@ -939,11 +971,12 @@ DASHBOARD_HTML = f"""<!doctype html>
             <h2>Runtime Config</h2>
             <form id="config-form" novalidate>
               <div class="form-grid">
+                <div class="field"><label for="live-strategy">Strategy</label><select id="live-strategy" name="strategy"><option value="fair_value_live">Fair-value live</option><option value="expensive_yes_live">Expensive YES guarded live run</option></select><div class="error" data-error-for="strategy"></div></div>
                 <div class="field"><label for="max_order_dollars">Max order dollars</label><input id="max_order_dollars" name="max_order_dollars" type="number" min="0.01" step="0.01"><div class="error" data-error-for="max_order_dollars"></div></div>
                 <div class="field"><label for="max_market_exposure_dollars">Max market exposure dollars</label><input id="max_market_exposure_dollars" name="max_market_exposure_dollars" type="number" min="0.01" step="0.01"><div class="error" data-error-for="max_market_exposure_dollars"></div></div>
                 <div class="field"><label for="max_daily_loss_dollars">Max daily loss dollars</label><input id="max_daily_loss_dollars" name="max_daily_loss_dollars" type="number" min="0.01" step="0.01"><div class="error" data-error-for="max_daily_loss_dollars"></div></div>
                 <div class="field"><label for="min_edge">Min edge</label><input id="min_edge" name="min_edge" type="number" min="0" max="1" step="0.0001"><div class="error" data-error-for="min_edge"></div></div>
-                <div class="field"><label for="min_contract_price">Min contract price</label><input id="min_contract_price" name="min_contract_price" type="number" min="0" max="1" step="0.01"><div class="error" data-error-for="min_contract_price"></div></div>
+                <div class="field"><label for="min_contract_price" id="threshold-label">Min contract price</label><input id="min_contract_price" name="min_contract_price" type="number" min="0" max="1" step="0.01"><div class="error" data-error-for="min_contract_price"></div></div>
                 <div class="field"><label for="max_markets">Max markets</label><input id="max_markets" name="max_markets" type="number" min="1" max="500" step="1"><div class="error" data-error-for="max_markets"></div></div>
               </div>
               <div class="save-row"><button class="save-button" type="submit">Save</button><span class="save-state" id="save-state"></span></div>
@@ -953,11 +986,11 @@ DASHBOARD_HTML = f"""<!doctype html>
         <div class="lower">
           <section class="panel">
             <h2>Recent Attempts</h2>
-            <table><thead><tr><th>Time</th><th>Market</th><th>Status</th><th>Reason</th><th>Fill</th></tr></thead><tbody id="attempts-body"></tbody></table>
+            <table><thead><tr><th>Time</th><th>Market</th><th>Status</th><th>Reason</th><th>Ask</th><th>Fill</th></tr></thead><tbody id="attempts-body"></tbody></table>
           </section>
           <section class="panel">
             <h2>Config History</h2>
-            <table><thead><tr><th>Version</th><th>Order</th><th>Exposure</th><th>Daily</th><th>Min price</th><th>Saved</th></tr></thead><tbody id="history-body"></tbody></table>
+            <table><thead><tr><th>Version</th><th>Order</th><th>Exposure</th><th>Daily</th><th id="history-threshold-label">Min price</th><th>Saved</th></tr></thead><tbody id="history-body"></tbody></table>
           </section>
         </div>
       </section>
@@ -965,6 +998,7 @@ DASHBOARD_HTML = f"""<!doctype html>
   </div>
   <script>
 const fields = ["max_order_dollars","max_market_exposure_dollars","max_daily_loss_dollars","min_edge","min_contract_price","max_markets"];
+function selectedStrategy() {{ return document.getElementById("live-strategy").value || "fair_value_live"; }}
 function text(id, value) {{ document.getElementById(id).textContent = value ?? "--"; }}
 function cls(id, name) {{ document.getElementById(id).className = name; }}
 function money(value) {{ const n = Number(value || 0); return "$" + n.toFixed(2); }}
@@ -992,19 +1026,23 @@ function validate(payload) {{
   return errors;
 }}
 async function loadLive() {{
-  const res = await fetch("/api/live");
+  const res = await fetch("/api/live?strategy=" + encodeURIComponent(selectedStrategy()));
   const data = await res.json();
   render(data);
 }}
 function render(data) {{
   const status = data.live_status || {{}};
   const config = data.active_config || {{}};
+  const metadata = data.strategy_metadata || {{}};
+  if (data.strategy) document.getElementById("live-strategy").value = data.strategy;
+  text("threshold-label", metadata.threshold_label || "Min contract price");
+  text("history-threshold-label", metadata.threshold_label || "Min price");
   text("env-pill", data.health?.environment || "env");
   text("health-pill", data.health?.ok ? "health ok" : "health error");
   cls("health-pill", "pill " + (data.health?.ok ? "good" : "bad"));
   text("orders-pill", status.live_orders_enabled ? "live runner active" : "live runner inactive");
   cls("orders-pill", "pill " + (status.live_orders_enabled ? "good" : "bad"));
-  text("config-pill", "config v" + (config.version ?? "--"));
+  text("config-pill", (metadata.label || status.strategy || "strategy") + " · config v" + (config.version ?? "--"));
   text("market", status.current_market_ticker || "No run");
   text("run-id", status.run_id || "no recent run");
   text("decision", status.decision_outcome || "--");
@@ -1015,18 +1053,19 @@ function render(data) {{
   text("execution-detail", status.latest_attempt_reason || status.fill_status || "--");
   fields.forEach(key => {{ if (key in config) document.getElementById(key).value = config[key]; }});
   const attempts = status.recent_attempts || [];
-  document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => `<tr><td>${{shortTime(row.submitted_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || ""}}</td><td>${{row.fill_status || ""}}</td></tr>`).join("") : "<tr><td colspan='5'>No recent attempts</td></tr>";
+  document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => `<tr><td>${{shortTime(row.submitted_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || ""}}</td><td>${{row.observed_yes_ask ?? ""}}</td><td>${{row.fill_status || ""}}</td></tr>`).join("") : "<tr><td colspan='6'>No recent attempts</td></tr>";
   const history = data.config_history || [];
   document.getElementById("history-body").innerHTML = history.map(row => `<tr><td>${{row.version}}</td><td>${{money(row.max_order_dollars)}}</td><td>${{money(row.max_market_exposure_dollars)}}</td><td>${{money(row.max_daily_loss_dollars)}}</td><td>${{money(row.min_contract_price)}}</td><td>${{shortTime(row.created_at)}}</td></tr>`).join("");
 }}
 document.getElementById("config-form").addEventListener("submit", async event => {{
   event.preventDefault();
   const payload = Object.fromEntries(fields.map(key => [key, key === "max_markets" ? Number.parseInt(document.getElementById(key).value, 10) : Number.parseFloat(document.getElementById(key).value)]));
+  payload.strategy = selectedStrategy();
   const errors = validate(payload);
   setErrors(errors);
   if (Object.keys(errors).length) return;
   text("save-state", "Saving...");
-  const res = await fetch("/api/live/config", {{ method: "POST", headers: {{ "Content-Type": "application/json" }}, body: JSON.stringify(payload) }});
+  const res = await fetch("/api/live/config?strategy=" + encodeURIComponent(selectedStrategy()), {{ method: "POST", headers: {{ "Content-Type": "application/json" }}, body: JSON.stringify(payload) }});
   const data = await res.json();
   if (!res.ok || data.ok === false) {{
     text("save-state", data.error || "Save failed");
@@ -1035,6 +1074,7 @@ document.getElementById("config-form").addEventListener("submit", async event =>
   text("save-state", "Saved");
   await loadLive();
 }});
+document.getElementById("live-strategy").addEventListener("change", () => loadLive().catch(error => text("save-state", error.message)));
 loadLive().catch(error => text("save-state", error.message));
   </script>
 </body>

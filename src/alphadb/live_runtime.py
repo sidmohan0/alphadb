@@ -17,6 +17,7 @@ from alphadb.state.repository import OperationalStateRepository
 
 
 FAIR_VALUE_LIVE_STRATEGY = "fair_value_live"
+EXPENSIVE_YES_LIVE_STRATEGY = "expensive_yes_live"
 MAX_SCAN_MARKETS = 500
 
 
@@ -106,6 +107,50 @@ DEFAULT_FAIR_VALUE_LIVE_CONFIG = LiveRuntimeConfig(
 )
 
 
+DEFAULT_EXPENSIVE_YES_LIVE_CONFIG = LiveRuntimeConfig(
+    max_order_dollars=1.0,
+    max_market_exposure_dollars=1.0,
+    max_daily_loss_dollars=10.0,
+    min_edge=0.0,
+    max_markets=10,
+    min_contract_price=0.65,
+)
+
+
+LIVE_RUNTIME_CONFIG_DEFAULTS = {
+    FAIR_VALUE_LIVE_STRATEGY: DEFAULT_FAIR_VALUE_LIVE_CONFIG,
+    EXPENSIVE_YES_LIVE_STRATEGY: DEFAULT_EXPENSIVE_YES_LIVE_CONFIG,
+}
+
+
+def default_live_runtime_config(strategy: str) -> LiveRuntimeConfig:
+    if strategy == EXPENSIVE_YES_LIVE_STRATEGY or strategy.startswith(
+        f"{EXPENSIVE_YES_LIVE_STRATEGY}_"
+    ):
+        return DEFAULT_EXPENSIVE_YES_LIVE_CONFIG
+    return LIVE_RUNTIME_CONFIG_DEFAULTS.get(strategy, DEFAULT_FAIR_VALUE_LIVE_CONFIG)
+
+
+def runtime_strategy_metadata(strategy: str) -> dict[str, Any]:
+    if strategy == EXPENSIVE_YES_LIVE_STRATEGY:
+        return {
+            "strategy": EXPENSIVE_YES_LIVE_STRATEGY,
+            "label": "Expensive YES guarded live run",
+            "threshold_field": "min_contract_price",
+            "threshold_label": "YES ask threshold",
+            "threshold_default": DEFAULT_EXPENSIVE_YES_LIVE_CONFIG.min_contract_price,
+            "uses_edge": False,
+        }
+    return {
+        "strategy": FAIR_VALUE_LIVE_STRATEGY,
+        "label": "Fair-value live",
+        "threshold_field": "min_contract_price",
+        "threshold_label": "Min contract price",
+        "threshold_default": DEFAULT_FAIR_VALUE_LIVE_CONFIG.min_contract_price,
+        "uses_edge": True,
+    }
+
+
 @dataclass(frozen=True)
 class LiveRuntimeConfigRevision:
     config_id: str
@@ -169,7 +214,7 @@ class LiveRuntimeConfigRepository:
                     row = self._insert_revision(
                         cursor,
                         strategy=strategy,
-                        config=DEFAULT_FAIR_VALUE_LIVE_CONFIG,
+                        config=default_live_runtime_config(strategy),
                         created_by=created_by,
                     )
             connection.commit()
@@ -518,6 +563,7 @@ def build_fair_value_live_status(
     manifest: Mapping[str, Any],
     attempts_payload: Mapping[str, Any],
     reconciliation: Mapping[str, Any],
+    strategy: str | None = None,
 ) -> LiveRunStatus:
     attempts = [
         dict(attempt)
@@ -537,6 +583,13 @@ def build_fair_value_live_status(
     latest_reconciliation = _matching_reconciliation(latest_attempt, reconciliation_rows)
     config = _mapping(manifest.get("runtime_config"))
     runtime_controls = _mapping(manifest.get("runtime_controls"))
+    status_strategy = (
+        strategy
+        or _text(manifest.get("strategy"))
+        or _text(runtime_controls.get("strategy"))
+        or _text(config.get("strategy"))
+        or FAIR_VALUE_LIVE_STRATEGY
+    )
     snapshot = _mapping(config.get("snapshot"))
     daily_limit = _float(
         snapshot.get("max_daily_loss_dollars"),
@@ -560,7 +613,7 @@ def build_fair_value_live_status(
     decision_outcome = _decision_outcome(latest_status, manifest)
     return LiveRunStatus(
         run_id=_text(manifest.get("run_id")),
-        strategy=FAIR_VALUE_LIVE_STRATEGY,
+        strategy=status_strategy,
         generated_at=_datetime(manifest.get("generated_at")) or datetime.now(UTC),
         config_id=_text(config.get("config_id")),
         config_version=_optional_int(config.get("version")),
@@ -606,7 +659,7 @@ def build_fair_value_live_status(
                 )
             },
         },
-        recent_attempts=_recent_attempt_rows(attempts, reconciliation_rows),
+        recent_attempts=_recent_attempt_rows(attempts, reconciliation_rows, config=config),
     )
 
 
@@ -640,9 +693,10 @@ def no_recent_live_run_status(*, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> Li
 
 
 def _config_revision_from_row(row: Mapping[str, Any]) -> LiveRuntimeConfigRevision:
+    strategy = str(row["strategy"])
     return LiveRuntimeConfigRevision(
         config_id=str(row["config_id"]),
-        strategy=str(row["strategy"]),
+        strategy=strategy,
         version=int(row["version"]),
         is_active=bool(row["is_active"]),
         config=LiveRuntimeConfig(
@@ -652,7 +706,10 @@ def _config_revision_from_row(row: Mapping[str, Any]) -> LiveRuntimeConfigRevisi
             min_edge=float(row["min_edge"]),
             max_markets=int(row["max_markets"]),
             min_contract_price=float(
-                row.get("min_contract_price", DEFAULT_FAIR_VALUE_LIVE_CONFIG.min_contract_price)
+                row.get(
+                    "min_contract_price",
+                    default_live_runtime_config(strategy).min_contract_price,
+                )
             ),
         ).validate(),
         created_by=str(row["created_by"]),
@@ -704,10 +761,16 @@ def _matching_reconciliation(
 def _recent_attempt_rows(
     attempts: Sequence[Mapping[str, Any]],
     reconciliation_rows: Sequence[Mapping[str, Any]],
+    *,
+    config: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     rows = []
+    snapshot = _mapping((config or {}).get("snapshot"))
     for attempt in attempts[-10:]:
         reconciliation = _matching_reconciliation(attempt, reconciliation_rows)
+        decision = _mapping(attempt.get("decision"))
+        original_decision = _mapping(attempt.get("original_decision"))
+        market_exposure = _mapping(attempt.get("market_exposure"))
         rows.append(
             {
                 "submitted_at": attempt.get("submitted_at"),
@@ -715,6 +778,23 @@ def _recent_attempt_rows(
                 "status": attempt.get("status"),
                 "reason": attempt.get("reason"),
                 "side": attempt.get("side"),
+                "observed_yes_ask": decision.get("observed_yes_ask")
+                or original_decision.get("observed_yes_ask")
+                or decision.get("yes_ask")
+                or original_decision.get("yes_ask"),
+                "yes_ask_threshold": decision.get("yes_ask_threshold")
+                or original_decision.get("yes_ask_threshold")
+                or snapshot.get("min_contract_price"),
+                "intended_contracts": market_exposure.get("intended_contracts")
+                or decision.get("intended_contracts")
+                or original_decision.get("intended_contracts"),
+                "sized_contracts": market_exposure.get("sized_contracts")
+                or decision.get("contracts")
+                or original_decision.get("contracts"),
+                "max_loss_dollars": attempt.get("max_loss_dollars"),
+                "risk_admission": dict(_mapping(attempt.get("risk_admission"))),
+                "config_id": (config or {}).get("config_id"),
+                "config_version": (config or {}).get("version"),
                 "fill_status": _fill_status(attempt, reconciliation),
                 "filled_contracts": reconciliation.get(
                     "filled_contracts", attempt.get("fill_count")

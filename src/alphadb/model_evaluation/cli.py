@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from alphadb.config import settings_from_env
+from alphadb.live_runtime import EXPENSIVE_YES_LIVE_STRATEGY
 from alphadb.model_evaluation.artifacts import audit_model_artifacts
 from alphadb.model_evaluation.edge import (
     build_edge_verdict_report,
@@ -265,6 +266,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fair_live.add_argument("--output", default=None)
 
+    expensive_yes_live = subparsers.add_parser(
+        "expensive-yes-live-trading-job",
+        help="Run the guarded Expensive YES live-data probe",
+    )
+    expensive_yes_live.add_argument("--output-root", default="artifacts/expensive-yes-live")
+    expensive_yes_live.add_argument(
+        "--source", choices=("fixture", "kalshi-public"), default="fixture"
+    )
+    expensive_yes_live.add_argument(
+        "--coinbase-source",
+        choices=("fixture", "coinbase-live"),
+        default="fixture",
+    )
+    expensive_yes_live.add_argument("--max-markets", type=int, default=10)
+    expensive_yes_live.add_argument("--yes-ask-threshold", type=float, default=0.65)
+    expensive_yes_live.add_argument("--max-order-dollars", type=float, default=1.0)
+    expensive_yes_live.add_argument("--max-ticker-exposure-dollars", type=float, default=1.0)
+    expensive_yes_live.add_argument("--max-daily-loss-dollars", type=float, default=10.0)
+    expensive_yes_live.add_argument("--s3-prefix", default=None)
+    expensive_yes_live.add_argument("--submit-live-orders", action="store_true")
+    expensive_yes_live.add_argument("--live-risk-state-stale-seconds", type=int, default=60)
+    expensive_yes_live.add_argument("--quote-stale-seconds", type=int, default=15)
+    expensive_yes_live.add_argument(
+        "--runtime-config-source",
+        choices=("auto", "postgres", "cli"),
+        default="auto",
+        help="Read dashboard-owned Postgres config, use CLI values, or choose by environment.",
+    )
+    expensive_yes_live.add_argument("--output", default=None)
+
     return parser
 
 
@@ -452,6 +483,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 live_risk_state_stale_seconds=args.live_risk_state_stale_seconds,
                 quote_stale_seconds=args.quote_stale_seconds,
                 coinbase_feature_stale_seconds=args.coinbase_feature_stale_seconds,
+            )
+        ).run()
+    elif args.command == "expensive-yes-live-trading-job":
+        payload = FairValueLiveTradingJob(
+            config=FairValueLiveTradingJobConfig(
+                output_root=Path(args.output_root),
+                strategy=EXPENSIVE_YES_LIVE_STRATEGY,
+                decision_policy="expensive_yes",
+                source=args.source,
+                coinbase_source=args.coinbase_source,
+                max_markets=args.max_markets,
+                min_edge=0.0,
+                min_contract_price=args.yes_ask_threshold,
+                min_edge_values=(0.0,),
+                max_order_dollars=args.max_order_dollars,
+                max_ticker_exposure_dollars=args.max_ticker_exposure_dollars,
+                max_daily_loss_dollars=args.max_daily_loss_dollars,
+                s3_prefix=args.s3_prefix,
+                submit_live_orders=args.submit_live_orders,
+                runtime_config_source=args.runtime_config_source,
+                live_risk_state_stale_seconds=args.live_risk_state_stale_seconds,
+                quote_stale_seconds=args.quote_stale_seconds,
+                coinbase_feature_stale_seconds=0,
             )
         ).run()
     else:

@@ -237,6 +237,24 @@ def test_dashboard_service_exposes_performance_payload() -> None:
     assert repository.calls == ["fair_value_live"]
 
 
+def test_dashboard_service_exposes_strategy_specific_performance_payload() -> None:
+    payload = build_performance_summary(
+        strategy="expensive_yes_live",
+        market_series="KXBTC15M",
+        generated_at=NOW,
+    )
+    repository = FakePerformanceRepository(payload)
+    service = DashboardService(
+        settings=settings_from_env({"DATABASE_URL": "postgresql://example.test/alphadb"}),
+        performance_repository_factory=lambda database_url: repository,
+    )
+
+    result = service.performance_payload(strategy="expensive_yes_live")
+
+    assert result["strategy"] == "expensive_yes_live"
+    assert repository.calls == ["expensive_yes_live"]
+
+
 @dataclass
 class FakePerformanceRepository:
     payload: dict[str, Any]
