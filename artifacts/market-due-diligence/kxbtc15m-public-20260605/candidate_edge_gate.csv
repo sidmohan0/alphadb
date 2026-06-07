@@ -1,6 +1,0 @@
-gate,result
-Positive net ROI,failed
-Positive stressed ROI,failed
-Enough trades >= 100,passed
-Enough markets >= 10,passed
-Candidate structural edge,no
