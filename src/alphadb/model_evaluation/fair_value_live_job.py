@@ -29,6 +29,7 @@ from alphadb.live_runtime import (
     LiveRuntimeConfigRepository,
     build_fair_value_live_status,
 )
+from alphadb.live_edge_attribution import build_live_edge_attribution
 from alphadb.live_risk import (
     DEFAULT_LIVE_RISK_STALE_SECONDS,
     LiveRiskAdmissionRepository,
@@ -593,6 +594,46 @@ class FairValueLiveTradingJob:
             "status_materialization",
             "artifact_write",
         )
+        runtime_controls = {
+            "strategy": self.config.strategy,
+            "decision_policy": self.config.decision_policy,
+            "report_only": False,
+            "submit_live_orders_requested": self.config.submit_live_orders,
+            "live_orders_enabled": bool(runtime_guard.get("can_submit_live_orders")),
+            "orders_placed": sum(
+                1 for attempt in live_attempts if attempt["status"] == "submitted"
+            ),
+            "filled_contracts": sum(
+                int(attempt.get("fill_count") or 0) for attempt in live_attempts
+            ),
+            "max_order_dollars": self.config.max_order_dollars,
+            "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
+            "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
+            "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
+            "min_edge": self.config.min_edge,
+            "min_contract_price": self.config.min_contract_price,
+            "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
+            "daily_loss_accounting": dict(daily_loss_accounting),
+            "runtime_guard": dict(runtime_guard),
+            "live_run_lock": live_run_lock.as_dict(),
+            "live_status_materialized": False,
+        }
+        latest_raw_attempt = dict(live_attempts[-1]) if live_attempts else {}
+        attempt_timing = timer.snapshot(
+            quote_seen_at=parse_datetime(latest_raw_attempt.get("quote_seen_at")),
+            order_submit_at=parse_datetime(latest_raw_attempt.get("order_submit_at")),
+        )
+        attributed_attempts = [
+            live_attempt_with_edge_attribution(
+                attempt,
+                config=self.config.as_dict(),
+                runtime_config=runtime_config,
+                runtime_controls=runtime_controls,
+                timing=attempt_timing,
+                decision_policy=self.config.decision_policy,
+            )
+            for attempt in live_attempts
+        ]
         attempts_payload = dict(
             live_attempts_payload
             or {
@@ -602,11 +643,13 @@ class FairValueLiveTradingJob:
                 "generated_at": generated_at.isoformat(),
                 "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
                 "daily_loss_accounting": dict(daily_loss_accounting),
-                "skip_reasons": summarize_attempt_reasons(live_attempts),
-                "attempts": [dict(attempt) for attempt in live_attempts],
+                "skip_reasons": summarize_attempt_reasons(attributed_attempts),
+                "attempts": attributed_attempts,
                 "one_cycle": True,
             }
         )
+        attempts_payload["attempts"] = attributed_attempts
+        attempts_payload["skip_reasons"] = summarize_attempt_reasons(attributed_attempts)
         artifacts: dict[str, Path] = {
             "live_order_attempts": run_dir / "live_order_attempts.json",
             "live_reconciliation_report": run_dir / "live_reconciliation_report.json",
@@ -619,12 +662,19 @@ class FairValueLiveTradingJob:
             write_json(artifacts["live_order_attempts"], attempts_payload)
             write_json(artifacts["live_reconciliation_report"], live_reconciliation)
 
-        orders_placed = sum(1 for attempt in live_attempts if attempt["status"] == "submitted")
-        filled_contracts = sum(int(attempt.get("fill_count") or 0) for attempt in live_attempts)
         collected_counts = as_mapping((collected or {}).get("counts"))
         selected_trade = (selected_decision or {}).get("decision") == "trade"
-        latest_attempt = dict(live_attempts[-1]) if live_attempts else {}
+        latest_attempt = dict(attributed_attempts[-1]) if attributed_attempts else {}
         latest_freshness = as_mapping(latest_attempt.get("freshness"))
+        latest_attribution = build_live_edge_attribution(
+            decision=selected_decision,
+            source_row=selected_row,
+            config=self.config.as_dict(),
+            runtime_config=runtime_config,
+            runtime_controls=runtime_controls,
+            freshness=latest_freshness,
+            timing=attempt_timing,
+        ) if self.config.decision_policy == "fair_value" else {}
         manifest = {
             "schema_version": FAIR_VALUE_LIVE_JOB_SCHEMA,
             "run_id": run_id,
@@ -635,32 +685,14 @@ class FairValueLiveTradingJob:
             "hot_path_scope": "one_current_decision_no_replay_no_walk_forward_no_full_history",
             "config": self.config.as_dict(),
             "runtime_config": dict(runtime_config),
-            "runtime_controls": {
-                "strategy": self.config.strategy,
-                "decision_policy": self.config.decision_policy,
-                "report_only": False,
-                "submit_live_orders_requested": self.config.submit_live_orders,
-                "live_orders_enabled": bool(runtime_guard.get("can_submit_live_orders")),
-                "orders_placed": orders_placed,
-                "filled_contracts": filled_contracts,
-                "max_order_dollars": self.config.max_order_dollars,
-                "max_market_exposure_dollars": self.config.max_ticker_exposure_dollars,
-                "max_ticker_exposure_dollars": self.config.max_ticker_exposure_dollars,
-                "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
-                "min_edge": self.config.min_edge,
-                "min_contract_price": self.config.min_contract_price,
-                "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
-                "daily_loss_accounting": dict(daily_loss_accounting),
-                "runtime_guard": dict(runtime_guard),
-                "live_run_lock": live_run_lock.as_dict(),
-                "live_status_materialized": False,
-            },
+            "runtime_controls": dict(runtime_controls),
             "executable_quote": {
                 "source": latest_attempt.get("quote_source"),
                 "quote_seen_at": latest_attempt.get("quote_seen_at"),
                 "max_quote_age_seconds": latest_attempt.get("quote_age_seconds"),
                 "freshness": dict(latest_freshness),
             },
+            "live_edge_attribution": latest_attribution,
             "live_risk_admission_state": {
                 "status": daily_loss_accounting.get("risk_state_status"),
                 "reason": daily_loss_accounting.get("risk_state_reason"),
@@ -724,6 +756,16 @@ class FairValueLiveTradingJob:
             quote_seen_at=parse_datetime(latest_attempt.get("quote_seen_at")),
             order_submit_at=parse_datetime(latest_attempt.get("order_submit_at")),
         )
+        if self.config.decision_policy == "fair_value":
+            manifest["live_edge_attribution"] = build_live_edge_attribution(
+                decision=selected_decision,
+                source_row=selected_row,
+                config=self.config.as_dict(),
+                runtime_config=runtime_config,
+                runtime_controls=manifest["runtime_controls"],
+                freshness=latest_freshness,
+                timing=manifest["timing"],
+            )
         write_json(run_dir / "manifest.json", manifest)
         manifest["artifacts"]["manifest"] = artifact_record(run_dir / "manifest.json")
         if self.config.s3_prefix:
@@ -1045,6 +1087,32 @@ def live_run_id_prefix(strategy: str) -> str:
     if strategy == EXPENSIVE_YES_LIVE_STRATEGY:
         return "expensive_yes_live"
     return "fv_live"
+
+
+def live_attempt_with_edge_attribution(
+    attempt: Mapping[str, Any],
+    *,
+    config: Mapping[str, Any],
+    runtime_config: Mapping[str, Any],
+    runtime_controls: Mapping[str, Any],
+    timing: Mapping[str, Any],
+    decision_policy: LiveDecisionPolicy,
+) -> dict[str, Any]:
+    payload = dict(attempt)
+    if decision_policy != "fair_value":
+        return payload
+    freshness = as_mapping(payload.get("freshness"))
+    payload["live_edge_attribution"] = build_live_edge_attribution(
+        decision=as_mapping(payload.get("original_decision"))
+        or as_mapping(payload.get("decision")),
+        source_row=as_mapping(payload.get("source_row")),
+        config=config,
+        runtime_config=runtime_config,
+        runtime_controls=runtime_controls,
+        freshness=freshness,
+        timing=timing,
+    )
+    return payload
 
 
 def select_live_decision_pairs(

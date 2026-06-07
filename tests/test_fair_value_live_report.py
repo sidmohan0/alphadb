@@ -202,6 +202,13 @@ class S3OnlyEvidenceClient(FailingEvidenceClient):
                     "decision": "skip",
                     "reason": "edge_below_min",
                 },
+                "live_edge_attribution": {
+                    "schema_version": "alphadb_live_edge_attribution.v1",
+                    "reason": "edge_below_min",
+                    "attribution_class": "threshold_drag",
+                    "edge": 0.03,
+                    "edge_shortfall": 0.02,
+                },
             }
         if artifact == "live_order_attempts.json":
             return {
@@ -210,6 +217,10 @@ class S3OnlyEvidenceClient(FailingEvidenceClient):
                         "status": "skipped",
                         "reason": "edge_below_min",
                         "market_ticker": "KXBTC15M-26JUN061315-15",
+                        "live_edge_attribution": {
+                            "attribution_class": "threshold_drag",
+                            "edge": 0.03,
+                        },
                     }
                 ]
             }
@@ -270,6 +281,10 @@ def test_report_uses_reachable_s3_artifacts_for_partial_zero_order_report() -> N
     assert report["summary"]["config"]["config_id"] == "live_cfg_deaa1bcf8660"
     assert report["summary"]["runtime_guard"]["credentials_present"] is True
     assert report["summary"]["executable_quote"]["source"] == "kalshi_orderbook"
+    assert report["summary"]["live_edge_attribution"]["edge_shortfall"] == 0.02
+    assert report["summary"]["live_edge_attribution_buckets"] == [
+        {"attribution_class": "threshold_drag", "count": 1}
+    ]
     assert report["summary"]["one_cycle"] is True
     assert report["summary"]["orders"] == {
         "submitted": 0,
@@ -281,6 +296,8 @@ def test_report_uses_reachable_s3_artifacts_for_partial_zero_order_report() -> N
     }
     assert report["summary"]["reconciliation"]["net_pnl_dollars"] == 0.0
     assert report["runs"][0]["selected_decision"]["reason"] == "edge_below_min"
+    assert report["runs"][0]["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert report["runs"][0]["live_edge_attributions"][0]["edge"] == 0.03
 
 
 def test_report_retries_transient_endpoint_failure_before_using_s3_artifacts() -> None:

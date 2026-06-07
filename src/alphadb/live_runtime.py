@@ -572,8 +572,10 @@ def build_fair_value_live_status(
     ]
     latest_attempt = attempts[-1] if attempts else {}
     latest_market = _text(latest_attempt.get("market_ticker"))
-    latest_side = _text(latest_attempt.get("side")) or _text(
-        _mapping(latest_attempt.get("decision")).get("side")
+    latest_side = (
+        _text(latest_attempt.get("side"))
+        or _text(_mapping(latest_attempt.get("decision")).get("side"))
+        or _text(_mapping(manifest.get("selected_decision")).get("side"))
     )
     latest_status = _text(latest_attempt.get("status"))
     latest_reason = _text(latest_attempt.get("reason"))
@@ -620,9 +622,7 @@ def build_fair_value_live_status(
         live_orders_enabled=bool(runtime_controls.get("live_orders_enabled")),
         current_market_ticker=latest_market,
         decision_outcome=decision_outcome,
-        selected_side=latest_side
-        if decision_outcome in {"submitted", "rejected", "error"}
-        else None,
+        selected_side=latest_side,
         skip_reason=latest_reason if decision_outcome == "skipped" else None,
         latest_attempt_status=latest_status,
         latest_attempt_reason=latest_reason,
@@ -649,6 +649,7 @@ def build_fair_value_live_status(
             "full_history_daily_loss_used_dollars": full_history_daily_used,
             "timing": dict(_mapping(manifest.get("timing"))),
             "selected_decision": dict(_mapping(manifest.get("selected_decision"))),
+            "live_edge_attribution": dict(_mapping(manifest.get("live_edge_attribution"))),
             "runtime_controls": {
                 key: runtime_controls.get(key)
                 for key in (
@@ -793,6 +794,9 @@ def _recent_attempt_rows(
                 or original_decision.get("contracts"),
                 "max_loss_dollars": attempt.get("max_loss_dollars"),
                 "risk_admission": dict(_mapping(attempt.get("risk_admission"))),
+                "live_edge_attribution": dict(
+                    _mapping(attempt.get("live_edge_attribution"))
+                ),
                 "config_id": (config or {}).get("config_id"),
                 "config_version": (config or {}).get("version"),
                 "fill_status": _fill_status(attempt, reconciliation),

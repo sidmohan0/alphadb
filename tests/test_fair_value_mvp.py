@@ -645,6 +645,11 @@ def test_live_trading_job_records_replay_skip_as_live_attempt(
     assert attempts["attempts"][0]["market_ticker"] == ticker
     assert attempts["attempts"][0]["status"] == "skipped"
     assert attempts["attempts"][0]["reason"] == "edge_below_min"
+    attribution = attempts["attempts"][0]["live_edge_attribution"]
+    assert attribution["reason"] == "edge_below_min"
+    assert attribution["attribution_class"] in {"threshold_drag", "fee_drag"}
+    assert attribution["edge_shortfall"] is not None
+    assert attribution["freshness"]["quote_age_seconds"] == 0.0
     assert attempts["skip_reasons"] == [{"reason": "edge_below_min", "count": 1}]
 
 

@@ -97,6 +97,63 @@ def test_performance_summary_counts_execution_outcomes_and_skip_reasons() -> Non
     assert summary["recent_runs"][0]["run_id"] == "run_unknown"
 
 
+def test_performance_summary_exposes_live_edge_attribution_and_buckets() -> None:
+    summary = build_performance_summary(
+        strategy="fair_value_live",
+        market_series="KXBTC15M",
+        generated_at=NOW,
+        status_rows=[
+            status_row(
+                "run_latest",
+                NOW,
+                decision_outcome="skipped",
+                latest_attempt_status="skipped",
+                skip_reason="edge_below_min",
+                latest_attempt_reason="edge_below_min",
+                live_edge_attribution={
+                    "attribution_class": "threshold_drag",
+                    "edge": 0.03,
+                    "edge_shortfall": 0.02,
+                },
+            ),
+            status_row(
+                "run_fee",
+                NOW - timedelta(minutes=1),
+                decision_outcome="skipped",
+                latest_attempt_status="skipped",
+                skip_reason="edge_below_min",
+                latest_attempt_reason="edge_below_min",
+                live_edge_attribution={
+                    "attribution_class": "fee_drag",
+                    "edge": -0.01,
+                },
+            ),
+            status_row(
+                "run_trade",
+                NOW - timedelta(minutes=2),
+                decision_outcome="submitted",
+                latest_attempt_status="submitted",
+                fill_status="no_fill",
+                live_edge_attribution={
+                    "attribution_class": "edge_cleared",
+                    "edge": 0.08,
+                },
+            ),
+        ],
+    )
+
+    assert summary["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert summary["live_edge_attribution"]["edge_shortfall"] == 0.02
+    assert summary["live_edge_attribution_buckets"] == [
+        {"attribution_class": "fee_drag", "count": 1},
+        {"attribution_class": "threshold_drag", "count": 1},
+    ]
+    assert (
+        summary["recent_runs"][0]["live_edge_attribution"]["attribution_class"]
+        == "threshold_drag"
+    )
+
+
 def test_performance_summary_reports_pnl_fees_exposure_and_risk_budget() -> None:
     summary = build_performance_summary(
         strategy="fair_value_live",
@@ -299,6 +356,7 @@ def status_row(
     daily_loss_limit_dollars: float = 50.0,
     market_exposure_used_dollars: float = 0.0,
     market_exposure_limit_dollars: float = 5.0,
+    live_edge_attribution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "run_id": run_id,
@@ -320,6 +378,10 @@ def status_row(
         "recent_skipped_count": 0,
         "recent_no_fill_count": 0,
         "recent_filled_count": 0,
+        "summary": {"live_edge_attribution": live_edge_attribution or {}},
+        "recent_attempts": [
+            {"live_edge_attribution": live_edge_attribution}
+        ] if live_edge_attribution else [],
     }
 
 

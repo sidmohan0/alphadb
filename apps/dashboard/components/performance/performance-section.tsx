@@ -38,6 +38,8 @@ interface PerformancePayload {
     market_exposure_limit_dollars: number | null
     market_exposure_usage_fraction: number | null
   }
+  live_edge_attribution: LiveEdgeAttribution | Record<string, never>
+  live_edge_attribution_buckets: Array<{ attribution_class: string; count: number }>
   execution: {
     data_status: string
     data_status_detail: string
@@ -78,6 +80,33 @@ interface RecentRun {
   config_version: number | null
   daily_loss_used_dollars: number | null
   market_exposure_used_dollars: number | null
+  live_edge_attribution?: LiveEdgeAttribution | Record<string, never>
+}
+
+interface LiveEdgeAttribution {
+  status?: string
+  decision?: string | null
+  reason?: string | null
+  market_ticker?: string | null
+  side?: string | null
+  fair_value?: number | null
+  price?: number | null
+  fee_per_contract?: number | null
+  raw_gap?: number | null
+  edge?: number | null
+  min_edge?: number | null
+  edge_shortfall?: number | null
+  attribution_class?: string | null
+  freshness?: {
+    quote_age_seconds?: number | null
+    coinbase_feature_age_seconds?: number | null
+  }
+  timing?: {
+    total_elapsed_seconds?: number | null
+    quote_to_submit_seconds?: number | null
+    phase_seconds?: Record<string, number>
+  }
+  missing_fields?: string[]
 }
 
 function text(value: unknown, fallback = "--") {
@@ -97,6 +126,13 @@ function optionalPercent(value: unknown) {
   const number = Number(value)
   if (!Number.isFinite(number)) return "--"
   return `${(number * 100).toFixed(0)}%`
+}
+
+function optionalEdge(value: unknown) {
+  if (value === null || value === undefined || value === "") return "--"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "--"
+  return number.toFixed(4)
 }
 
 function shortTime(value: unknown) {
@@ -140,6 +176,8 @@ export function PerformanceSection() {
   const pnl = payload?.pnl
   const execution = payload?.execution
   const risk = payload?.risk_budget
+  const attribution = payload?.live_edge_attribution as LiveEdgeAttribution | undefined
+  const attributionBuckets = payload?.live_edge_attribution_buckets || []
   const recentRuns = payload?.recent_runs || []
   const statusTone = toneForStatus(payload?.data_status, loading, error)
 
@@ -198,6 +236,36 @@ export function PerformanceSection() {
             icon={<TrendingUp className="h-4 w-4 text-muted-foreground" />}
           >
             <TrendStrip runs={recentRuns} />
+          </Panel>
+
+          <Panel title="Live Edge Attribution">
+            {attribution && Object.keys(attribution).length ? (
+              <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+                <Value label="Class" value={text(attribution.attribution_class)} />
+                <Value label="Side" value={text(attribution.side)} />
+                <Value label="Fair value" value={optionalEdge(attribution.fair_value)} />
+                <Value label="Ask" value={optionalEdge(attribution.price)} />
+                <Value label="Fee" value={optionalEdge(attribution.fee_per_contract)} />
+                <Value label="Raw gap" value={optionalEdge(attribution.raw_gap)} />
+                <Value label="Edge" value={optionalEdge(attribution.edge)} />
+                <Value label="Shortfall" value={optionalEdge(attribution.edge_shortfall)} />
+                <Value
+                  label="Quote age"
+                  value={secondsText(attribution.freshness?.quote_age_seconds)}
+                />
+                <Value
+                  label="Coinbase age"
+                  value={secondsText(attribution.freshness?.coinbase_feature_age_seconds)}
+                />
+                <Value
+                  label="Run time"
+                  value={secondsText(attribution.timing?.total_elapsed_seconds)}
+                />
+                <Value label="Reason" value={text(attribution.reason)} />
+              </div>
+            ) : (
+              <EmptyLine>No live edge attribution recorded.</EmptyLine>
+            )}
           </Panel>
 
           <Panel
@@ -265,6 +333,16 @@ export function PerformanceSection() {
                 <Value key={row.reason} label={row.reason} value={String(row.count)} />
               )) : (
                 <EmptyLine>No skip reasons recorded.</EmptyLine>
+              )}
+            </div>
+          </Panel>
+
+          <Panel title="Edge Attribution Buckets">
+            <div className="space-y-2 text-sm">
+              {attributionBuckets.length ? attributionBuckets.map((row) => (
+                <Value key={row.attribution_class} label={row.attribution_class} value={String(row.count)} />
+              )) : (
+                <EmptyLine>No attribution buckets recorded.</EmptyLine>
               )}
             </div>
           </Panel>
@@ -341,6 +419,13 @@ function Value({ label, value }: { label: string; value: string }) {
 
 function EmptyLine({ children }: { children: ReactNode }) {
   return <div className="text-sm text-muted-foreground">{children}</div>
+}
+
+function secondsText(value: unknown) {
+  if (value === null || value === undefined || value === "") return "--"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "--"
+  return `${number.toFixed(number < 10 ? 2 : 0)}s`
 }
 
 function StatusDot({ tone, label }: { tone: Tone; label: string }) {

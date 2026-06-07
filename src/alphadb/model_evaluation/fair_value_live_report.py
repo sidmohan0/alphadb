@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from alphadb.live_edge_attribution import summarize_live_edge_attribution_buckets
+
 FAIR_VALUE_LIVE_REPORT_SCHEMA = "alphadb_fair_value_live_15m_report.v1"
 DEFAULT_AWS_PROFILE = "alphadb"
 DEFAULT_AWS_REGION = "us-east-2"
@@ -362,6 +364,11 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
         filled_contracts += int(orders.get("filled_contracts") or 0)
         order_ids.extend(str(order_id) for order_id in orders.get("order_ids", []) if order_id)
         skip_reasons.update(as_mapping(orders.get("skip_reasons")))
+    run_attributions = [
+        as_mapping(run.get("live_edge_attribution"))
+        for run in runs
+        if as_mapping(run.get("live_edge_attribution"))
+    ]
     return {
         "schedule_state": fair_rule.get("State"),
         "legacy_structural_schedule_state": structural_rule.get("State"),
@@ -374,6 +381,10 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
         "config": latest_value(runs, "runtime_config"),
         "runtime_guard": latest_value(runs, "runtime_guard"),
         "executable_quote": latest_value(runs, "executable_quote"),
+        "live_edge_attribution": latest_value(runs, "live_edge_attribution"),
+        "live_edge_attribution_buckets": summarize_live_edge_attribution_buckets(
+            run_attributions
+        ),
         "one_cycle": latest_value(runs, "one_cycle"),
         "hot_path_scope": latest_value(runs, "hot_path_scope"),
         "live_risk_admission_state": latest_value(runs, "live_risk_admission_state"),
@@ -396,6 +407,15 @@ def summarize_run(*, run_id: str, artifacts: Mapping[str, Any]) -> dict[str, Any
     reconciliation = as_mapping(artifacts.get("live_reconciliation_report"))
     attempts = as_sequence(attempts_payload.get("attempts"))
     orders = summarize_attempts(attempts=attempts, reconciliation=reconciliation)
+    attempt_attributions = [
+        as_mapping(as_mapping(attempt).get("live_edge_attribution"))
+        for attempt in attempts
+        if as_mapping(as_mapping(attempt).get("live_edge_attribution"))
+    ]
+    manifest_attribution = as_mapping(manifest.get("live_edge_attribution"))
+    latest_attribution = manifest_attribution or (
+        attempt_attributions[-1] if attempt_attributions else {}
+    )
     return {
         "run_id": run_id,
         "generated_at": manifest.get("generated_at"),
@@ -406,6 +426,8 @@ def summarize_run(*, run_id: str, artifacts: Mapping[str, Any]) -> dict[str, Any
         "hot_path_scope": manifest.get("hot_path_scope"),
         "live_risk_admission_state": manifest.get("live_risk_admission_state"),
         "selected_decision": manifest.get("selected_decision"),
+        "live_edge_attribution": dict(latest_attribution),
+        "live_edge_attributions": [dict(attribution) for attribution in attempt_attributions],
         "orders": orders,
         "reconciliation": summarize_reconciliation(reconciliation),
     }
