@@ -1,0 +1,268 @@
+{
+  "schema_version": "kxbtc_fair_value_live_order_attempts.v1",
+  "run_id": "fv_live_20260604T150000Z",
+  "strategy": "fair_value_live",
+  "generated_at": "2026-06-04T15:00:00+00:00",
+  "one_cycle": true,
+  "attempts": [
+    {
+      "attempt_id": "synthetic_attempt_filled",
+      "run_id": "fv_live_20260604T150000Z",
+      "strategy": "fair_value_live",
+      "submitted_at": "2026-06-04T15:00:00+00:00",
+      "order_submit_at": "2026-06-04T15:00:00.500000+00:00",
+      "submit_response_at": "2026-06-04T15:00:00.720000+00:00",
+      "market_ticker": "KXBTC15M-SYN-FILLED",
+      "side": "yes",
+      "decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-FILLED",
+        "market_ticker": "KXBTC15M-SYN-FILLED",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "yes",
+        "price": 0.4,
+        "fee_per_contract": 0.01,
+        "edge": 0.08,
+        "intended_contracts": 2,
+        "contracts": 2,
+        "max_loss_dollars": 0.82
+      },
+      "original_decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-FILLED",
+        "market_ticker": "KXBTC15M-SYN-FILLED",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "yes",
+        "price": 0.4,
+        "fee_per_contract": 0.01,
+        "edge": 0.08,
+        "intended_contracts": 2,
+        "contracts": 2,
+        "max_loss_dollars": 0.82
+      },
+      "source_row": {
+        "row_type": "decision",
+        "ticker": "KXBTC15M-SYN-FILLED",
+        "market_ticker": "KXBTC15M-SYN-FILLED",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "quote_observed_at": "2026-06-04T14:59:58+00:00",
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:57+00:00",
+        "close_time": "2026-06-04T15:05:00+00:00"
+      },
+      "quote_seen_at": "2026-06-04T14:59:58+00:00",
+      "quote_age_seconds": 2.0,
+      "freshness": {
+        "quote_seen_at": "2026-06-04T14:59:58+00:00",
+        "quote_age_seconds": 2.0,
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:57+00:00",
+        "coinbase_feature_age_seconds": 3.0
+      },
+      "risk_admission": {
+        "status": "approved",
+        "reason": "approved"
+      },
+      "request_payload": {
+        "ticker": "KXBTC15M-SYN-FILLED",
+        "side": "bid",
+        "price": "0.4000",
+        "count": 2
+      },
+      "status": "submitted",
+      "reason": "submitted",
+      "order_id": "synthetic_order_filled",
+      "client_order_id": "synthetic_client_filled",
+      "fill_count": 2,
+      "remaining_count": 0,
+      "response_payload": {
+        "order_id": "synthetic_order_filled",
+        "client_order_id": "synthetic_client_filled",
+        "fill_count": "2.00",
+        "remaining_count": "0.00"
+      }
+    },
+    {
+      "attempt_id": "synthetic_attempt_no_fill",
+      "run_id": "fv_live_20260604T150000Z",
+      "strategy": "fair_value_live",
+      "submitted_at": "2026-06-04T15:00:00+00:00",
+      "order_submit_at": "2026-06-04T15:00:00.800000+00:00",
+      "submit_response_at": "2026-06-04T15:00:01.050000+00:00",
+      "market_ticker": "KXBTC15M-SYN-NOFILL",
+      "side": "no",
+      "decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-NOFILL",
+        "market_ticker": "KXBTC15M-SYN-NOFILL",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "no",
+        "price": 0.42,
+        "fee_per_contract": 0.01,
+        "edge": 0.06,
+        "intended_contracts": 2,
+        "contracts": 2,
+        "max_loss_dollars": 0.86
+      },
+      "original_decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-NOFILL",
+        "market_ticker": "KXBTC15M-SYN-NOFILL",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "no",
+        "price": 0.42,
+        "fee_per_contract": 0.01,
+        "edge": 0.06,
+        "intended_contracts": 2,
+        "contracts": 2,
+        "max_loss_dollars": 0.86
+      },
+      "source_row": {
+        "row_type": "decision",
+        "ticker": "KXBTC15M-SYN-NOFILL",
+        "market_ticker": "KXBTC15M-SYN-NOFILL",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "quote_observed_at": "2026-06-04T14:59:57+00:00",
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:56+00:00",
+        "close_time": "2026-06-04T15:05:00+00:00"
+      },
+      "quote_seen_at": "2026-06-04T14:59:57+00:00",
+      "quote_age_seconds": 3.0,
+      "freshness": {
+        "quote_seen_at": "2026-06-04T14:59:57+00:00",
+        "quote_age_seconds": 3.0,
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:56+00:00",
+        "coinbase_feature_age_seconds": 4.0
+      },
+      "risk_admission": {
+        "status": "approved",
+        "reason": "approved"
+      },
+      "request_payload": {
+        "ticker": "KXBTC15M-SYN-NOFILL",
+        "side": "bid",
+        "price": "0.4200",
+        "count": 2
+      },
+      "status": "submitted",
+      "reason": "submitted",
+      "order_id": "synthetic_order_no_fill",
+      "client_order_id": "synthetic_client_no_fill",
+      "fill_count": 0,
+      "remaining_count": 2,
+      "response_payload": {
+        "order_id": "synthetic_order_no_fill",
+        "client_order_id": "synthetic_client_no_fill",
+        "fill_count": "0.00",
+        "remaining_count": "2.00"
+      }
+    },
+    {
+      "attempt_id": "synthetic_attempt_stale_quote",
+      "run_id": "fv_live_20260604T150000Z",
+      "strategy": "fair_value_live",
+      "submitted_at": "2026-06-04T15:00:00+00:00",
+      "market_ticker": "KXBTC15M-SYN-STALE",
+      "side": "yes",
+      "decision": {
+        "decision": "skip",
+        "reason": "quote_stale",
+        "ticker": "KXBTC15M-SYN-STALE",
+        "market_ticker": "KXBTC15M-SYN-STALE",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "yes",
+        "price": 0.39,
+        "edge": 0.07,
+        "intended_contracts": 2
+      },
+      "original_decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-STALE",
+        "market_ticker": "KXBTC15M-SYN-STALE",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "yes",
+        "price": 0.39,
+        "edge": 0.07,
+        "intended_contracts": 2
+      },
+      "source_row": {
+        "row_type": "decision",
+        "ticker": "KXBTC15M-SYN-STALE",
+        "market_ticker": "KXBTC15M-SYN-STALE",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "quote_observed_at": "2026-06-04T14:59:20+00:00",
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:56+00:00",
+        "close_time": "2026-06-04T15:05:00+00:00"
+      },
+      "quote_seen_at": "2026-06-04T14:59:20+00:00",
+      "quote_age_seconds": 40.0,
+      "freshness": {
+        "quote_seen_at": "2026-06-04T14:59:20+00:00",
+        "quote_age_seconds": 40.0,
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:56+00:00",
+        "coinbase_feature_age_seconds": 4.0
+      },
+      "request_payload": {},
+      "status": "skipped",
+      "reason": "quote_stale",
+      "fill_count": 0
+    },
+    {
+      "attempt_id": "synthetic_attempt_risk_denied",
+      "run_id": "fv_live_20260604T150000Z",
+      "strategy": "fair_value_live",
+      "submitted_at": "2026-06-04T15:00:00+00:00",
+      "market_ticker": "KXBTC15M-SYN-RISK",
+      "side": "yes",
+      "decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-RISK",
+        "market_ticker": "KXBTC15M-SYN-RISK",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "yes",
+        "price": 0.41,
+        "fee_per_contract": 0.01,
+        "edge": 0.05,
+        "intended_contracts": 3,
+        "contracts": 3,
+        "max_loss_dollars": 1.26
+      },
+      "original_decision": {
+        "decision": "trade",
+        "ticker": "KXBTC15M-SYN-RISK",
+        "market_ticker": "KXBTC15M-SYN-RISK",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "side": "yes",
+        "price": 0.41,
+        "fee_per_contract": 0.01,
+        "edge": 0.05,
+        "intended_contracts": 3,
+        "contracts": 3,
+        "max_loss_dollars": 1.26
+      },
+      "source_row": {
+        "row_type": "decision",
+        "ticker": "KXBTC15M-SYN-RISK",
+        "market_ticker": "KXBTC15M-SYN-RISK",
+        "decision_timestamp": "2026-06-04T14:59:59+00:00",
+        "quote_observed_at": "2026-06-04T14:59:58+00:00",
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:56+00:00",
+        "close_time": "2026-06-04T15:05:00+00:00"
+      },
+      "quote_seen_at": "2026-06-04T14:59:58+00:00",
+      "quote_age_seconds": 2.0,
+      "freshness": {
+        "quote_seen_at": "2026-06-04T14:59:58+00:00",
+        "quote_age_seconds": 2.0,
+        "coinbase_max_source_event_timestamp": "2026-06-04T14:59:56+00:00",
+        "coinbase_feature_age_seconds": 4.0
+      },
+      "risk_admission": {
+        "status": "denied",
+        "reason": "daily_loss_cap_reached"
+      },
+      "request_payload": {},
+      "status": "skipped",
+      "reason": "daily_loss_cap_reached",
+      "fill_count": 0
+    }
+  ]
+}
