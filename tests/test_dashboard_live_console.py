@@ -107,11 +107,18 @@ def revision(
     )
 
 
-def service(repository: FakeConfigRepository) -> DashboardService:
+def service(
+    repository: FakeConfigRepository,
+    *,
+    status: LiveRunStatus | None = None,
+) -> DashboardService:
     return DashboardService(
         settings=settings_from_env({"DATABASE_URL": "postgresql://example.test/alphadb"}),
         config_repository_factory=lambda database_url: repository,
-        status_repository_factory=FakeStatusRepository,
+        status_repository_factory=lambda database_url: FakeStatusRepository(
+            database_url,
+            status=status or no_recent_live_run_status(),
+        ),
         health_collector=ok_health,
         portfolio_balance_provider=lambda settings: {
             "status": "ok",
@@ -203,6 +210,7 @@ def test_dashboard_service_saves_config_and_reloads_active_values() -> None:
             "min_edge": 0.05,
             "min_contract_price": 0.25,
             "max_markets": 7,
+            "market_context_source": "brti_primary",
         }
     )
     payload = dashboard.live_payload()
@@ -211,7 +219,71 @@ def test_dashboard_service_saves_config_and_reloads_active_values() -> None:
     assert payload["active_config"]["max_order_dollars"] == 2.25
     assert payload["active_config"]["max_market_exposure_dollars"] == 3.5
     assert payload["active_config"]["min_contract_price"] == 0.25
+    assert payload["active_config"]["market_context_source"] == "brti_primary"
+    assert payload["market_context"]["active_source"] == "brti_primary"
+    assert payload["market_context"]["brti_latest"]["status"] == "unavailable"
     assert [row["version"] for row in payload["config_history"]] == [2, 1]
+
+
+def test_dashboard_service_exposes_compact_market_context_from_latest_run() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    repository.save_config(
+        LiveRuntimeConfig(
+            max_order_dollars=5.0,
+            max_market_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            min_edge=0.0,
+            max_markets=1,
+            min_contract_price=0.25,
+            market_context_source="brti_primary",
+        ),
+        strategy=FAIR_VALUE_LIVE_STRATEGY,
+        created_by="test",
+    )
+    status = replace(
+        no_recent_live_run_status(),
+        run_id="fv_live_brti_context",
+        generated_at=datetime(2026, 6, 4, 15, tzinfo=UTC),
+        current_market_ticker="KXBTC15M-BRTI",
+        decision_outcome="skipped",
+        latest_attempt_status="skipped",
+        latest_attempt_reason="brti_context_missing",
+        skip_reason="brti_context_missing",
+        summary={
+            "market_context": {
+                "market_context_source": "brti_primary",
+                "market_context_status": "missing",
+                "external_close_source": None,
+                "brti": {
+                    "index_id": "BRTI",
+                    "context_status": "missing",
+                    "context_reason": "missing_brti_latest_context",
+                },
+                "coinbase_diagnostics": {
+                    "status": "available",
+                    "basis_dollars": 0.25,
+                    "basis_pct": 0.0000025,
+                },
+            }
+        },
+        recent_attempts=[
+            {
+                "submitted_at": "2026-06-04T15:00:00+00:00",
+                "market_ticker": "KXBTC15M-BRTI",
+                "status": "skipped",
+                "reason": "brti_context_missing",
+            }
+        ],
+    )
+    dashboard = service(repository, status=status)
+
+    payload = dashboard.live_payload()
+
+    assert "summary" not in payload["live_status"]
+    assert payload["live_status"]["latest_attempt_reason"] == "brti_context_missing"
+    assert payload["market_context"]["active_source"] == "brti_primary"
+    assert payload["market_context"]["latest_run"]["market_context_status"] == "missing"
+    assert payload["market_context"]["coinbase_diagnostics"]["basis_dollars"] == 0.25
 
 
 def test_dashboard_service_keeps_expensive_yes_config_isolated() -> None:
@@ -255,6 +327,18 @@ def test_dashboard_service_rejects_invalid_config_without_saving() -> None:
                 "min_edge": 0.05,
                 "min_contract_price": 0.25,
                 "max_markets": 7,
+            }
+        )
+    with pytest.raises(ValueError, match="market_context_source"):
+        dashboard.save_config(
+            {
+                "max_order_dollars": 1,
+                "max_market_exposure_dollars": 3.5,
+                "max_daily_loss_dollars": 12.0,
+                "min_edge": 0.05,
+                "min_contract_price": 0.25,
+                "max_markets": 7,
+                "market_context_source": "brti",
             }
         )
 
