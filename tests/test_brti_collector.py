@@ -9,6 +9,7 @@ import psycopg
 import pytest
 
 from alphadb.collectors.brti import (
+    BRTI_FORWARD_CAPTURE_MANIFEST_SCHEMA,
     BRTI_INDEX_ID,
     BRTI_RAW_EVENT_SOURCE,
     BRTI_VALUE_SCHEMA_VERSION,
@@ -16,6 +17,7 @@ from alphadb.collectors.brti import (
     BRTILiveCollector,
     BRTIValidationError,
     BRTIWebSocketFrame,
+    build_brti_forward_capture_manifest,
     build_cfbenchmarks_subscribe_message,
     fixture_brti_frame,
     parse_cfbenchmarks_value_message,
@@ -250,3 +252,57 @@ def test_older_observation_does_not_replace_newer_latest_context() -> None:
     assert second.stale_latest_drops == 1
     assert latest.context is not None
     assert latest.context.value == Decimal("68001.00")
+
+
+def test_forward_capture_manifest_summarizes_metadata_without_raw_ticks() -> None:
+    repository, _collector = brti_repository_or_skip()
+    index_id = f"BRTI_MANIFEST_{uuid4().hex[:8]}"
+    collector = BRTILiveCollector(database_url=repository.database_url, index_id=index_id)
+    start = datetime(2035, 1, 1, 0, 0, tzinfo=UTC)
+    frames = [
+        fixture_brti_frame(
+            index_id=index_id,
+            source_timestamp=start + timedelta(seconds=1),
+            received_at=start + timedelta(seconds=1, milliseconds=200),
+            value="68000.12",
+        ),
+        fixture_brti_frame(
+            index_id=index_id,
+            source_timestamp=start + timedelta(seconds=2),
+            received_at=start + timedelta(seconds=2, milliseconds=200),
+            value="68001.12",
+        ),
+        fixture_brti_frame(
+            index_id=index_id,
+            source_timestamp=start + timedelta(seconds=6),
+            received_at=start + timedelta(seconds=6, milliseconds=200),
+            value="68002.12",
+        ),
+    ]
+
+    collector.ingest_frames(frames)
+    manifest = build_brti_forward_capture_manifest(
+        database_url=repository.database_url,
+        index_id=index_id,
+        window_start=start,
+        window_end=start + timedelta(seconds=10),
+        generated_at=start + timedelta(seconds=7),
+        gap_threshold_seconds=2.0,
+        private_artifact_refs={"raw_capture": "s3://private/brti/capture.ndjson"},
+    )
+    encoded = json.dumps(manifest, sort_keys=True)
+
+    assert manifest["schema_version"] == BRTI_FORWARD_CAPTURE_MANIFEST_SCHEMA
+    assert manifest["source_identity"]["index_id"] == index_id
+    assert manifest["coverage"]["observation_count"] == 3
+    assert manifest["coverage"]["gap_count"] == 1
+    assert manifest["coverage"]["max_gap_seconds"] == 4.0
+    assert manifest["provenance"]["payload_hash_rollup_sha256"] is not None
+    assert manifest["public_safety"]["raw_brti_ticks_included"] is False
+    assert manifest["evaluation_boundary"]["historical_brti_backfill_assumed"] is False
+    assert "forward-captured BRTI data after collector launch" in (
+        manifest["evaluation_boundary"]["first_serious_evaluation_target"]
+    )
+    assert "68000.12" not in encoded
+    assert "68001.12" not in encoded
+    assert "68002.12" not in encoded

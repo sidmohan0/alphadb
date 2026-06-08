@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -35,7 +37,9 @@ BRTI_RAW_EVENT_SOURCE = "kalshi_cfbenchmarks_value"
 BRTI_VALUE_SCHEMA_VERSION = "kalshi.ws.cfbenchmarks_value.v1"
 CFBENCHMARKS_VALUE_CHANNEL = "cfbenchmarks_value"
 DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS = 5
+DEFAULT_BRTI_GAP_THRESHOLD_SECONDS = 2.0
 DEFAULT_KALSHI_WS_URL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+BRTI_FORWARD_CAPTURE_MANIFEST_SCHEMA = "brti.forward_capture_manifest.v1"
 
 
 class BRTIValidationError(ValueError):
@@ -741,6 +745,146 @@ def fixture_brti_frame(
     return BRTIWebSocketFrame(message=message, received_at=receive_time)
 
 
+def build_brti_forward_capture_manifest(
+    *,
+    database_url: str,
+    window_start: datetime,
+    window_end: datetime,
+    index_id: str = BRTI_INDEX_ID,
+    generated_at: datetime | None = None,
+    freshness_limit_seconds: float = DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS,
+    gap_threshold_seconds: float = DEFAULT_BRTI_GAP_THRESHOLD_SECONDS,
+    code_version: str | None = None,
+    config_version: str | None = None,
+    private_artifact_refs: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    start = _ensure_utc(window_start)
+    end = _ensure_utc(window_end)
+    if end <= start:
+        raise ValueError("window_end must be after window_start")
+    generated = _ensure_utc(generated_at or datetime.now(UTC))
+    OperationalStateRepository(database_url).apply_migrations()
+    with psycopg.connect(database_url, row_factory=dict_row) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select
+                    raw_event_id,
+                    source_event_id,
+                    received_at,
+                    source_timestamp,
+                    schema_version,
+                    payload_hash
+                from raw_events
+                where source = %s
+                  and source_timestamp >= %s
+                  and source_timestamp < %s
+                  and payload->>'index_id' = %s
+                order by source_timestamp asc, received_at asc, raw_event_id asc
+                """,
+                (BRTI_RAW_EVENT_SOURCE, start, end, index_id),
+            )
+            rows = cursor.fetchall()
+
+    source_times = [_ensure_utc(row["source_timestamp"]) for row in rows]
+    received_times = [_ensure_utc(row["received_at"]) for row in rows]
+    gaps = [
+        {
+            "from_source_timestamp": before.isoformat(),
+            "to_source_timestamp": after.isoformat(),
+            "gap_seconds": round((after - before).total_seconds(), 6),
+        }
+        for before, after in zip(source_times, source_times[1:])
+        if (after - before).total_seconds() > gap_threshold_seconds
+    ]
+    all_gap_seconds = [
+        (after - before).total_seconds()
+        for before, after in zip(source_times, source_times[1:])
+    ]
+    payload_hash_rollup = _payload_hash_rollup(
+        [str(row["payload_hash"]) for row in rows]
+    )
+    latest_source_timestamp = source_times[-1] if source_times else None
+    latest_age_seconds = (
+        max(0.0, (generated - latest_source_timestamp).total_seconds())
+        if latest_source_timestamp is not None
+        else None
+    )
+    return {
+        "schema_version": BRTI_FORWARD_CAPTURE_MANIFEST_SCHEMA,
+        "generated_at": generated.isoformat(),
+        "source_identity": {
+            "source": BRTI_RAW_EVENT_SOURCE,
+            "channel": CFBENCHMARKS_VALUE_CHANNEL,
+            "index_id": index_id,
+            "schema_versions": sorted({str(row["schema_version"]) for row in rows}),
+        },
+        "window": {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "bounded": True,
+            "query_semantics": "source_timestamp >= start and source_timestamp < end",
+        },
+        "coverage": {
+            "observation_count": len(rows),
+            "raw_event_count": len(rows),
+            "unique_source_event_count": len(
+                {str(row["source_event_id"]) for row in rows if row["source_event_id"]}
+            ),
+            "first_source_timestamp": source_times[0].isoformat()
+            if source_times
+            else None,
+            "last_source_timestamp": latest_source_timestamp.isoformat()
+            if latest_source_timestamp
+            else None,
+            "first_received_at": received_times[0].isoformat()
+            if received_times
+            else None,
+            "last_received_at": received_times[-1].isoformat()
+            if received_times
+            else None,
+            "gap_threshold_seconds": gap_threshold_seconds,
+            "gap_count": len(gaps),
+            "max_gap_seconds": round(max(all_gap_seconds), 6)
+            if all_gap_seconds
+            else None,
+            "gaps_over_threshold": gaps,
+            "staleness": {
+                "freshness_limit_seconds": freshness_limit_seconds,
+                "latest_age_seconds_at_generation": round(latest_age_seconds, 6)
+                if latest_age_seconds is not None
+                else None,
+                "latest_context_would_be_stale": (
+                    latest_age_seconds > freshness_limit_seconds
+                    if latest_age_seconds is not None
+                    else None
+                ),
+            },
+        },
+        "provenance": {
+            "payload_hash_rollup_sha256": payload_hash_rollup,
+            "raw_event_id_first": str(rows[0]["raw_event_id"]) if rows else None,
+            "raw_event_id_last": str(rows[-1]["raw_event_id"]) if rows else None,
+            "code_version": code_version,
+            "config_version": config_version,
+            "private_artifact_refs": dict(private_artifact_refs or {}),
+        },
+        "public_safety": {
+            "raw_brti_ticks_included": False,
+            "production_logs_included": False,
+            "live_account_order_fill_artifacts_included": False,
+            "private_generated_datasets_included": False,
+            "proprietary_thresholds_included": False,
+        },
+        "evaluation_boundary": {
+            "historical_brti_backfill_assumed": False,
+            "first_serious_evaluation_target": (
+                "forward-captured BRTI data after collector launch"
+            ),
+        },
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphadb-brti")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -766,6 +910,33 @@ def build_parser() -> argparse.ArgumentParser:
     live_parser.add_argument("--index-id", default=BRTI_INDEX_ID)
     live_parser.add_argument("--max-messages", type=int, default=None)
     live_parser.add_argument("--max-reconnects", type=int, default=3)
+
+    manifest_parser = subparsers.add_parser(
+        "forward-capture-manifest",
+        help="Summarize BRTI raw-event forward-capture coverage for a bounded window",
+    )
+    manifest_parser.add_argument("--start", required=True)
+    manifest_parser.add_argument("--end", required=True)
+    manifest_parser.add_argument("--index-id", default=BRTI_INDEX_ID)
+    manifest_parser.add_argument(
+        "--freshness-seconds",
+        type=float,
+        default=DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS,
+    )
+    manifest_parser.add_argument(
+        "--gap-threshold-seconds",
+        type=float,
+        default=DEFAULT_BRTI_GAP_THRESHOLD_SECONDS,
+    )
+    manifest_parser.add_argument("--code-version", default=None)
+    manifest_parser.add_argument("--config-version", default=None)
+    manifest_parser.add_argument(
+        "--private-artifact-ref",
+        action="append",
+        default=[],
+        help="Private artifact reference as name=value; raw artifacts are not embedded",
+    )
+    manifest_parser.add_argument("--output", default=None)
 
     return parser
 
@@ -808,6 +979,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(json.dumps(summary.as_dict(), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "forward-capture-manifest":
+        manifest = build_brti_forward_capture_manifest(
+            database_url=settings.database_url,
+            window_start=_parse_cli_datetime(args.start),
+            window_end=_parse_cli_datetime(args.end),
+            index_id=args.index_id,
+            freshness_limit_seconds=args.freshness_seconds,
+            gap_threshold_seconds=args.gap_threshold_seconds,
+            code_version=args.code_version,
+            config_version=args.config_version,
+            private_artifact_refs=_parse_private_artifact_refs(args.private_artifact_ref),
+        )
+        encoded = json.dumps(manifest, indent=2, sort_keys=True)
+        if args.output:
+            Path(args.output).write_text(encoded + "\n", encoding="utf-8")
+        else:
+            print(encoded)
         return 0
 
     raise AssertionError(f"unhandled command: {args.command}")
@@ -987,6 +1177,32 @@ def _datetime_from_ms(value: int) -> datetime:
 
 def _datetime_to_ms(value: datetime) -> int:
     return int(_ensure_utc(value).timestamp() * 1000)
+
+
+def _parse_cli_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid ISO timestamp: {value}") from exc
+    return _ensure_utc(parsed)
+
+
+def _parse_private_artifact_refs(values: Sequence[str]) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    for index, value in enumerate(values, start=1):
+        if "=" in value:
+            key, ref = value.split("=", 1)
+            refs[key.strip() or f"ref_{index}"] = ref.strip()
+        else:
+            refs[f"ref_{index}"] = value
+    return refs
+
+
+def _payload_hash_rollup(payload_hashes: Sequence[str]) -> str | None:
+    if not payload_hashes:
+        return None
+    encoded = "\n".join(sorted(payload_hashes)).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _ensure_utc(value: datetime) -> datetime:
