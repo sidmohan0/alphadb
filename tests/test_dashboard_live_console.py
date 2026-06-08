@@ -4,10 +4,12 @@ import json
 from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
+from alphadb.dashboard import app as dashboard_app
 from alphadb.config import settings_from_env
 from alphadb.dashboard.app import DASHBOARD_HTML, DashboardService
 from alphadb.health import ComponentHealth, HealthReport, HealthStatus
@@ -284,6 +286,47 @@ def test_dashboard_service_exposes_compact_market_context_from_latest_run() -> N
     assert payload["market_context"]["active_source"] == "brti_primary"
     assert payload["market_context"]["latest_run"]["market_context_status"] == "missing"
     assert payload["market_context"]["coinbase_diagnostics"]["basis_dollars"] == 0.25
+
+
+def test_dashboard_brti_latest_payload_includes_current_value_when_available(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 6, 4, 15, tzinfo=UTC)
+
+    class FakeContext:
+        value = Decimal("101.25")
+        source_timestamp = now
+        received_at = now
+        source_lag_ms = 125
+        raw_event_id = "evt_brti_latest"
+        payload_hash = "abc123"
+
+    class FakeStatus:
+        index_id = "BRTI"
+        status = "usable"
+        reason = None
+        generated_at = now
+        age_ms = 1000
+        context = FakeContext()
+
+    class FakeBRTIRepository:
+        def __init__(self, database_url: str):
+            self.database_url = database_url
+
+        def get_latest(self, **kwargs):
+            return FakeStatus()
+
+    monkeypatch.setattr(dashboard_app, "BRTILatestContextRepository", FakeBRTIRepository)
+
+    payload = dashboard_app.brti_latest_context_payload(
+        settings_from_env({"DATABASE_URL": "postgresql://example.test/alphadb"})
+    )
+
+    assert payload["status"] == "usable"
+    assert payload["value"] == "101.25"
+    assert payload["age_seconds"] == 1.0
+    assert payload["source_lag_ms"] == 125
+    assert payload["raw_event_id"] == "evt_brti_latest"
 
 
 def test_dashboard_service_keeps_expensive_yes_config_isolated() -> None:
