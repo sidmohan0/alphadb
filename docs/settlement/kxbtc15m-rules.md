@@ -11,6 +11,9 @@
 
 - The source agency is CF Benchmarks.
 - The underlying uses the relevant CF crypto index averaged over the 60 seconds before the listed expiration time.
+- AlphaDB models that final minute using Kalshi's `cfbenchmarks_value`
+  quarter-close average convention: exclude the start-boundary tick and include
+  the close tick, `(expiration - 60s, expiration]`.
 - Revisions to the underlying after expiration are not used to determine the expiration value.
 - If expiration-time data is unavailable or incomplete, affected strikes resolve to No.
 - `above X` is a strict greater-than comparison.

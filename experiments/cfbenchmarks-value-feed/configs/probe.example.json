@@ -1,0 +1,25 @@
+{
+  "schema_version": "cfbenchmarks_value_probe_config.v0",
+  "experiment_id": "cfbenchmarks-value-feed",
+  "environment": "demo-or-production",
+  "channel": "cfbenchmarks_value",
+  "index_ids": ["BRTI"],
+  "capture_windows": [
+    {
+      "label": "example_quarter_close",
+      "start_utc": "2026-06-08T20:14:00Z",
+      "end_utc": "2026-06-08T20:15:10Z",
+      "expected_quarter_close_utc": "2026-06-08T20:15:00Z"
+    }
+  ],
+  "storage": {
+    "raw_root": "research/cfbenchmarks-value-feed/<dataset_id>/raw",
+    "normalized_root": "research/cfbenchmarks-value-feed/<dataset_id>/normalized",
+    "artifact_root": "artifacts/cfbenchmarks-value-feed/<dataset_id>"
+  },
+  "safety": {
+    "commit_raw_data": false,
+    "commit_credentials": false,
+    "live_trading_enabled": false
+  }
+}

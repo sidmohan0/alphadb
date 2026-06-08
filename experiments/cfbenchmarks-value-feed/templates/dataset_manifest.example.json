@@ -1,0 +1,40 @@
+{
+  "schema_version": "cfbenchmarks_value_dataset_manifest.v0",
+  "dataset_id": "cfbval_YYYYMMDD_probe",
+  "source_identity": "kalshi_ws.cfbenchmarks_value",
+  "source_status": "official_unlicensed",
+  "license_status": "unlicensed",
+  "market_series": "KXBTC15M",
+  "index_ids": ["BRTI"],
+  "tested_time_range": {
+    "start_utc": "2026-06-08T20:14:00Z",
+    "end_utc": "2026-06-08T20:15:10Z"
+  },
+  "coverage": {
+    "raw_message_count": 0,
+    "normalized_tick_count": 0,
+    "quarter_close_count": 0,
+    "complete_final_window_count": 0,
+    "incomplete_final_window_count": 0,
+    "gap_count": 0,
+    "reconnect_count": 0
+  },
+  "artifact_hashes": {
+    "raw_frames_jsonl_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "normalized_ticks_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "final_windows_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "artifact_locations": {
+    "raw_frames_jsonl": "research/cfbenchmarks-value-feed/<dataset_id>/raw/ws_frames.jsonl",
+    "normalized_ticks": "research/cfbenchmarks-value-feed/<dataset_id>/normalized/index_ticks.parquet",
+    "final_windows": "research/cfbenchmarks-value-feed/<dataset_id>/derived/final_windows.parquet",
+    "coverage_report": "artifacts/cfbenchmarks-value-feed/<dataset_id>/coverage_report.md"
+  },
+  "readiness_verdict": "INCONCLUSIVE",
+  "readiness_reasons": [
+    "source_status_requires_license_confirmation",
+    "example_manifest_contains_no_real_capture"
+  ],
+  "no_lookahead_basis": "Feature rows may use only ticks whose source timestamp and local receive timestamp are at or before the decision timestamp.",
+  "non_promotion_notice": "This manifest is research evidence only and does not authorize model promotion, live trading, Current MVP changes, or target-platform cutover."
+}
