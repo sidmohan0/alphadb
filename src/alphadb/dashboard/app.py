@@ -991,6 +991,12 @@ table {
   table-layout: fixed;
   font-size: 12px;
 }
+.table-scroll {
+  overflow-x: auto;
+}
+.attempts-table {
+  min-width: 880px;
+}
 th, td {
   border-bottom: 1px solid var(--line);
   text-align: left;
@@ -1066,7 +1072,7 @@ DASHBOARD_HTML = f"""<!doctype html>
         <div class="lower">
           <section class="panel">
             <h2>Recent Attempts</h2>
-            <table><thead><tr><th>Time</th><th>Market</th><th>Status</th><th>Reason</th><th>Ask</th><th>Fill</th></tr></thead><tbody id="attempts-body"></tbody></table>
+            <div class="table-scroll"><table class="attempts-table"><thead><tr><th>Time</th><th>Market</th><th>Status</th><th>Reason</th><th>Ask</th><th>Edge</th><th>Min</th><th>Gap</th><th>Fill</th></tr></thead><tbody id="attempts-body"></tbody></table></div>
           </section>
           <section class="panel">
             <h2>Config History</h2>
@@ -1082,6 +1088,30 @@ function selectedStrategy() {{ return document.getElementById("live-strategy").v
 function text(id, value) {{ document.getElementById(id).textContent = value ?? "--"; }}
 function cls(id, name) {{ document.getElementById(id).className = name; }}
 function money(value) {{ const n = Number(value || 0); return "$" + n.toFixed(2); }}
+function pctValue(number) {{ return (number * 100).toFixed(2) + "%"; }}
+function pct(value) {{
+  if (value === null || value === undefined || value === "") return "--";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return pctValue(number);
+}}
+function edgeAttribution(row) {{
+  return row.live_edge_attribution && typeof row.live_edge_attribution === "object" ? row.live_edge_attribution : {{}};
+}}
+function edgeGap(attr) {{
+  const shortfall = Number(attr.edge_shortfall);
+  if (Number.isFinite(shortfall) && shortfall > 0) return "short " + pctValue(shortfall);
+  const margin = Number(attr.edge_margin);
+  if (Number.isFinite(margin)) return (margin >= 0 ? "+" : "") + pctValue(margin);
+  const edge = Number(attr.edge);
+  const minEdge = Number(attr.min_edge);
+  if (Number.isFinite(edge) && Number.isFinite(minEdge)) {{
+    const derivedMargin = edge - minEdge;
+    if (derivedMargin < 0) return "short " + pctValue(-derivedMargin);
+    return "+" + pctValue(derivedMargin);
+  }}
+  return "--";
+}}
 function shortTime(value) {{
   if (!value) return "";
   const date = new Date(value);
@@ -1133,7 +1163,10 @@ function render(data) {{
   text("execution-detail", status.latest_attempt_reason || status.fill_status || "--");
   fields.forEach(key => {{ if (key in config) document.getElementById(key).value = config[key]; }});
   const attempts = status.recent_attempts || [];
-  document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => `<tr><td>${{shortTime(row.submitted_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || ""}}</td><td>${{row.observed_yes_ask ?? ""}}</td><td>${{row.fill_status || ""}}</td></tr>`).join("") : "<tr><td colspan='6'>No recent attempts</td></tr>";
+  document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => {{
+    const edge = edgeAttribution(row);
+    return `<tr><td>${{shortTime(row.submitted_at || row.created_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || row.guard_reason || ""}}</td><td>${{row.observed_yes_ask ?? ""}}</td><td>${{pct(edge.edge)}}</td><td>${{pct(edge.min_edge)}}</td><td>${{edgeGap(edge)}}</td><td>${{row.fill_status || ""}}</td></tr>`;
+  }}).join("") : "<tr><td colspan='9'>No recent attempts</td></tr>";
   const history = data.config_history || [];
   document.getElementById("history-body").innerHTML = history.map(row => `<tr><td>${{row.version}}</td><td>${{money(row.max_order_dollars)}}</td><td>${{money(row.max_market_exposure_dollars)}}</td><td>${{money(row.max_daily_loss_dollars)}}</td><td>${{money(row.min_contract_price)}}</td><td>${{shortTime(row.created_at)}}</td></tr>`).join("");
 }}

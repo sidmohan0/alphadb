@@ -40,6 +40,14 @@ interface SaveConfigResponse {
 
 type Tone = "good" | "warn" | "bad" | "muted"
 
+interface LiveEdgeAttribution {
+  edge?: number | null
+  min_edge?: number | null
+  edge_shortfall?: number | null
+  edge_margin?: number | null
+  edge_cleared?: boolean | null
+}
+
 const CONFIG_FIELDS = [
   { key: "max_order_dollars", label: "Max order", min: "0.01", max: undefined, step: "0.01", integer: false },
   { key: "max_market_exposure_dollars", label: "Market exposure", min: "0.01", max: undefined, step: "0.01", integer: false },
@@ -98,6 +106,36 @@ function optionalNumber(value: unknown, digits = 2) {
     maximumFractionDigits: digits,
     minimumFractionDigits: digits,
   })
+}
+
+function optionalPercent(value: unknown) {
+  if (value === null || value === undefined || value === "") return "--"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "--"
+  return `${(number * 100).toFixed(2)}%`
+}
+
+function edgeAttribution(attempt: Record<string, unknown>): LiveEdgeAttribution {
+  return asRecord(attempt.live_edge_attribution) as LiveEdgeAttribution
+}
+
+function edgeGapText(attribution: LiveEdgeAttribution) {
+  const shortfall = Number(attribution.edge_shortfall)
+  if (Number.isFinite(shortfall) && shortfall > 0) {
+    return `short ${optionalPercent(shortfall)}`
+  }
+  const margin = Number(attribution.edge_margin)
+  if (Number.isFinite(margin)) {
+    return `${margin >= 0 ? "+" : ""}${optionalPercent(margin)}`
+  }
+  const edge = Number(attribution.edge)
+  const minEdge = Number(attribution.min_edge)
+  if (Number.isFinite(edge) && Number.isFinite(minEdge)) {
+    const derivedMargin = edge - minEdge
+    if (derivedMargin < 0) return `short ${optionalPercent(-derivedMargin)}`
+    return `+${optionalPercent(derivedMargin)}`
+  }
+  return "--"
 }
 
 function seconds(value: unknown) {
@@ -383,28 +421,37 @@ export function LiveOperations() {
             <h2 className="text-sm font-medium">Recent Attempts</h2>
           </div>
           <div className="overflow-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[920px] w-full text-sm">
               <thead className="bg-muted/40 text-muted-foreground">
                 <tr>
                   <th className="text-left px-4 py-2 font-medium">Time</th>
                   <th className="text-left px-4 py-2 font-medium">Market</th>
                   <th className="text-left px-4 py-2 font-medium">Status</th>
                   <th className="text-left px-4 py-2 font-medium">Reason</th>
+                  <th className="text-right px-4 py-2 font-medium">Edge</th>
+                  <th className="text-right px-4 py-2 font-medium">Min</th>
+                  <th className="text-right px-4 py-2 font-medium">Gap</th>
                   <th className="text-left px-4 py-2 font-medium">Fill</th>
                 </tr>
               </thead>
               <tbody>
-                {attempts.length ? attempts.map((attempt, index) => (
-                  <tr key={index} className="border-t border-border">
-                    <td className="px-4 py-2 text-muted-foreground">{shortTime(attempt.submitted_at || attempt.created_at)}</td>
-                    <td className="px-4 py-2 font-mono text-xs">{text(attempt.market_ticker)}</td>
-                    <td className="px-4 py-2">{text(attempt.status)}</td>
-                    <td className="px-4 py-2 text-muted-foreground">{text(attempt.reason || attempt.guard_reason, "")}</td>
-                    <td className="px-4 py-2">{text(attempt.fill_status, "")}</td>
-                  </tr>
-                )) : (
+                {attempts.length ? attempts.map((attempt, index) => {
+                  const attribution = edgeAttribution(attempt)
+                  return (
+                    <tr key={index} className="border-t border-border">
+                      <td className="px-4 py-2 text-muted-foreground">{shortTime(attempt.submitted_at || attempt.created_at)}</td>
+                      <td className="px-4 py-2 font-mono text-xs">{text(attempt.market_ticker)}</td>
+                      <td className="px-4 py-2">{text(attempt.status)}</td>
+                      <td className="px-4 py-2 text-muted-foreground">{text(attempt.reason || attempt.guard_reason, "")}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{optionalPercent(attribution.edge)}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{optionalPercent(attribution.min_edge)}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{edgeGapText(attribution)}</td>
+                      <td className="px-4 py-2">{text(attempt.fill_status, "")}</td>
+                    </tr>
+                  )
+                }) : (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                       No live attempts recorded.
                     </td>
                   </tr>

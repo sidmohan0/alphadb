@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -140,6 +141,11 @@ def test_dashboard_primary_route_is_live_first_and_not_a_table_dump() -> None:
     assert "Runtime Config" in DASHBOARD_HTML
     assert "Min contract price" in DASHBOARD_HTML
     assert "Recent Attempts" in DASHBOARD_HTML
+    assert "<th>Edge</th>" in DASHBOARD_HTML
+    assert "<th>Min</th>" in DASHBOARD_HTML
+    assert "<th>Gap</th>" in DASHBOARD_HTML
+    assert "live_edge_attribution" in DASHBOARD_HTML
+    assert "colspan='9'" in DASHBOARD_HTML
     assert "status.live_orders_enabled" in DASHBOARD_HTML
     assert "live runner active" in DASHBOARD_HTML
     assert (
@@ -165,6 +171,60 @@ def test_live_payload_does_not_expose_dashboard_process_guard() -> None:
     assert payload["portfolio_balance"]["portfolio_balance_dollars"] == 123.45
     assert payload["portfolio_balance"]["cash_dollars"] == 67.89
     assert payload["portfolio_balance"]["assets_dollars"] == 55.56
+
+
+def test_live_payload_preserves_recent_attempt_edge_attribution() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    attribution = {
+        "edge": 0.03,
+        "min_edge": 0.05,
+        "edge_shortfall": 0.02,
+        "edge_margin": -0.02,
+        "edge_cleared": False,
+    }
+    status = replace(
+        no_recent_live_run_status(),
+        recent_attempts=[
+            {
+                "submitted_at": "2026-06-04T15:00:00+00:00",
+                "market_ticker": "KXBTC15M-EDGE",
+                "status": "skipped",
+                "reason": "edge_below_min",
+                "fill_status": None,
+                "live_edge_attribution": attribution,
+            },
+            {
+                "submitted_at": "2026-06-04T15:01:00+00:00",
+                "market_ticker": "KXBTC15M-MISSING",
+                "status": "skipped",
+                "reason": "missing_orderbook_quote",
+                "fill_status": None,
+            },
+        ],
+    )
+    dashboard = service(repository, status=status)
+
+    payload = dashboard.live_payload()
+    attempts = payload["live_status"]["recent_attempts"]
+
+    assert attempts[0]["reason"] == "edge_below_min"
+    assert attempts[0]["live_edge_attribution"]["edge"] == 0.03
+    assert attempts[0]["live_edge_attribution"]["min_edge"] == 0.05
+    assert attempts[0]["live_edge_attribution"]["edge_shortfall"] == 0.02
+    assert "live_edge_attribution" not in attempts[1]
+
+
+def test_cockpit_recent_attempts_table_renders_edge_diagnostics() -> None:
+    source = Path("apps/dashboard/components/live/live-operations.tsx").read_text()
+
+    assert ">Edge</th>" in source
+    assert ">Min</th>" in source
+    assert ">Gap</th>" in source
+    assert "optionalPercent(attribution.edge)" in source
+    assert "optionalPercent(attribution.min_edge)" in source
+    assert "edgeGapText(attribution)" in source
+    assert "short ${optionalPercent(shortfall)}" in source
+    assert "colSpan={8}" in source
 
 
 def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:
