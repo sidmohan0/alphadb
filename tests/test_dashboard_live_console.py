@@ -228,6 +228,10 @@ def test_cockpit_recent_attempts_table_renders_edge_diagnostics() -> None:
     assert "short ${optionalPercent(shortfall)}" in source
     assert "colSpan={9}" in source
     assert "ResizableDraggablePanel" in source
+    assert "PanelVisibilityMenu" in source
+    assert "hiddenPanelIds" in source
+    assert "Hide ${definition.label}" in source
+    assert "hidden: hiddenPanelIds" in source
     assert "window.localStorage" in source
 
 

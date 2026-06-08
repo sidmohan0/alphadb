@@ -5,7 +5,7 @@ import { apiGet, apiPost } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useSelectedStrategy } from "@/components/strategy/strategy-context"
-import { Activity, ChevronDown, ChevronRight, CircleHelp, GripVertical, RefreshCw, RotateCcw, Save, ShieldAlert, Square } from "lucide-react"
+import { Activity, ChevronDown, ChevronRight, CircleHelp, Eye, EyeOff, GripVertical, RefreshCw, RotateCcw, Save, ShieldAlert, Square } from "lucide-react"
 
 interface LivePayload {
   strategy?: string
@@ -225,6 +225,21 @@ function normalizePanelLayout(value: unknown): PanelLayoutItem[] {
   return ordered
 }
 
+function normalizeHiddenPanels(value: unknown): PanelId[] {
+  const rawHidden = asRecord(value).hidden
+  if (!Array.isArray(rawHidden)) return []
+  const hidden: PanelId[] = []
+  const seen = new Set<PanelId>()
+
+  for (const id of rawHidden) {
+    if (!isPanelId(id) || seen.has(id)) continue
+    hidden.push(id)
+    seen.add(id)
+  }
+
+  return hidden
+}
+
 function text(value: unknown, fallback = "--") {
   if (value === null || value === undefined || value === "") return fallback
   return String(value)
@@ -426,7 +441,9 @@ export function LiveOperations() {
   const [configSaveMessage, setConfigSaveMessage] = useState<string | null>(null)
   const [expandedAttempts, setExpandedAttempts] = useState<Record<string, boolean>>({})
   const [panelLayout, setPanelLayout] = useState<PanelLayoutItem[]>(defaultPanelLayout)
+  const [hiddenPanelIds, setHiddenPanelIds] = useState<PanelId[]>([])
   const [layoutLoaded, setLayoutLoaded] = useState(false)
+  const [panelMenuOpen, setPanelMenuOpen] = useState(false)
   const [draggingPanelId, setDraggingPanelId] = useState<PanelId | null>(null)
   const panelElements = useRef(new Map<PanelId, HTMLDivElement>())
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
@@ -477,15 +494,24 @@ export function LiveOperations() {
     () => brtiSkipReasons(status, attempts, recentRuns.map(asRecord)),
     [attempts, recentRuns, status],
   )
+  const hiddenPanelSet = useMemo(() => new Set(hiddenPanelIds), [hiddenPanelIds])
+  const visiblePanelLayout = useMemo(
+    () => panelLayout.filter((item) => !hiddenPanelSet.has(item.id)),
+    [hiddenPanelSet, panelLayout],
+  )
 
   useEffect(() => {
     setLayoutLoaded(false)
     try {
       const saved = window.localStorage.getItem(layoutStorageKey)
-      setPanelLayout(normalizePanelLayout(saved ? JSON.parse(saved) : null))
+      const savedState = saved ? JSON.parse(saved) : null
+      setPanelLayout(normalizePanelLayout(savedState))
+      setHiddenPanelIds(normalizeHiddenPanels(savedState))
     } catch {
       setPanelLayout(defaultPanelLayout())
+      setHiddenPanelIds([])
     }
+    setPanelMenuOpen(false)
     setLayoutLoaded(true)
   }, [layoutStorageKey])
 
@@ -500,11 +526,11 @@ export function LiveOperations() {
   useEffect(() => {
     if (!layoutLoaded) return
     try {
-      window.localStorage.setItem(layoutStorageKey, JSON.stringify({ items: panelLayout }))
+      window.localStorage.setItem(layoutStorageKey, JSON.stringify({ items: panelLayout, hidden: hiddenPanelIds }))
     } catch {
       // Layout persistence is a convenience; the operator view should still render.
     }
-  }, [layoutLoaded, layoutStorageKey, panelLayout])
+  }, [hiddenPanelIds, layoutLoaded, layoutStorageKey, panelLayout])
 
   useEffect(() => {
     if (typeof ResizeObserver === "undefined") return
@@ -560,7 +586,20 @@ export function LiveOperations() {
 
   const resetPanelLayout = () => {
     setPanelLayout(defaultPanelLayout())
+    setHiddenPanelIds([])
     setExpandedAttempts({})
+    setPanelMenuOpen(false)
+  }
+
+  const hidePanel = (id: PanelId) => {
+    setHiddenPanelIds((current) => current.includes(id) ? current : [...current, id])
+  }
+
+  const togglePanelVisibility = (id: PanelId) => {
+    setHiddenPanelIds((current) => current.includes(id)
+      ? current.filter((hiddenId) => hiddenId !== id)
+      : [...current, id]
+    )
   }
 
   const beginPanelDrag = (event: ReactMouseEvent<HTMLElement>, id: PanelId) => {
@@ -869,6 +908,12 @@ export function LiveOperations() {
           <PortfolioStatus value={portfolioStatus.value} tone={portfolioStatus.tone} detail={portfolioStatus.detail} />
           <HeaderStatus label="Live Orders" value={liveOrdersStatus.value} tone={liveOrdersStatus.tone} detail={liveOrdersStatus.detail} />
           <HeaderStatus label="Health" value={healthStatus.value} tone={healthStatus.tone} />
+          <PanelVisibilityMenu
+            hiddenPanelIds={hiddenPanelIds}
+            onOpenChange={setPanelMenuOpen}
+            onTogglePanel={togglePanelVisibility}
+            open={panelMenuOpen}
+          />
           <Button variant="outline" size="sm" onClick={resetPanelLayout} title="Reset saved panel layout">
             <RotateCcw className="h-4 w-4" />
             Reset layout
@@ -891,18 +936,78 @@ export function LiveOperations() {
       )}
 
       <section className="flex flex-wrap items-start gap-3">
-        {panelLayout.map((item) => (
+        {visiblePanelLayout.length ? visiblePanelLayout.map((item) => (
           <ResizableDraggablePanel
             draggingPanelId={draggingPanelId}
             item={item}
             key={item.id}
             onDragStart={beginPanelDrag}
+            onHidePanel={hidePanel}
             registerPanelElement={registerPanelElement}
           >
             {panelContent[item.id]}
           </ResizableDraggablePanel>
-        ))}
+        )) : (
+          <div className="w-full rounded-lg border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+            All panels are hidden. Use Panels to restore the view.
+          </div>
+        )}
       </section>
+    </div>
+  )
+}
+
+function PanelVisibilityMenu({
+  hiddenPanelIds,
+  onOpenChange,
+  onTogglePanel,
+  open,
+}: {
+  hiddenPanelIds: PanelId[]
+  onOpenChange: (open: boolean) => void
+  onTogglePanel: (id: PanelId) => void
+  open: boolean
+}) {
+  const hiddenSet = new Set(hiddenPanelIds)
+  const visibleCount = PANEL_IDS.length - hiddenPanelIds.length
+  return (
+    <div className="relative" data-no-panel-drag="true">
+      <Button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => onOpenChange(!open)}
+        size="sm"
+        title="Show or hide home panels"
+        type="button"
+        variant="outline"
+      >
+        <Eye className="h-4 w-4" />
+        Panels
+        <span className="font-mono text-xs text-muted-foreground">{visibleCount}/{PANEL_IDS.length}</span>
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-8 z-30 w-64 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl">
+          <div className="border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
+            Home panels
+          </div>
+          <div className="max-h-80 overflow-auto p-1">
+            {PANEL_IDS.map((id) => (
+              <label
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted"
+                key={id}
+              >
+                <input
+                  checked={!hiddenSet.has(id)}
+                  className="size-4 accent-foreground"
+                  onChange={() => onTogglePanel(id)}
+                  type="checkbox"
+                />
+                <span>{PANEL_DEFINITIONS[id].label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -912,12 +1017,14 @@ function ResizableDraggablePanel({
   draggingPanelId,
   item,
   onDragStart,
+  onHidePanel,
   registerPanelElement,
 }: {
   children: ReactNode
   draggingPanelId: PanelId | null
   item: PanelLayoutItem
   onDragStart: (event: ReactMouseEvent<HTMLElement>, id: PanelId) => void
+  onHidePanel: (id: PanelId) => void
   registerPanelElement: (id: PanelId) => (node: HTMLDivElement | null) => void
 }) {
   const definition = PANEL_DEFINITIONS[item.id]
@@ -944,13 +1051,23 @@ function ResizableDraggablePanel({
     >
       <button
         aria-label={`Move ${definition.label} panel`}
-        className="absolute right-2 top-2 z-10 inline-flex size-8 touch-none cursor-grab items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm transition hover:border-ring/60 hover:text-foreground active:cursor-grabbing"
+        className="absolute right-11 top-2 z-10 inline-flex size-8 touch-none cursor-grab items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm transition hover:border-ring/60 hover:text-foreground active:cursor-grabbing"
         data-panel-drag-handle={item.id}
         onMouseDown={(event) => onDragStart(event, item.id)}
         title={`Drag ${definition.label}`}
         type="button"
       >
         <GripVertical className="h-4 w-4" aria-hidden="true" />
+      </button>
+      <button
+        aria-label={`Hide ${definition.label} panel`}
+        className="absolute right-2 top-2 z-10 inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm transition hover:border-ring/60 hover:text-foreground"
+        data-no-panel-drag="true"
+        onClick={() => onHidePanel(item.id)}
+        title={`Hide ${definition.label}`}
+        type="button"
+      >
+        <EyeOff className="h-4 w-4" aria-hidden="true" />
       </button>
       <div className="h-full min-h-0">{children}</div>
     </div>
@@ -970,7 +1087,7 @@ function ActivityFeed({
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 pr-10">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 pr-20">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-medium">Activity Feed</h2>
@@ -1146,7 +1263,7 @@ function toneDotClass(tone: Tone) {
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card p-4">
-      <h2 className="mb-3 shrink-0 text-sm font-medium">{title}</h2>
+      <h2 className="mb-3 shrink-0 pr-20 text-sm font-medium">{title}</h2>
       <div className="min-h-0 flex-1 overflow-auto pr-2">
         {children}
       </div>
