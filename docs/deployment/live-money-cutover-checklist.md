@@ -44,6 +44,11 @@ deployment, live config changes, schedule changes, or order submission.
 - Live worker CloudWatch log group: `/ecs/alphadb-fair-value-live`.
 - Live worker manifest prefix:
   `s3://alphadb-artifacts-766780331843-us-east-2/fair-value-live/`.
+- BRTI collector stack: `alphadb-brti-live-collector`.
+- BRTI collector ECS service/cluster/task family:
+  `alphadb-brti-live-collector`.
+- BRTI collector CloudWatch log group:
+  `/ecs/alphadb-brti-live-collector`.
 - Expected manual-run path: `aws ecs run-task` against the
   `alphadb-fair-value-live` task definition, private or egress-capable subnets,
   and the live worker security group.
@@ -109,6 +114,15 @@ Capture these items before calling the cutover complete:
   `min_contract_price = 0.25`, `min_edge = 0`,
   `task_definition_one_cycle = true`, `live_order_guards_preserved = true`, and
   `schedule_state_before = DISABLED`.
+- BRTI-primary smoke evidence JSON validated by
+  `scripts/validate-brti-primary-live-smoke.py`, proving: collector service
+  desired/running count, CloudWatch log group, raw BRTI event insertion, latest
+  context update, fresh `brti_latest_contexts` status, one fair-value cycle with
+  `market_context_source=brti_primary`, recorded BRTI external-close evidence
+  or a clean `brti_context_*` skip, unchanged fair-value and
+  `expensive_yes_live` schedule state during smoke, preserved live-order guards,
+  shared `DATABASE_URL` secret, manifest/status evidence location, and a
+  rollback command back to `coinbase_primary`.
 - Orders/fills/no-fills/skips: order ids or client order ids where available,
   fill counts, no-fill rows, explicit skip reasons, and any exchange/API error.
 - Live status projection: dashboard latest-run summary and recent attempts after
@@ -148,6 +162,40 @@ Capture these items before calling the cutover complete:
     exact snapshot.
 13. Verify the dashboard Live workspace shows the curated latest-run summary.
 14. Complete the ALP-162 evidence handoff and only then mark ALP-156 complete.
+
+## ALP-258 BRTI Primary Extension
+
+Deploy the BRTI collector as its own restartable ECS service:
+
+```bash
+deploy/aws/deploy-brti-live-collector.sh
+```
+
+The collector service uses the same `alphadb/dashboard/database-url` secret as
+the dashboard and fair-value live worker, reads the existing Kalshi WebSocket
+credential secrets, emits CloudWatch lifecycle/observation logs, and does not
+set live-order submission environment variables.
+
+After the collector is stable and fresh BRTI latest context exists, flip the
+dashboard-owned fair-value runtime config from the deployed image:
+
+```bash
+alphadb-runtime set-market-context --source brti_primary --created-by alp-258
+```
+
+Run a one-cycle fair-value live smoke with the fair-value EventBridge rule state
+unchanged. Validate the combined BRTI evidence:
+
+```bash
+scripts/validate-brti-primary-live-smoke.py <brti-smoke-evidence.json>
+```
+
+BRTI rollback is config-only for fair value; the collector may keep running for
+diagnostics and forward capture:
+
+```bash
+alphadb-runtime set-market-context --source coinbase_primary --created-by rollback-alp-258
+```
 
 ## Rollback
 

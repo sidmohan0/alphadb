@@ -19,6 +19,14 @@ from alphadb.state.repository import OperationalStateRepository
 FAIR_VALUE_LIVE_STRATEGY = "fair_value_live"
 EXPENSIVE_YES_LIVE_STRATEGY = "expensive_yes_live"
 MAX_SCAN_MARKETS = 500
+MARKET_CONTEXT_COINBASE_PRIMARY = "coinbase_primary"
+MARKET_CONTEXT_BRTI_PRIMARY = "brti_primary"
+MARKET_CONTEXT_FIXTURE = "fixture"
+MARKET_CONTEXT_SOURCES = (
+    MARKET_CONTEXT_COINBASE_PRIMARY,
+    MARKET_CONTEXT_BRTI_PRIMARY,
+    MARKET_CONTEXT_FIXTURE,
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,7 @@ class LiveRuntimeConfig:
     min_edge: float
     max_markets: int
     min_contract_price: float = 0.25
+    market_context_source: str = MARKET_CONTEXT_COINBASE_PRIMARY
 
     def validate(self) -> "LiveRuntimeConfig":
         if self.max_order_dollars <= 0:
@@ -49,6 +58,7 @@ class LiveRuntimeConfig:
             raise ValueError("max_markets must be at least 1")
         if self.max_markets > MAX_SCAN_MARKETS:
             raise ValueError(f"max_markets must be no greater than {MAX_SCAN_MARKETS}")
+        validate_market_context_source(self.market_context_source)
         return self
 
     def as_dict(self) -> dict[str, Any]:
@@ -59,6 +69,7 @@ class LiveRuntimeConfig:
             "min_edge": self.min_edge,
             "min_contract_price": self.min_contract_price,
             "max_markets": self.max_markets,
+            "market_context_source": self.market_context_source,
         }
 
     @classmethod
@@ -92,6 +103,11 @@ class LiveRuntimeConfig:
                 payload,
                 "min_contract_price",
                 default=base.min_contract_price,
+            ),
+            market_context_source=_text_payload(
+                payload,
+                "market_context_source",
+                default=base.market_context_source,
             ),
         )
         return config.validate()
@@ -129,6 +145,13 @@ def default_live_runtime_config(strategy: str) -> LiveRuntimeConfig:
     ):
         return DEFAULT_EXPENSIVE_YES_LIVE_CONFIG
     return LIVE_RUNTIME_CONFIG_DEFAULTS.get(strategy, DEFAULT_FAIR_VALUE_LIVE_CONFIG)
+
+
+def validate_market_context_source(value: str) -> str:
+    if value not in MARKET_CONTEXT_SOURCES:
+        allowed = ", ".join(MARKET_CONTEXT_SOURCES)
+        raise ValueError(f"market_context_source must be one of: {allowed}")
+    return value
 
 
 def runtime_strategy_metadata(strategy: str) -> dict[str, Any]:
@@ -323,10 +346,11 @@ class LiveRuntimeConfigRepository:
                 min_edge,
                 min_contract_price,
                 max_markets,
+                market_context_source,
                 snapshot,
                 created_by
             )
-            values (%s, %s, %s, true, %s, %s, %s, %s, %s, %s, %s, %s)
+            values (%s, %s, %s, true, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             returning *
             """,
             (
@@ -339,6 +363,7 @@ class LiveRuntimeConfigRepository:
                 config.min_edge,
                 config.min_contract_price,
                 config.max_markets,
+                config.market_context_source,
                 Jsonb(snapshot),
                 created_by,
             ),
@@ -652,6 +677,7 @@ def build_fair_value_live_status(
             "timing": dict(_mapping(manifest.get("timing"))),
             "selected_decision": dict(_mapping(manifest.get("selected_decision"))),
             "live_edge_attribution": dict(_mapping(manifest.get("live_edge_attribution"))),
+            "market_context": dict(_mapping(manifest.get("market_context"))),
             "live_risk_admission_state": dict(live_risk_admission_state),
             "live_risk_refresh": dict(live_risk_refresh),
             "risk_state_classification": classify_risk_state(
@@ -666,6 +692,7 @@ def build_fair_value_live_status(
                     "live_orders_enabled",
                     "orders_placed",
                     "filled_contracts",
+                    "market_context_source",
                 )
             },
         },
@@ -719,6 +746,12 @@ def _config_revision_from_row(row: Mapping[str, Any]) -> LiveRuntimeConfigRevisi
                 row.get(
                     "min_contract_price",
                     default_live_runtime_config(strategy).min_contract_price,
+                )
+            ),
+            market_context_source=str(
+                row.get(
+                    "market_context_source",
+                    default_live_runtime_config(strategy).market_context_source,
                 )
             ),
         ).validate(),
@@ -931,6 +964,14 @@ def _int_payload(payload: Mapping[str, Any], key: str, *, default: int) -> int:
         return int(payload[key])
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} must be an integer") from exc
+
+
+def _text_payload(payload: Mapping[str, Any], *keys: str, default: str) -> str:
+    for key in keys:
+        if key in payload:
+            value = payload[key]
+            return default if value is None else str(value)
+    return default
 
 
 def _optional_int(value: Any) -> int | None:

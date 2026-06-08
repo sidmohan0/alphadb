@@ -172,6 +172,8 @@ Resources:
             - "15"
             - --coinbase-feature-stale-seconds
             - "90"
+            - --brti-future-tolerance-seconds
+            - "2.0"
             - --live-risk-state-stale-seconds
             - "60"
             - --runtime-config-source

@@ -3,11 +3,11 @@ set -euo pipefail
 
 PROFILE="${AWS_PROFILE:-alphadb}"
 REGION="${AWS_REGION:-us-east-2}"
-STACK_NAME="${STACK_NAME:-alphadb-fair-value-live}"
-SERVICE_NAME="${SERVICE_NAME:-alphadb-fair-value-live}"
-REPOSITORY="${ECR_REPOSITORY:-alphadb-fair-value-live}"
+STACK_NAME="${STACK_NAME:-alphadb-brti-live-collector}"
+SERVICE_NAME="${SERVICE_NAME:-alphadb-brti-live-collector}"
+REPOSITORY="${ECR_REPOSITORY:-alphadb-brti-live-collector}"
 IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)}"
-TEMPLATE_FILE="${TEMPLATE_FILE:-deploy/aws/fair-value-live-trading-job.yaml}"
+TEMPLATE_FILE="${TEMPLATE_FILE:-deploy/aws/brti-live-collector.yaml}"
 
 aws_cli() {
   aws --profile "$PROFILE" --region "$REGION" "$@"
@@ -30,32 +30,9 @@ secret_arn() {
 require_command aws
 require_command docker
 require_command git
-require_command python3
-
-if [[ "${SCHEDULE_STATE:-DISABLED}" == "ENABLED" ]]; then
-  if [[ -n "${FAIR_VALUE_LIVE_SMOKE_EVIDENCE:-}" ]]; then
-    python3 scripts/validate-fair-value-live-smoke.py "$FAIR_VALUE_LIVE_SMOKE_EVIDENCE"
-  elif [[ "${PRESERVE_ENABLED_SCHEDULE:-0}" == "1" ]]; then
-    CURRENT_SCHEDULE_STATE="$(aws_cli events describe-rule \
-      --name "$SERVICE_NAME" \
-      --query State \
-      --output text 2>/dev/null || true)"
-    if [[ "$CURRENT_SCHEDULE_STATE" != "ENABLED" ]]; then
-      echo "Refusing to preserve ENABLED schedule; current state is ${CURRENT_SCHEDULE_STATE:-unknown}." >&2
-      echo "Run one-cycle smoke, write evidence JSON, then retry with that path." >&2
-      exit 1
-    fi
-    echo "Preserving already ENABLED schedule for $SERVICE_NAME." >&2
-  else
-    echo "Refusing to enable schedule without FAIR_VALUE_LIVE_SMOKE_EVIDENCE." >&2
-    echo "Run one-cycle smoke, write evidence JSON, then retry with that path." >&2
-    exit 1
-  fi
-fi
 
 ACCOUNT_ID="$(aws --profile "$PROFILE" sts get-caller-identity --query Account --output text)"
 IMAGE_URI="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPOSITORY:$IMAGE_TAG"
-REPORT_BUCKET_NAME="${REPORT_BUCKET_NAME:-alphadb-artifacts-$ACCOUNT_ID-$REGION}"
 VPC_ID="${VPC_ID:-$(aws_cli ec2 describe-vpcs \
   --filters Name=is-default,Values=true \
   --query 'Vpcs[0].VpcId' \
@@ -111,13 +88,11 @@ aws_cli cloudformation deploy \
     VpcId="$VPC_ID" \
     SubnetIds="$SUBNET_IDS" \
     AssignPublicIp="${ASSIGN_PUBLIC_IP:-ENABLED}" \
-    ReportBucketName="$REPORT_BUCKET_NAME" \
-    ReportPrefix="${REPORT_PREFIX:-fair-value-live}" \
+    DesiredCount="${DESIRED_COUNT:-1}" \
+    IndexId="${BRTI_INDEX_ID:-BRTI}" \
+    MaxReconnects="${MAX_RECONNECTS:-1000000}" \
+    KalshiWebSocketUrl="${KALSHI_WS_URL:-wss://external-api-ws.kalshi.com/trade-api/ws/v2}" \
     DatabaseUrlSecretArn="$DATABASE_URL_SECRET_ARN" \
-    ScheduleExpression="${SCHEDULE_EXPRESSION:-rate(1 minute)}" \
-    ScheduleState="${SCHEDULE_STATE:-DISABLED}" \
-    MinEdgeValues="${MIN_EDGE_VALUES:-0.0,0.05,0.10}" \
-    MinContractPrice="${MIN_CONTRACT_PRICE:-0.25}" \
     KalshiApiKeyIdSecretArn="$KALSHI_API_KEY_ID_SECRET_ARN" \
     KalshiPrivateKeyPemSecretArn="$KALSHI_PRIVATE_KEY_PEM_SECRET_ARN" \
     AwsRegionValue="$REGION"
@@ -126,3 +101,7 @@ aws_cli cloudformation describe-stacks \
   --stack-name "$STACK_NAME" \
   --query 'Stacks[0].Outputs' \
   --output table
+
+aws_cli ecs wait services-stable \
+  --cluster "$SERVICE_NAME" \
+  --services "$SERVICE_NAME"

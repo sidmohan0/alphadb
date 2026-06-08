@@ -16,6 +16,7 @@ dependencies = [
   "psycopg[binary]>=3.2",
   "pyyaml>=6.0",
   "scikit-learn==1.6.1",
+  "websockets>=13.0",
 ]
 
 [project.scripts]
@@ -37,6 +38,7 @@ alphadb-shadow = "alphadb.shadow.comparison:main"
 alphadb-shadow-current-mvp = "alphadb.shadow.current_mvp:main"
 alphadb-shadow-parity = "alphadb.shadow.parity:main"
 alphadb-ws = "alphadb.collectors.kalshi_ws:main"
+alphadb-brti = "alphadb.collectors.brti:main"
 alphadb-strategy = "alphadb.strategy.runner:main"
 alphadb-evidence = "alphadb.evidence:main"
 alphadb-live-orders = "alphadb.live_orders:main"

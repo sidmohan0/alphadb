@@ -28,6 +28,7 @@ interface LivePayload {
     detail: string | null
   }
   live_status?: Record<string, unknown>
+  market_context?: Record<string, unknown>
   recent_runs?: Array<Record<string, unknown>>
 }
 
@@ -39,6 +40,14 @@ interface SaveConfigResponse {
 
 type Tone = "good" | "warn" | "bad" | "muted"
 
+interface LiveEdgeAttribution {
+  edge?: number | null
+  min_edge?: number | null
+  edge_shortfall?: number | null
+  edge_margin?: number | null
+  edge_cleared?: boolean | null
+}
+
 const CONFIG_FIELDS = [
   { key: "max_order_dollars", label: "Max order", min: "0.01", max: undefined, step: "0.01", integer: false },
   { key: "max_market_exposure_dollars", label: "Market exposure", min: "0.01", max: undefined, step: "0.01", integer: false },
@@ -47,19 +56,34 @@ const CONFIG_FIELDS = [
   { key: "min_contract_price", label: "Min price", min: "0", max: "1", step: "0.01", integer: false },
   { key: "max_markets", label: "Max markets", min: "1", max: "500", step: "1", integer: true },
 ] as const
+const MARKET_CONTEXT_OPTIONS = [
+  { key: "coinbase_primary", label: "Coinbase primary" },
+  { key: "brti_primary", label: "BRTI primary" },
+  { key: "fixture", label: "Fixture" },
+] as const
 
 type ConfigFieldKey = (typeof CONFIG_FIELDS)[number]["key"]
-type ConfigFormValues = Record<ConfigFieldKey, string>
-type ConfigErrors = Partial<Record<ConfigFieldKey, string>>
+type ConfigFormKey = ConfigFieldKey | "market_context_source"
+type ConfigFormValues = Record<ConfigFormKey, string>
+type ConfigErrors = Partial<Record<ConfigFormKey, string>>
 
-const EMPTY_CONFIG_FORM = CONFIG_FIELDS.reduce((values, field) => {
-  values[field.key] = ""
-  return values
-}, {} as ConfigFormValues)
+const EMPTY_CONFIG_FORM = {
+  ...CONFIG_FIELDS.reduce((values, field) => {
+    values[field.key] = ""
+    return values
+  }, {} as Record<ConfigFieldKey, string>),
+  market_context_source: "coinbase_primary",
+}
 
 function text(value: unknown, fallback = "--") {
   if (value === null || value === undefined || value === "") return fallback
   return String(value)
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
 }
 
 function money(value: unknown) {
@@ -72,6 +96,85 @@ function optionalMoney(value: unknown) {
   const number = Number(value)
   if (!Number.isFinite(number)) return "--"
   return `$${number.toFixed(2)}`
+}
+
+function optionalNumber(value: unknown, digits = 2) {
+  if (value === null || value === undefined || value === "") return "--"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "--"
+  return number.toLocaleString(undefined, {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  })
+}
+
+function optionalPercent(value: unknown) {
+  if (value === null || value === undefined || value === "") return "--"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "--"
+  return `${(number * 100).toFixed(2)}%`
+}
+
+function edgeAttribution(attempt: Record<string, unknown>): LiveEdgeAttribution {
+  return asRecord(attempt.live_edge_attribution) as LiveEdgeAttribution
+}
+
+function edgeGapText(attribution: LiveEdgeAttribution) {
+  const shortfall = Number(attribution.edge_shortfall)
+  if (Number.isFinite(shortfall) && shortfall > 0) {
+    return `short ${optionalPercent(shortfall)}`
+  }
+  const margin = Number(attribution.edge_margin)
+  if (Number.isFinite(margin)) {
+    return `${margin >= 0 ? "+" : ""}${optionalPercent(margin)}`
+  }
+  const edge = Number(attribution.edge)
+  const minEdge = Number(attribution.min_edge)
+  if (Number.isFinite(edge) && Number.isFinite(minEdge)) {
+    const derivedMargin = edge - minEdge
+    if (derivedMargin < 0) return `short ${optionalPercent(-derivedMargin)}`
+    return `+${optionalPercent(derivedMargin)}`
+  }
+  return "--"
+}
+
+function seconds(value: unknown) {
+  if (value === null || value === undefined || value === "") return "--"
+  const number = Number(value)
+  if (!Number.isFinite(number)) return "--"
+  if (number < 1) return `${Math.round(number * 1000)}ms`
+  return `${number.toFixed(number >= 10 ? 0 : 1)}s`
+}
+
+function sourceLabel(value: unknown) {
+  const source = String(value || "")
+  return MARKET_CONTEXT_OPTIONS.find((option) => option.key === source)?.label || text(source)
+}
+
+function basisText(dollars: unknown, pct: unknown) {
+  const dollarsNumber = Number(dollars)
+  const pctNumber = Number(pct)
+  if (!Number.isFinite(dollarsNumber)) return "--"
+  const pctPart = Number.isFinite(pctNumber) ? ` · ${(pctNumber * 100).toFixed(4)}%` : ""
+  return `${dollarsNumber >= 0 ? "+" : ""}${dollarsNumber.toFixed(2)}${pctPart}`
+}
+
+function brtiSkipReasons(
+  status: Record<string, unknown>,
+  attempts: Array<Record<string, unknown>>,
+  recentRuns: Array<Record<string, unknown>>,
+) {
+  const reasons = new Set<string>()
+  for (const value of [
+    status.skip_reason,
+    status.latest_attempt_reason,
+    ...attempts.flatMap((attempt) => [attempt.reason, attempt.latest_attempt_reason]),
+    ...recentRuns.flatMap((run) => [run.skip_reason, run.latest_attempt_reason]),
+  ]) {
+    const reason = String(value || "")
+    if (reason.startsWith("brti_context_")) reasons.add(reason)
+  }
+  return Array.from(reasons)
 }
 
 function shortTime(value: unknown) {
@@ -87,38 +190,47 @@ function shortTime(value: unknown) {
 }
 
 function configFormFrom(config?: Record<string, unknown>): ConfigFormValues {
-  return CONFIG_FIELDS.reduce((values, field) => {
-    values[field.key] = text(config?.[field.key], "")
-    return values
+  const values = CONFIG_FIELDS.reduce((current, field) => {
+    current[field.key] = text(config?.[field.key], "")
+    return current
   }, {} as ConfigFormValues)
+  values.market_context_source = text(config?.market_context_source, "coinbase_primary")
+  return values
 }
 
 function validateConfigForm(values: ConfigFormValues) {
-  const payload: Record<ConfigFieldKey, number> = {} as Record<ConfigFieldKey, number>
+  const numericPayload = {} as Record<ConfigFieldKey, number>
   const errors: ConfigErrors = {}
 
   for (const field of CONFIG_FIELDS) {
     const raw = values[field.key].trim()
     const value = field.integer ? Number.parseInt(raw, 10) : Number.parseFloat(raw)
-    payload[field.key] = value
+    numericPayload[field.key] = value
     if (!raw || !Number.isFinite(value)) {
       errors[field.key] = "Required."
     }
   }
+  if (!MARKET_CONTEXT_OPTIONS.some((option) => option.key === values.market_context_source)) {
+    errors.market_context_source = "Required."
+  }
 
   for (const key of ["max_order_dollars", "max_market_exposure_dollars", "max_daily_loss_dollars"] as const) {
-    if (!errors[key] && payload[key] <= 0) errors[key] = "Must be positive."
+    if (!errors[key] && numericPayload[key] <= 0) errors[key] = "Must be positive."
   }
-  if (!errors.min_edge && (payload.min_edge < 0 || payload.min_edge > 1)) {
+  if (!errors.min_edge && (numericPayload.min_edge < 0 || numericPayload.min_edge > 1)) {
     errors.min_edge = "Use 0 through 1."
   }
-  if (!errors.min_contract_price && (payload.min_contract_price < 0 || payload.min_contract_price > 1)) {
+  if (!errors.min_contract_price && (numericPayload.min_contract_price < 0 || numericPayload.min_contract_price > 1)) {
     errors.min_contract_price = "Use 0 through 1."
   }
-  if (!errors.max_markets && (!Number.isInteger(payload.max_markets) || payload.max_markets < 1 || payload.max_markets > 500)) {
+  if (!errors.max_markets && (!Number.isInteger(numericPayload.max_markets) || numericPayload.max_markets < 1 || numericPayload.max_markets > 500)) {
     errors.max_markets = "Use 1 through 500."
   }
 
+  const payload = {
+    ...numericPayload,
+    market_context_source: values.market_context_source,
+  }
   return { errors, payload }
 }
 
@@ -156,14 +268,22 @@ export function LiveOperations() {
     return () => window.clearInterval(id)
   }, [load, strategyReady])
 
-  const status = payload?.live_status || {}
+  const status = useMemo(() => payload?.live_status || {}, [payload?.live_status])
+  const marketContext = asRecord(payload?.market_context)
+  const latestRunContext = asRecord(marketContext.latest_run)
+  const brtiLatest = asRecord(marketContext.brti_latest)
+  const coinbaseDiagnostics = asRecord(marketContext.coinbase_diagnostics)
   const config = payload?.active_config
   const thresholdLabel = text(payload?.strategy_metadata?.threshold_label, "Min price")
-  const recentRuns = payload?.recent_runs || []
+  const recentRuns = useMemo(() => payload?.recent_runs || [], [payload?.recent_runs])
   const attempts = useMemo(() => {
     const raw = status.recent_attempts
-    return Array.isArray(raw) ? raw.slice().reverse() : []
+    return Array.isArray(raw) ? raw.map(asRecord).slice().reverse() : []
   }, [status.recent_attempts])
+  const recentBrtiSkips = useMemo(
+    () => brtiSkipReasons(status, attempts, recentRuns.map(asRecord)),
+    [attempts, recentRuns, status],
+  )
 
   useEffect(() => {
     if (!configDirty) {
@@ -210,7 +330,7 @@ export function LiveOperations() {
     }
   })()
 
-  const handleConfigChange = (key: ConfigFieldKey, value: string) => {
+  const handleConfigChange = (key: ConfigFormKey, value: string) => {
     setConfigForm((current) => ({ ...current, [key]: value }))
     setConfigDirty(true)
     setConfigSaveMessage(null)
@@ -229,10 +349,21 @@ export function LiveOperations() {
         `/live/config?strategy=${encodeURIComponent(selectedStrategy)}`,
         { ...validated.payload, strategy: selectedStrategy },
       )
+      let refreshed: LivePayload | null = null
+      try {
+        refreshed = await apiGet<LivePayload>(`/live?strategy=${encodeURIComponent(selectedStrategy)}`)
+      } catch {
+        refreshed = null
+      }
       setPayload((current) => ({
-        ...(current ?? {}),
-        active_config: saved.active_config ?? current?.active_config,
-        config_history: saved.config_history ?? current?.config_history,
+        ...(refreshed ?? current ?? {}),
+        active_config: saved.active_config ?? refreshed?.active_config ?? current?.active_config,
+        config_history: saved.config_history ?? refreshed?.config_history ?? current?.config_history,
+        market_context: refreshed?.market_context ?? {
+          ...(current?.market_context ?? {}),
+          active_source: saved.active_config?.market_context_source,
+          active_source_label: sourceLabel(saved.active_config?.market_context_source),
+        },
       }))
       if (saved.active_config) {
         setConfigForm(configFormFrom(saved.active_config))
@@ -290,28 +421,37 @@ export function LiveOperations() {
             <h2 className="text-sm font-medium">Recent Attempts</h2>
           </div>
           <div className="overflow-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[920px] w-full text-sm">
               <thead className="bg-muted/40 text-muted-foreground">
                 <tr>
                   <th className="text-left px-4 py-2 font-medium">Time</th>
                   <th className="text-left px-4 py-2 font-medium">Market</th>
                   <th className="text-left px-4 py-2 font-medium">Status</th>
                   <th className="text-left px-4 py-2 font-medium">Reason</th>
+                  <th className="text-right px-4 py-2 font-medium">Edge</th>
+                  <th className="text-right px-4 py-2 font-medium">Min</th>
+                  <th className="text-right px-4 py-2 font-medium">Gap</th>
                   <th className="text-left px-4 py-2 font-medium">Fill</th>
                 </tr>
               </thead>
               <tbody>
-                {attempts.length ? attempts.map((attempt, index) => (
-                  <tr key={index} className="border-t border-border">
-                    <td className="px-4 py-2 text-muted-foreground">{shortTime(attempt.submitted_at || attempt.created_at)}</td>
-                    <td className="px-4 py-2 font-mono text-xs">{text(attempt.market_ticker)}</td>
-                    <td className="px-4 py-2">{text(attempt.status)}</td>
-                    <td className="px-4 py-2 text-muted-foreground">{text(attempt.reason || attempt.guard_reason, "")}</td>
-                    <td className="px-4 py-2">{text(attempt.fill_status, "")}</td>
-                  </tr>
-                )) : (
+                {attempts.length ? attempts.map((attempt, index) => {
+                  const attribution = edgeAttribution(attempt)
+                  return (
+                    <tr key={index} className="border-t border-border">
+                      <td className="px-4 py-2 text-muted-foreground">{shortTime(attempt.submitted_at || attempt.created_at)}</td>
+                      <td className="px-4 py-2 font-mono text-xs">{text(attempt.market_ticker)}</td>
+                      <td className="px-4 py-2">{text(attempt.status)}</td>
+                      <td className="px-4 py-2 text-muted-foreground">{text(attempt.reason || attempt.guard_reason, "")}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{optionalPercent(attribution.edge)}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{optionalPercent(attribution.min_edge)}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{edgeGapText(attribution)}</td>
+                      <td className="px-4 py-2">{text(attempt.fill_status, "")}</td>
+                    </tr>
+                  )
+                }) : (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                    <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                       No live attempts recorded.
                     </td>
                   </tr>
@@ -334,6 +474,22 @@ export function LiveOperations() {
                 <span>Version</span>
                 <span className="font-mono">{text(config?.version)}</span>
               </div>
+              <label className="space-y-1 text-sm">
+                <span className="block text-xs text-muted-foreground">Market context source</span>
+                <select
+                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
+                  name="market_context_source"
+                  onChange={(event) => handleConfigChange("market_context_source", event.target.value)}
+                  value={configForm.market_context_source}
+                >
+                  {MARKET_CONTEXT_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+                {configErrors.market_context_source && (
+                  <span className="block text-xs text-destructive">{configErrors.market_context_source}</span>
+                )}
+              </label>
               <div className="grid grid-cols-2 gap-3">
                 {CONFIG_FIELDS.map((field) => (
                   <label key={field.key} className="space-y-1 text-sm">
@@ -368,6 +524,30 @@ export function LiveOperations() {
               </div>
             </form>
           </Panel>
+          <Panel title="Market Context">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <Value label="Active source" value={sourceLabel(marketContext.active_source || config?.market_context_source)} />
+              <Value label="Run source" value={sourceLabel(latestRunContext.market_context_source)} />
+              <Value label="BRTI value" value={optionalNumber(brtiLatest.value)} />
+              <Value label="BRTI age" value={seconds(brtiLatest.age_seconds)} />
+              <Value label="BRTI health" value={text(brtiLatest.status)} />
+              <Value label="Freshness" value={seconds(brtiLatest.freshness_limit_seconds)} />
+              <Value label="Basis" value={basisText(coinbaseDiagnostics.basis_dollars, coinbaseDiagnostics.basis_pct)} />
+              <Value label="Coinbase diag" value={text(coinbaseDiagnostics.status)} />
+            </div>
+            <div className="mt-3 border-t border-border pt-3">
+              <div className="text-xs text-muted-foreground">Recent BRTI skips</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {recentBrtiSkips.length ? recentBrtiSkips.map((reason) => (
+                  <span key={reason} className="rounded-md border border-border bg-background px-2 py-1 font-mono text-xs">
+                    {reason}
+                  </span>
+                )) : (
+                  <span className="text-sm text-muted-foreground">--</span>
+                )}
+              </div>
+            </div>
+          </Panel>
           <Panel title="Risk">
             <div className="grid grid-cols-2 gap-3 text-sm">
               <Value label="Daily used" value={money(status.daily_loss_used_dollars)} />
@@ -381,7 +561,7 @@ export function LiveOperations() {
               {recentRuns.length ? recentRuns.map((run, index) => (
                 <div key={index} className="text-sm border-t border-border first:border-0 pt-2 first:pt-0">
                   <div className="font-mono text-xs">{text(run.run_id)}</div>
-                  <div className="text-muted-foreground">{text(run.decision_outcome)} · {shortTime(run.generated_at)}</div>
+                  <div className="text-muted-foreground">{text(run.decision_outcome)} · {text(run.latest_attempt_reason, "")} · {shortTime(run.generated_at)}</div>
                 </div>
               )) : (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">

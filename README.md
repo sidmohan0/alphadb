@@ -312,6 +312,29 @@ KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
 alphadb-ws live-smoke
 ```
 
+### BRTI Live Context
+
+Ingest one controlled `cfbenchmarks_value` BRTI tick into index-level raw events
+and the latest-context projection:
+
+```bash
+alphadb-brti mock-smoke
+alphadb-brti status
+```
+
+Live BRTI collection is also credential-gated. It subscribes to
+`cfbenchmarks_value` with `index_ids: ["BRTI"]` and writes accepted ticks with
+`market_ticker = null` because BRTI is index-level context, not a concrete
+Kalshi market instance:
+
+```bash
+ALPHADB_ENABLE_LIVE_WS_SMOKE=1 \
+ALPHADB_KALSHI_WS_URL=wss://external-api-ws.kalshi.com/trade-api/ws/v2 \
+KALSHI_API_KEY_ID=... \
+KALSHI_PRIVATE_KEY_PATH=/path/to/private-key.pem \
+alphadb-brti live-collect --max-messages 1
+```
+
 ### Live-Data Paper Runs
 
 Validate pinned model artifacts from local-only config:

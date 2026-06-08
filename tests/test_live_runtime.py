@@ -48,6 +48,7 @@ def test_runtime_config_repository_seeds_reads_saves_and_lists_history() -> None
             min_edge=0.05,
             max_markets=7,
             min_contract_price=0.25,
+            market_context_source="brti_primary",
         ),
         strategy=strategy,
     )
@@ -60,6 +61,8 @@ def test_runtime_config_repository_seeds_reads_saves_and_lists_history() -> None
     assert saved.version == 2
     assert saved.config.max_market_exposure_dollars == 3.5
     assert saved.config.min_contract_price == 0.25
+    assert saved.config.market_context_source == "brti_primary"
+    assert saved.manifest_snapshot()["snapshot"]["market_context_source"] == "brti_primary"
     assert [revision.version for revision in history] == [2, 1]
     assert history[0].is_active is True
     assert history[1].is_active is False
@@ -94,6 +97,8 @@ def test_runtime_config_validation_blocks_malformed_values() -> None:
         LiveRuntimeConfig.from_payload({"max_markets": 0})
     with pytest.raises(ValueError, match="min_contract_price"):
         LiveRuntimeConfig.from_payload({"min_contract_price": 1.01})
+    with pytest.raises(ValueError, match="market_context_source"):
+        LiveRuntimeConfig.from_payload({"market_context_source": "brti"})
 
 
 def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() -> None:
@@ -113,6 +118,10 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
             },
         },
         "runtime_controls": {"live_orders_enabled": True, "orders_placed": 1},
+        "market_context": {
+            "market_context_source": "brti_primary",
+            "external_close_source": "brti_latest_context",
+        },
         "counts": {"live_attempts": 1, "replay_trades": 1},
         "live_edge_attribution": {
             "attribution_class": "threshold_drag",
@@ -215,6 +224,7 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert skipped.skip_reason == "daily_loss_cap_reached"
     assert skipped.selected_side == "yes"
     assert skipped.summary["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert submitted.summary["market_context"]["market_context_source"] == "brti_primary"
     assert skipped.recent_attempts[0]["live_edge_attribution"]["edge"] == 0.03
     assert expensive.strategy == EXPENSIVE_YES_LIVE_STRATEGY
     assert expensive.recent_attempts[0]["observed_yes_ask"] == 0.7

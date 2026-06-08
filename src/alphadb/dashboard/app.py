@@ -6,12 +6,18 @@ import argparse
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from alphadb.collectors.brti import (
+    BRTI_INDEX_ID,
+    DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS,
+    BRTILatestContextRepository,
+)
 from alphadb.config import Settings, settings_from_env
 from alphadb.dashboard.auth import DashboardAuthConfig, evaluate_access
 from alphadb.dashboard.data_explorer import DashboardDataExplorerRepository
@@ -29,6 +35,7 @@ from alphadb.live_runtime import (
     LiveRunStatusRepository,
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
+    MARKET_CONTEXT_COINBASE_PRIMARY,
     runtime_strategy_metadata,
 )
 from alphadb.performance import PerformanceSummaryRepository
@@ -77,6 +84,7 @@ class DashboardService:
         status_repository = self.status_repository_factory(self.settings.database_url)
         latest_status = status_repository.latest_status(strategy=strategy)
         live_status = latest_status.as_dict()
+        status_summary = _mapping_or_empty(live_status.get("summary"))
         live_status.pop("summary", None)
         report = self.health_collector(self.settings)
         return {
@@ -91,6 +99,11 @@ class DashboardService:
             },
             "active_config": active.as_dict(),
             "config_history": [revision.as_dict() for revision in history],
+            "market_context": market_context_payload(
+                settings=self.settings,
+                active_config=active.config,
+                latest_status_summary=status_summary,
+            ),
             "portfolio_balance": dict(self.portfolio_balance_provider(self.settings)),
             "live_status": live_status,
             "recent_runs": status_repository.recent_details(
@@ -299,6 +312,73 @@ class DashboardService:
 
     def _lab_repository(self) -> DashboardLabRepository:
         return self.lab_repository_factory(self.settings.database_url)
+
+
+def market_context_payload(
+    *,
+    settings: Settings,
+    active_config: LiveRuntimeConfig,
+    latest_status_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    latest_run_context = _mapping_or_empty(latest_status_summary.get("market_context"))
+    coinbase_diagnostics = _mapping_or_empty(latest_run_context.get("coinbase_diagnostics"))
+    return {
+        "active_source": active_config.market_context_source,
+        "active_source_label": market_context_label(active_config.market_context_source),
+        "latest_run": dict(latest_run_context),
+        "brti_latest": brti_latest_context_payload(settings),
+        "coinbase_diagnostics": dict(coinbase_diagnostics),
+    }
+
+
+def brti_latest_context_payload(settings: Settings) -> dict[str, Any]:
+    freshness_seconds = DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS
+    generated_at = datetime.now(UTC)
+    try:
+        status = BRTILatestContextRepository(settings.database_url).get_latest(
+            index_id=BRTI_INDEX_ID,
+            now=generated_at,
+            freshness_limit=timedelta(seconds=freshness_seconds),
+        )
+    except Exception as exc:
+        return {
+            "index_id": BRTI_INDEX_ID,
+            "status": "unavailable",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "generated_at": generated_at.isoformat(),
+            "freshness_limit_seconds": freshness_seconds,
+            "age_seconds": None,
+            "value": None,
+            "source_timestamp": None,
+            "received_at": None,
+            "source_lag_ms": None,
+        }
+    context = status.context
+    return {
+        "index_id": status.index_id,
+        "status": status.status,
+        "reason": status.reason,
+        "generated_at": status.generated_at.isoformat(),
+        "freshness_limit_seconds": freshness_seconds,
+        "age_seconds": round(status.age_ms / 1000.0, 6)
+        if status.age_ms is not None
+        else None,
+        "value": str(context.value) if context else None,
+        "source_timestamp": context.source_timestamp.isoformat() if context else None,
+        "received_at": context.received_at.isoformat() if context else None,
+        "source_lag_ms": context.source_lag_ms if context else None,
+        "raw_event_id": context.raw_event_id if context else None,
+        "payload_hash": context.payload_hash if context else None,
+    }
+
+
+def market_context_label(source: str | None) -> str:
+    labels = {
+        MARKET_CONTEXT_COINBASE_PRIMARY: "Coinbase primary",
+        "brti_primary": "BRTI primary",
+        "fixture": "Fixture",
+    }
+    return labels.get(str(source or ""), str(source or MARKET_CONTEXT_COINBASE_PRIMARY))
 
 
 def dashboard_auth_config(settings: Settings) -> DashboardAuthConfig:
@@ -911,6 +991,12 @@ table {
   table-layout: fixed;
   font-size: 12px;
 }
+.table-scroll {
+  overflow-x: auto;
+}
+.attempts-table {
+  min-width: 880px;
+}
 th, td {
   border-bottom: 1px solid var(--line);
   text-align: left;
@@ -986,7 +1072,7 @@ DASHBOARD_HTML = f"""<!doctype html>
         <div class="lower">
           <section class="panel">
             <h2>Recent Attempts</h2>
-            <table><thead><tr><th>Time</th><th>Market</th><th>Status</th><th>Reason</th><th>Ask</th><th>Fill</th></tr></thead><tbody id="attempts-body"></tbody></table>
+            <div class="table-scroll"><table class="attempts-table"><thead><tr><th>Time</th><th>Market</th><th>Status</th><th>Reason</th><th>Ask</th><th>Edge</th><th>Min</th><th>Gap</th><th>Fill</th></tr></thead><tbody id="attempts-body"></tbody></table></div>
           </section>
           <section class="panel">
             <h2>Config History</h2>
@@ -1002,6 +1088,30 @@ function selectedStrategy() {{ return document.getElementById("live-strategy").v
 function text(id, value) {{ document.getElementById(id).textContent = value ?? "--"; }}
 function cls(id, name) {{ document.getElementById(id).className = name; }}
 function money(value) {{ const n = Number(value || 0); return "$" + n.toFixed(2); }}
+function pctValue(number) {{ return (number * 100).toFixed(2) + "%"; }}
+function pct(value) {{
+  if (value === null || value === undefined || value === "") return "--";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return pctValue(number);
+}}
+function edgeAttribution(row) {{
+  return row.live_edge_attribution && typeof row.live_edge_attribution === "object" ? row.live_edge_attribution : {{}};
+}}
+function edgeGap(attr) {{
+  const shortfall = Number(attr.edge_shortfall);
+  if (Number.isFinite(shortfall) && shortfall > 0) return "short " + pctValue(shortfall);
+  const margin = Number(attr.edge_margin);
+  if (Number.isFinite(margin)) return (margin >= 0 ? "+" : "") + pctValue(margin);
+  const edge = Number(attr.edge);
+  const minEdge = Number(attr.min_edge);
+  if (Number.isFinite(edge) && Number.isFinite(minEdge)) {{
+    const derivedMargin = edge - minEdge;
+    if (derivedMargin < 0) return "short " + pctValue(-derivedMargin);
+    return "+" + pctValue(derivedMargin);
+  }}
+  return "--";
+}}
 function shortTime(value) {{
   if (!value) return "";
   const date = new Date(value);
@@ -1053,7 +1163,10 @@ function render(data) {{
   text("execution-detail", status.latest_attempt_reason || status.fill_status || "--");
   fields.forEach(key => {{ if (key in config) document.getElementById(key).value = config[key]; }});
   const attempts = status.recent_attempts || [];
-  document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => `<tr><td>${{shortTime(row.submitted_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || ""}}</td><td>${{row.observed_yes_ask ?? ""}}</td><td>${{row.fill_status || ""}}</td></tr>`).join("") : "<tr><td colspan='6'>No recent attempts</td></tr>";
+  document.getElementById("attempts-body").innerHTML = attempts.length ? attempts.map(row => {{
+    const edge = edgeAttribution(row);
+    return `<tr><td>${{shortTime(row.submitted_at || row.created_at)}}</td><td>${{row.market_ticker || ""}}</td><td>${{row.status || ""}}</td><td>${{row.reason || row.guard_reason || ""}}</td><td>${{row.observed_yes_ask ?? ""}}</td><td>${{pct(edge.edge)}}</td><td>${{pct(edge.min_edge)}}</td><td>${{edgeGap(edge)}}</td><td>${{row.fill_status || ""}}</td></tr>`;
+  }}).join("") : "<tr><td colspan='9'>No recent attempts</td></tr>";
   const history = data.config_history || [];
   document.getElementById("history-body").innerHTML = history.map(row => `<tr><td>${{row.version}}</td><td>${{money(row.max_order_dollars)}}</td><td>${{money(row.max_market_exposure_dollars)}}</td><td>${{money(row.max_daily_loss_dollars)}}</td><td>${{money(row.min_contract_price)}}</td><td>${{shortTime(row.created_at)}}</td></tr>`).join("");
 }}
