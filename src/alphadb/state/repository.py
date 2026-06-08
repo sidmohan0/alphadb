@@ -27,9 +27,12 @@ class OperationalStateRepository:
 
     def apply_migrations(self) -> list[str]:
         applied: list[str] = []
+        applied_versions = set(self.applied_migrations())
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 for migration in MIGRATIONS:
+                    if migration.version in applied_versions:
+                        continue
                     for statement in migration.statements:
                         cursor.execute(statement)
                     cursor.execute(
@@ -42,6 +45,7 @@ class OperationalStateRepository:
                     )
                     if cursor.rowcount:
                         applied.append(migration.version)
+                        applied_versions.add(migration.version)
             connection.commit()
         return applied
 

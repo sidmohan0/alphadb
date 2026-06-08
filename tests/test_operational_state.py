@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -9,6 +10,7 @@ from psycopg.types.json import Jsonb
 
 from alphadb.config import settings_from_env
 from alphadb.markets.spec import kxbtc15m_spec
+from alphadb.state.migrations import Migration
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -49,6 +51,38 @@ def test_migrations_are_idempotent_and_create_complete_tracer_run() -> None:
     assert counts.decisions >= 1
     assert counts.risk_decisions >= 1
     assert counts.order_intents >= 1
+
+
+def test_apply_migrations_skips_already_recorded_versions(monkeypatch) -> None:
+    repository = repository_or_skip()
+    repository.apply_migrations()
+    marker = f"9999_test_skip_applied_{uuid4().hex}"
+
+    with repository.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "insert into schema_migrations (version) values (%s)",
+                (marker,),
+            )
+        connection.commit()
+
+    try:
+        monkeypatch.setattr(
+            "alphadb.state.repository.MIGRATIONS",
+            (
+                Migration(
+                    version=marker,
+                    statements=("select alphadb_missing_migration_function()",),
+                ),
+            ),
+        )
+
+        assert repository.apply_migrations() == []
+    finally:
+        with repository.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("delete from schema_migrations where version = %s", (marker,))
+            connection.commit()
 
 
 def test_decision_uniqueness_preserves_one_authoritative_outcome_per_run_instance() -> None:
