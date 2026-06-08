@@ -217,14 +217,18 @@ def test_live_payload_preserves_recent_attempt_edge_attribution() -> None:
 def test_cockpit_recent_attempts_table_renders_edge_diagnostics() -> None:
     source = Path("apps/dashboard/components/live/live-operations.tsx").read_text()
 
-    assert ">Edge</th>" in source
-    assert ">Min</th>" in source
-    assert ">Gap</th>" in source
+    assert "Activity Feed" in source
+    assert "ACTIVITY_FEED_LIMIT = 50" in source
+    assert 'label="Edge"' in source
+    assert 'label="Min"' in source
+    assert 'label="Gap"' in source
     assert "optionalPercent(attribution.edge)" in source
     assert "optionalPercent(attribution.min_edge)" in source
     assert "edgeGapText(attribution)" in source
     assert "short ${optionalPercent(shortfall)}" in source
-    assert "colSpan={8}" in source
+    assert "colSpan={9}" in source
+    assert "ResizableDraggablePanel" in source
+    assert "window.localStorage" in source
 
 
 def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:

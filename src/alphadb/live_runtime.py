@@ -27,6 +27,7 @@ MARKET_CONTEXT_SOURCES = (
     MARKET_CONTEXT_BRTI_PRIMARY,
     MARKET_CONTEXT_FIXTURE,
 )
+LIVE_STATUS_RECENT_ATTEMPT_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -809,7 +810,7 @@ def _recent_attempt_rows(
 ) -> list[dict[str, Any]]:
     rows = []
     snapshot = _mapping((config or {}).get("snapshot"))
-    for attempt in attempts[-10:]:
+    for attempt in attempts[-LIVE_STATUS_RECENT_ATTEMPT_LIMIT:]:
         reconciliation = _matching_reconciliation(attempt, reconciliation_rows)
         decision = _mapping(attempt.get("decision"))
         original_decision = _mapping(attempt.get("original_decision"))
