@@ -435,6 +435,10 @@ LIVE_RUNTIME_CONFIG = Migration(
             min_contract_price numeric not null default 0.25
                 check (min_contract_price >= 0 and min_contract_price <= 1),
             max_markets integer not null check (max_markets >= 1),
+            market_context_source text not null default 'coinbase_primary'
+                check (
+                    market_context_source in ('coinbase_primary', 'brti_primary', 'fixture')
+                ),
             snapshot jsonb not null default '{}'::jsonb,
             created_by text not null default 'dashboard',
             created_at timestamptz not null default now(),
@@ -792,6 +796,26 @@ BRTI_LATEST_CONTEXT = Migration(
 )
 
 
+LIVE_RUNTIME_MARKET_CONTEXT_SOURCE = Migration(
+    version="0017_live_runtime_market_context_source",
+    statements=(
+        """
+        alter table live_runtime_configs
+        add column if not exists market_context_source text not null default 'coinbase_primary'
+            check (
+                market_context_source in ('coinbase_primary', 'brti_primary', 'fixture')
+            )
+        """,
+        """
+        update live_runtime_configs
+        set snapshot = coalesce(snapshot, '{}'::jsonb)
+            || jsonb_build_object('market_context_source', market_context_source)
+        where not (coalesce(snapshot, '{}'::jsonb) ? 'market_context_source')
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -809,4 +833,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     LIVE_RISK_ADMISSION_BLOCKED_STATUS,
     LIVE_ORDER_ATTEMPT_REFRESH_EVIDENCE,
     BRTI_LATEST_CONTEXT,
+    LIVE_RUNTIME_MARKET_CONTEXT_SOURCE,
 )

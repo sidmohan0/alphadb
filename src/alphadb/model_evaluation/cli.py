@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from alphadb.config import settings_from_env
-from alphadb.live_runtime import EXPENSIVE_YES_LIVE_STRATEGY
+from alphadb.live_runtime import EXPENSIVE_YES_LIVE_STRATEGY, MARKET_CONTEXT_SOURCES
 from alphadb.model_evaluation.artifacts import audit_model_artifacts
 from alphadb.model_evaluation.edge import (
     build_edge_verdict_report,
@@ -237,6 +237,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("fixture", "coinbase-live"),
         default="fixture",
     )
+    fair_collect.add_argument(
+        "--market-context-source",
+        choices=MARKET_CONTEXT_SOURCES,
+        default="coinbase_primary",
+    )
     fair_collect.add_argument("--max-markets", type=int, default=5)
     fair_collect.add_argument("--run-id", default=None)
     fair_collect.add_argument("--output", default=None)
@@ -251,6 +256,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--coinbase-source",
         choices=("fixture", "coinbase-live"),
         default="fixture",
+    )
+    fair_live.add_argument(
+        "--market-context-source",
+        choices=MARKET_CONTEXT_SOURCES,
+        default="coinbase_primary",
     )
     fair_live.add_argument("--max-markets", type=int, default=20)
     fair_live.add_argument("--min-edge", type=float, default=0.0)
@@ -460,6 +470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     run_id=args.run_id,
                     source_mode=args.source,
                     coinbase_source_mode=args.coinbase_source,
+                    market_context_source=args.market_context_source,
                 ),
             )
             .collect()
@@ -472,6 +483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_root=Path(args.output_root),
                 source=args.source,
                 coinbase_source=args.coinbase_source,
+                market_context_source=args.market_context_source,
                 max_markets=args.max_markets,
                 min_edge=args.min_edge,
                 min_contract_price=args.min_contract_price,

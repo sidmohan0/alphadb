@@ -27,9 +27,12 @@ from alphadb.live_orders import (
 from alphadb.live_runtime import (
     EXPENSIVE_YES_LIVE_STRATEGY,
     FAIR_VALUE_LIVE_STRATEGY,
+    MARKET_CONTEXT_BRTI_PRIMARY,
+    MARKET_CONTEXT_COINBASE_PRIMARY,
     LiveRunStatusRepository,
     LiveRuntimeConfigRepository,
     build_fair_value_live_status,
+    validate_market_context_source,
 )
 from alphadb.live_edge_attribution import build_live_edge_attribution
 from alphadb.live_risk import (
@@ -78,6 +81,7 @@ class FairValueLiveTradingJobConfig:
     decision_policy: LiveDecisionPolicy = "fair_value"
     source: str = "fixture"
     coinbase_source: str = "fixture"
+    market_context_source: str = MARKET_CONTEXT_COINBASE_PRIMARY
     max_markets: int = 20
     min_edge: float = 0.0
     min_contract_price: float = 0.25
@@ -106,6 +110,7 @@ class FairValueLiveTradingJobConfig:
             "decision_policy": self.decision_policy,
             "source": self.source,
             "coinbase_source": self.coinbase_source,
+            "market_context_source": self.market_context_source,
             "max_markets": self.max_markets,
             "min_edge": self.min_edge,
             "min_contract_price": self.min_contract_price,
@@ -140,6 +145,7 @@ class FairValueLiveTradingJob:
         order_client: KalshiLiveOrderClient | None = None,
     ):
         self.config = config
+        validate_market_context_source(config.market_context_source)
         self._settings = settings
         self.order_client = order_client or HttpKalshiLiveOrderClient()
 
@@ -234,6 +240,7 @@ class FairValueLiveTradingJob:
                         run_id=run_id,
                         source_mode=self.config.source,
                         coinbase_source_mode=self.config.coinbase_source,
+                        market_context_source=self.config.market_context_source,
                         include_coinbase_features=self.config.decision_policy == "fair_value",
                         include_fair_value_score=self.config.decision_policy == "fair_value",
                     ),
@@ -259,7 +266,11 @@ class FairValueLiveTradingJob:
                             generated_at=generated_at,
                             quote_stale_seconds=self.config.quote_stale_seconds,
                             coinbase_feature_stale_seconds=self.config.coinbase_feature_stale_seconds,
-                            require_coinbase_freshness=self.config.decision_policy == "fair_value",
+                            require_coinbase_freshness=(
+                                self.config.decision_policy == "fair_value"
+                                and self.config.market_context_source
+                                != MARKET_CONTEXT_BRTI_PRIMARY
+                            ),
                         ),
                         row,
                     )
@@ -483,6 +494,7 @@ class FairValueLiveTradingJob:
             "quote_seen_at": freshness.get("quote_seen_at"),
             "quote_age_seconds": freshness.get("quote_age_seconds"),
             "freshness": freshness,
+            "market_context_source": self.config.market_context_source,
             "runtime_guard": dict(runtime_guard),
             "live_run_lock": live_run_lock.as_dict(),
             "attempt_index": 0,
@@ -732,6 +744,7 @@ class FairValueLiveTradingJob:
             "max_daily_loss_dollars": self.config.max_daily_loss_dollars,
             "min_edge": self.config.min_edge,
             "min_contract_price": self.config.min_contract_price,
+            "market_context_source": self.config.market_context_source,
             "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
             "daily_loss_accounting": dict(daily_loss_accounting),
             "runtime_guard": dict(runtime_guard),
@@ -812,6 +825,11 @@ class FairValueLiveTradingJob:
                 "max_quote_age_seconds": latest_attempt.get("quote_age_seconds"),
                 "freshness": dict(latest_freshness),
             },
+            "market_context": live_market_context_evidence(
+                selected_row,
+                config=self.config.as_dict(),
+                freshness=latest_freshness,
+            ),
             "live_edge_attribution": latest_attribution,
             "live_risk_admission_state": {
                 "status": daily_loss_accounting.get("risk_state_status"),
@@ -1133,6 +1151,7 @@ def runtime_config_snapshot(config: FairValueLiveTradingJobConfig) -> dict[str, 
             "min_edge": config.min_edge,
             "min_contract_price": config.min_contract_price,
             "max_markets": config.max_markets,
+            "market_context_source": config.market_context_source,
         },
     }
 
@@ -1240,6 +1259,52 @@ def live_attempt_with_edge_attribution(
         timing=timing,
     )
     return payload
+
+
+def live_market_context_evidence(
+    row: Mapping[str, Any] | None,
+    *,
+    config: Mapping[str, Any],
+    freshness: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_row = as_mapping(row)
+    source = (
+        source_row.get("market_context_source")
+        or config.get("market_context_source")
+        or MARKET_CONTEXT_COINBASE_PRIMARY
+    )
+    return {
+        "market_context_source": source,
+        "market_context_status": source_row.get("market_context_status"),
+        "external_close_source": source_row.get("external_close_source"),
+        "external_close_from_brti": (
+            source_row.get("external_close_source") == "brti_latest_context"
+        ),
+        "external_close": source_row.get("external_close"),
+        "brti": {
+            "index_id": source_row.get("brti_index_id"),
+            "context_status": source_row.get("brti_context_status"),
+            "context_reason": source_row.get("brti_context_reason"),
+            "source_timestamp": source_row.get("brti_source_timestamp"),
+            "received_at": source_row.get("brti_received_at"),
+            "context_age_seconds": source_row.get("brti_context_age_seconds"),
+            "freshness_limit_seconds": source_row.get("brti_freshness_limit_seconds"),
+            "source_lag_ms": source_row.get("brti_source_lag_ms"),
+            "raw_event_id": source_row.get("brti_raw_event_id"),
+            "payload_hash": source_row.get("brti_payload_hash"),
+        },
+        "coinbase_diagnostics": {
+            "status": source_row.get("coinbase_diagnostic_status"),
+            "product_id": source_row.get("coinbase_product_id"),
+            "max_source_event_timestamp": source_row.get(
+                "coinbase_max_source_event_timestamp"
+            ),
+            "source_lag_ms": source_row.get("coinbase_source_lag_ms"),
+            "basis_dollars": source_row.get("brti_coinbase_basis_dollars"),
+            "basis_pct": source_row.get("brti_coinbase_basis_pct"),
+        },
+        "freshness": dict(freshness),
+    }
 
 
 def select_live_decision_pairs(
@@ -1444,13 +1509,18 @@ def live_decision_freshness(
         return {
             "quote_seen_at": None,
             "quote_age_seconds": None,
+            "market_context_source": None,
+            "external_close_source": None,
             "coinbase_max_source_event_timestamp": None,
             "coinbase_feature_age_seconds": None,
+            "brti_source_timestamp": None,
+            "brti_context_age_seconds": None,
         }
     quote_seen_at = parse_datetime(
         row.get("quote_observed_at") or row.get("kalshi_received_at") or row.get("decision_timestamp")
     )
     coinbase_seen_at = parse_datetime(row.get("coinbase_max_source_event_timestamp"))
+    brti_seen_at = parse_datetime(row.get("brti_source_timestamp"))
     quote_age = (
         max(0.0, (generated_at - quote_seen_at).total_seconds())
         if quote_seen_at is not None
@@ -1463,15 +1533,24 @@ def live_decision_freshness(
     )
     if coinbase_age is None and row.get("coinbase_source_lag_ms") is not None:
         coinbase_age = max(0.0, float(row.get("coinbase_source_lag_ms") or 0.0) / 1000.0)
+    brti_age = (
+        max(0.0, (generated_at - brti_seen_at).total_seconds())
+        if brti_seen_at is not None
+        else optional_float(row.get("brti_context_age_seconds"))
+    )
     return {
         "quote_seen_at": quote_seen_at.isoformat() if quote_seen_at else None,
         "quote_age_seconds": round(quote_age, 6) if quote_age is not None else None,
+        "market_context_source": row.get("market_context_source"),
+        "external_close_source": row.get("external_close_source"),
         "coinbase_max_source_event_timestamp": coinbase_seen_at.isoformat()
         if coinbase_seen_at
         else None,
         "coinbase_feature_age_seconds": round(coinbase_age, 6)
         if coinbase_age is not None
         else None,
+        "brti_source_timestamp": brti_seen_at.isoformat() if brti_seen_at else None,
+        "brti_context_age_seconds": round(brti_age, 6) if brti_age is not None else None,
     }
 
 
@@ -2507,6 +2586,7 @@ def resolve_live_runtime_config(
                 "min_edge": config.min_edge,
                 "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
+                "market_context_source": config.market_context_source,
             },
         }
     if source == "cli":
@@ -2524,6 +2604,7 @@ def resolve_live_runtime_config(
                 "min_edge": config.min_edge,
                 "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
+                "market_context_source": config.market_context_source,
             },
         }
     try:
@@ -2548,6 +2629,7 @@ def resolve_live_runtime_config(
                 "min_edge": config.min_edge,
                 "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
+                "market_context_source": config.market_context_source,
             },
         }
     dashboard_config = revision.config
@@ -2556,6 +2638,7 @@ def resolve_live_runtime_config(
         max_markets=dashboard_config.max_markets,
         min_edge=dashboard_config.min_edge,
         min_contract_price=dashboard_config.min_contract_price,
+        market_context_source=dashboard_config.market_context_source,
         max_order_dollars=dashboard_config.max_order_dollars,
         max_ticker_exposure_dollars=dashboard_config.max_market_exposure_dollars,
         max_daily_loss_dollars=dashboard_config.max_daily_loss_dollars,

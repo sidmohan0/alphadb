@@ -11,6 +11,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from alphadb.collectors.brti import BRTI_INDEX_ID, BRTILiveCollector, fixture_brti_frame
 from alphadb.collectors.coinbase import FixtureCoinbaseClient
 from alphadb.collectors.kalshi_rest import FixtureKalshiRestClient
 from alphadb.model_evaluation.fair_value_live import (
@@ -43,6 +44,7 @@ from alphadb.live_runtime import (
     LiveRunStatusRepository,
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
+    MARKET_CONTEXT_BRTI_PRIMARY,
     build_fair_value_live_status,
 )
 from alphadb.live_risk import LiveRiskAdmissionRepository
@@ -279,6 +281,152 @@ def test_live_fair_value_collector_outputs_decision_rows_without_orders() -> Non
     assert row["quote_observed_at"] == now.isoformat()
     assert row["market_metadata_updated_at"] == (now - timedelta(minutes=5)).isoformat()
     assert row["market_list_yes_ask"] == 0.40
+
+
+def test_live_fair_value_collector_uses_fresh_brti_primary_context() -> None:
+    live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-BRTI"
+    delete_brti_latest_context(database_url)
+    try:
+        BRTILiveCollector(database_url=database_url).ingest_frames(
+            [
+                fixture_brti_frame(
+                    source_timestamp=now - timedelta(seconds=1),
+                    received_at=now,
+                    value="101.25",
+                )
+            ]
+        )
+
+        payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=fair_value_kalshi_fixture(now=now, ticker=ticker),
+                coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+                settings=settings_from_env(),
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=1,
+                    market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+                ),
+            )
+            .collect(now=now)
+            .as_dict()
+        )
+
+        row = payload["rows"][0]
+        assert payload["counts"]["decisions"] == 1
+        assert row["market_context_source"] == MARKET_CONTEXT_BRTI_PRIMARY
+        assert row["market_context_status"] == "usable"
+        assert row["external_close"] == 101.25
+        assert row["external_close_source"] == "brti_latest_context"
+        assert row["external_log_return_1_source"] == "brti_phase1_zero_momentum"
+        assert row["external_realized_vol_5_source"] == "brti_phase1_volatility_floor"
+        assert row["brti_context_status"] == "usable"
+        assert row["brti_raw_event_id"]
+        assert row["coinbase_diagnostic_status"] == "available"
+        assert row["coinbase_diagnostic_external_close"] == 101.0
+        assert row["brti_coinbase_basis_dollars"] == 0.25
+        assert row["fair_value_status"] == "complete"
+        assert row["p_yes"] > 0.5
+    finally:
+        delete_brti_latest_context(database_url)
+
+
+def test_live_fair_value_collector_skips_missing_and_stale_brti_context() -> None:
+    live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-BRTI-SKIP"
+    delete_brti_latest_context(database_url)
+    try:
+        missing_payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=fair_value_kalshi_fixture(now=now, ticker=ticker),
+                coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+                settings=settings_from_env(),
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=1,
+                    market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+                ),
+            )
+            .collect(now=now)
+            .as_dict()
+        )
+        assert missing_payload["rows"][0]["skip_reason"] == "brti_context_missing"
+        assert missing_payload["rows"][0]["brti_context_status"] == "missing"
+
+        BRTILiveCollector(database_url=database_url).ingest_frames(
+            [
+                fixture_brti_frame(
+                    source_timestamp=now - timedelta(seconds=30),
+                    received_at=now - timedelta(seconds=29),
+                    value="101.25",
+                )
+            ]
+        )
+        stale_payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=fair_value_kalshi_fixture(now=now, ticker=ticker),
+                coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+                settings=settings_from_env(),
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=1,
+                    market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+                ),
+            )
+            .collect(now=now)
+            .as_dict()
+        )
+        assert stale_payload["rows"][0]["skip_reason"] == "brti_context_stale"
+        assert stale_payload["rows"][0]["brti_context_status"] == "stale"
+    finally:
+        delete_brti_latest_context(database_url)
+
+
+def test_brti_primary_coinbase_diagnostic_failure_does_not_block_decision() -> None:
+    class FailingCoinbaseClient:
+        def get_candles(self, *, product_id, start, end, granularity_seconds):
+            raise RuntimeError("coinbase unavailable")
+
+    live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-BRTI-COINBASE-DOWN"
+    delete_brti_latest_context(database_url)
+    try:
+        BRTILiveCollector(database_url=database_url).ingest_frames(
+            [
+                fixture_brti_frame(
+                    source_timestamp=now - timedelta(seconds=1),
+                    received_at=now,
+                    value="101.25",
+                )
+            ]
+        )
+
+        payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=fair_value_kalshi_fixture(now=now, ticker=ticker),
+                coinbase_client=FailingCoinbaseClient(),
+                settings=settings_from_env(),
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=1,
+                    market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+                ),
+            )
+            .collect(now=now)
+            .as_dict()
+        )
+
+        row = payload["rows"][0]
+        assert payload["counts"]["decisions"] == 1
+        assert row["external_close_source"] == "brti_latest_context"
+        assert row["coinbase_diagnostic_status"] == "unavailable"
+        assert row["coinbase_diagnostic_error_type"] == "RuntimeError"
+        assert row["fair_value_status"] == "complete"
+    finally:
+        delete_brti_latest_context(database_url)
 
 
 def test_live_fair_value_collector_records_skip_reasons() -> None:
@@ -1536,6 +1684,68 @@ def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(
         repository.save_config(DEFAULT_FAIR_VALUE_LIVE_CONFIG)
 
 
+def test_live_trading_job_uses_dashboard_brti_market_context_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-DB-BRTI"
+    delete_brti_latest_context(database_url)
+    repository.save_config(
+        LiveRuntimeConfig(
+            max_order_dollars=5.0,
+            max_market_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            min_edge=0.0,
+            max_markets=1,
+            min_contract_price=0.25,
+            market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+        )
+    )
+    try:
+        install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+        BRTILiveCollector(database_url=database_url).ingest_frames(
+            [
+                fixture_brti_frame(
+                    source_timestamp=now - timedelta(seconds=1),
+                    received_at=now,
+                    value="101.25",
+                )
+            ]
+        )
+
+        manifest = FairValueLiveTradingJob(
+            config=FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                source="kalshi-public",
+                coinbase_source="coinbase-live",
+                submit_live_orders=False,
+                runtime_config_source="postgres",
+                quote_stale_seconds=120,
+                coinbase_feature_stale_seconds=0,
+            ),
+            settings=live_enabled_settings(),
+            order_client=SequencedOrderClient([]),
+        ).run(now=now)
+
+        assert manifest["config"]["market_context_source"] == MARKET_CONTEXT_BRTI_PRIMARY
+        assert manifest["runtime_config"]["snapshot"]["market_context_source"] == (
+            MARKET_CONTEXT_BRTI_PRIMARY
+        )
+        assert manifest["runtime_controls"]["market_context_source"] == (
+            MARKET_CONTEXT_BRTI_PRIMARY
+        )
+        assert manifest["selected_row"]["external_close_source"] == "brti_latest_context"
+        assert manifest["market_context"]["external_close_from_brti"] is True
+        assert manifest["market_context"]["coinbase_diagnostics"]["status"] == "available"
+        assert manifest["executable_quote"]["freshness"]["brti_context_age_seconds"] == 1.0
+    finally:
+        repository.save_config(DEFAULT_FAIR_VALUE_LIVE_CONFIG)
+        delete_brti_latest_context(database_url)
+
+
 def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
     tmp_path: Path,
     monkeypatch,
@@ -1625,6 +1835,34 @@ def fixture_candles(now: datetime) -> list[list[float]]:
         [base + 60, 100.0, 101.0, 100.0, 100.7, 1.2],
         [base + 120, 100.5, 101.5, 100.7, 101.0, 1.1],
     ]
+
+
+def fair_value_kalshi_fixture(*, now: datetime, ticker: str) -> FixtureKalshiRestClient:
+    return FixtureKalshiRestClient(
+        markets=[
+            {
+                "ticker": ticker,
+                "series_ticker": "KXBTC15M",
+                "event_ticker": f"{ticker}-EVENT",
+                "status": "open",
+                "open_time": (now - timedelta(minutes=10)).isoformat(),
+                "close_time": (now + timedelta(minutes=5)).isoformat(),
+                "updated_time": (now - timedelta(seconds=1)).isoformat(),
+                "title": "Bitcoin above $100?",
+                "payout_threshold": "100.00",
+                "yes_ask_dollars": "0.40",
+                "no_ask_dollars": "0.60",
+            }
+        ],
+        orderbooks={
+            ticker: {
+                "orderbook_fp": {
+                    "yes_dollars": [["0.39", "10"]],
+                    "no_dollars": [["0.59", "10"]],
+                }
+            }
+        },
+    )
 
 
 def sample_private_key_pem() -> str:
@@ -1778,6 +2016,17 @@ def live_runtime_repository_or_skip() -> LiveRuntimeConfigRepository:
         pytest.skip(f"Postgres is not available: {exc}")
     repository.apply_migrations()
     return LiveRuntimeConfigRepository(database_url)
+
+
+def delete_brti_latest_context(database_url: str) -> None:
+    OperationalStateRepository(database_url).apply_migrations()
+    with psycopg.connect(database_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "delete from brti_latest_contexts where index_id = %s",
+                (BRTI_INDEX_ID,),
+            )
+        connection.commit()
 
 
 def live_risk_repository_or_skip() -> LiveRiskAdmissionRepository:

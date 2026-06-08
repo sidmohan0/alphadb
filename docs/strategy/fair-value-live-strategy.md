@@ -15,7 +15,17 @@ Latest checked live runtime state: paused after the overlapping-worker incident.
 
 ## Strategy In One Sentence
 
-Every minute, price the current BTC 15-minute Kalshi market from live Coinbase BTC movement, compare that fair value to executable Kalshi YES/NO asks after taker fees, and submit a small IOC order only when the best side has positive edge.
+Every minute, price the current BTC 15-minute Kalshi market from the configured market context source, compare that fair value to executable Kalshi YES/NO asks after taker fees, and submit a small IOC order only when the best side has positive edge.
+
+## Market Context Source
+
+The dashboard-owned runtime config now carries `market_context_source`:
+
+- `coinbase_primary`: Coinbase BTC features supply the model external BTC price and freshness gate.
+- `brti_primary`: fresh BRTI latest context supplies `external_close`; missing, stale, invalid, wrong-index, or future-timestamp BRTI context skips cleanly with no implicit Coinbase fallback.
+- `fixture`: fixture-backed context for local smoke runs.
+
+Phase 1 BRTI mode intentionally keeps Coinbase diagnostic-only. When Coinbase is available, manifests can report Coinbase freshness and BRTI-vs-Coinbase basis; when Coinbase is unavailable, a fresh BRTI decision can still score. The BRTI Phase 1 model path uses the BRTI current value for `external_close`, zero momentum, and the configured volatility floor.
 
 ## Fair-Value Formula
 
@@ -23,11 +33,11 @@ The live MVP uses `kxbtc15m.threshold_volatility_fair_value.v1`.
 
 Inputs:
 
-- `price`: latest observable Coinbase BTC close at or before decision time.
+- `price`: current BTC value from the configured market context source.
 - `threshold`: Kalshi market payout threshold/strike.
 - `time_to_close`: seconds until market close, clamped from 1 second to 15 minutes.
-- `volatility`: recent Coinbase realized volatility, floored at `0.0005`.
-- `momentum`: recent Coinbase BTC momentum.
+- `volatility`: recent source volatility when available, floored at `0.0005`; BRTI Phase 1 uses the floor.
+- `momentum`: recent source momentum when available; BRTI Phase 1 uses zero momentum.
 
 Formula:
 
@@ -62,7 +72,7 @@ config.
 
 Order sizing is configured by the dashboard-owned runtime config and admitted by
 compact Live risk admission state in Operational State. Each run manifest
-records config id, version, full non-secret snapshot, quote freshness, risk
+records config id, version, full non-secret snapshot, market context evidence, quote freshness, risk
 admission result, and phase timings. The seeded canary defaults are:
 
 - Max order dollars: `$5`.
@@ -71,6 +81,8 @@ admission result, and phase timings. The seeded canary defaults are:
 - Min edge: `0.0`.
 - Min contract price: `$0.25`.
 - Max markets: `20`.
+- Market context source: `coinbase_primary` by default; switch to `brti_primary`
+  only after the live BRTI collector is producing fresh latest context.
 - Execution style: taker-only IOC.
 - No-fill attempts release pending exposure.
 - Filled/partially filled attempts convert pending exposure into open exposure.
@@ -88,9 +100,9 @@ flowchart TD
     A["Every minute AWS trigger"] --> B{"Acquire live-decision lock"}
     B -- "Held" --> C["Skip: live_run_lock_held; write compact evidence"]
     B -- "Acquired" --> D["Read active dashboard config from Postgres"]
-    D --> E["Fetch current KXBTC15M market quotes and Coinbase context"]
-    E --> F{"Fresh quote and Coinbase context?"}
-    F -- "No" --> G["Skip: quote_stale or coinbase_context_stale"]
+    D --> E["Fetch current KXBTC15M market quotes and configured market context"]
+    E --> F{"Fresh quote and primary context?"}
+    F -- "No" --> G["Skip: quote_stale, coinbase_context_stale, or brti_context_*"]
     F -- "Yes" --> H["Compute one fair-value decision"]
     H --> I{"Selected price >= min_contract_price?"}
     I -- "No" --> J["Skip: price_below_min_contract"]
