@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { apiGet, apiPost } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -363,6 +363,12 @@ function reorderPanels(
   return next
 }
 
+function isInteractiveDragTarget(target: EventTarget | null) {
+  return target instanceof Element
+    ? Boolean(target.closest("button,input,select,textarea,a,[role='button'],[data-no-panel-drag='true']"))
+    : false
+}
+
 function configFormFrom(config?: Record<string, unknown>): ConfigFormValues {
   const values = CONFIG_FIELDS.reduce((current, field) => {
     current[field.key] = text(config?.[field.key], "")
@@ -425,6 +431,7 @@ export function LiveOperations() {
   const panelElements = useRef(new Map<PanelId, HTMLDivElement>())
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const layoutLoadedRef = useRef(false)
+  const dragCleanupRef = useRef<(() => void) | null>(null)
   const layoutStorageKey = `alphadb.liveOperations.homeLayout.v${PANEL_LAYOUT_VERSION}.${selectedStrategy}`
 
   const load = useCallback(async () => {
@@ -485,6 +492,10 @@ export function LiveOperations() {
   useEffect(() => {
     layoutLoadedRef.current = layoutLoaded
   }, [layoutLoaded])
+
+  useEffect(() => () => {
+    dragCleanupRef.current?.()
+  }, [])
 
   useEffect(() => {
     if (!layoutLoaded) return
@@ -552,8 +563,44 @@ export function LiveOperations() {
     setExpandedAttempts({})
   }
 
-  const movePanel = (draggedId: PanelId, targetId: PanelId) => {
-    setPanelLayout((current) => reorderPanels(current, draggedId, targetId))
+  const beginPanelDrag = (event: ReactMouseEvent<HTMLElement>, id: PanelId) => {
+    if (event.button !== 0) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const explicitHandle = event.currentTarget instanceof HTMLElement && event.currentTarget.dataset.panelDragHandle
+    const inResizeCorner = !explicitHandle && event.clientX >= rect.right - 28 && event.clientY >= rect.bottom - 28
+    if (inResizeCorner) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragCleanupRef.current?.()
+    setDraggingPanelId(id)
+
+    const originalCursor = document.body.style.cursor
+    const originalUserSelect = document.body.style.userSelect
+    document.body.style.cursor = "grabbing"
+    document.body.style.userSelect = "none"
+
+    const handleMouseMove = (mouseEvent: MouseEvent) => {
+      const target = document
+        .elementFromPoint(mouseEvent.clientX, mouseEvent.clientY)
+        ?.closest("[data-panel-id]")
+      const targetId = target?.getAttribute("data-panel-id")
+      if (isPanelId(targetId)) {
+        setPanelLayout((current) => reorderPanels(current, id, targetId))
+      }
+    }
+
+    const cleanup = () => {
+      window.removeEventListener("mousemove", handleMouseMove)
+      window.removeEventListener("mouseup", cleanup)
+      document.body.style.cursor = originalCursor
+      document.body.style.userSelect = originalUserSelect
+      dragCleanupRef.current = null
+      setDraggingPanelId(null)
+    }
+
+    dragCleanupRef.current = cleanup
+    window.addEventListener("mousemove", handleMouseMove)
+    window.addEventListener("mouseup", cleanup, { once: true })
   }
 
   const toggleAttempt = (key: string) => {
@@ -849,9 +896,7 @@ export function LiveOperations() {
             draggingPanelId={draggingPanelId}
             item={item}
             key={item.id}
-            onDragEnd={() => setDraggingPanelId(null)}
-            onDragStart={(id) => setDraggingPanelId(id)}
-            onDropPanel={movePanel}
+            onDragStart={beginPanelDrag}
             registerPanelElement={registerPanelElement}
           >
             {panelContent[item.id]}
@@ -866,34 +911,24 @@ function ResizableDraggablePanel({
   children,
   draggingPanelId,
   item,
-  onDragEnd,
   onDragStart,
-  onDropPanel,
   registerPanelElement,
 }: {
   children: ReactNode
   draggingPanelId: PanelId | null
   item: PanelLayoutItem
-  onDragEnd: () => void
-  onDragStart: (id: PanelId) => void
-  onDropPanel: (draggedId: PanelId, targetId: PanelId) => void
+  onDragStart: (event: ReactMouseEvent<HTMLElement>, id: PanelId) => void
   registerPanelElement: (id: PanelId) => (node: HTMLDivElement | null) => void
 }) {
   const definition = PANEL_DEFINITIONS[item.id]
   const dragging = draggingPanelId === item.id
   return (
     <div
-      className={`relative rounded-lg ${dragging ? "opacity-70" : ""}`}
+      className={`relative cursor-grab rounded-lg transition active:cursor-grabbing ${dragging ? "scale-[0.99] opacity-70 ring-2 ring-ring/50" : ""}`}
       data-panel-id={item.id}
-      onDragOver={(event) => {
-        if (!draggingPanelId || draggingPanelId === item.id) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = "move"
-      }}
-      onDrop={(event) => {
-        event.preventDefault()
-        const draggedId = event.dataTransfer.getData("text/plain")
-        if (isPanelId(draggedId)) onDropPanel(draggedId, item.id)
+      onMouseDown={(event) => {
+        if (isInteractiveDragTarget(event.target)) return
+        onDragStart(event, item.id)
       }}
       ref={registerPanelElement(item.id)}
       style={{
@@ -909,18 +944,13 @@ function ResizableDraggablePanel({
     >
       <button
         aria-label={`Move ${definition.label} panel`}
-        className="absolute right-2 top-2 z-10 inline-flex size-6 cursor-grab items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground shadow-sm transition hover:text-foreground active:cursor-grabbing"
-        draggable
-        onDragEnd={onDragEnd}
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = "move"
-          event.dataTransfer.setData("text/plain", item.id)
-          onDragStart(item.id)
-        }}
+        className="absolute right-2 top-2 z-10 inline-flex size-8 touch-none cursor-grab items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm transition hover:border-ring/60 hover:text-foreground active:cursor-grabbing"
+        data-panel-drag-handle={item.id}
+        onMouseDown={(event) => onDragStart(event, item.id)}
         title={`Drag ${definition.label}`}
         type="button"
       >
-        <GripVertical className="h-3.5 w-3.5" aria-hidden="true" />
+        <GripVertical className="h-4 w-4" aria-hidden="true" />
       </button>
       <div className="h-full min-h-0">{children}</div>
     </div>
