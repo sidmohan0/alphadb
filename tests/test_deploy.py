@@ -540,6 +540,156 @@ def test_fair_value_live_smoke_validator_requires_runtime_gate_evidence(tmp_path
         assert expected in bad.stderr
 
 
+def test_brti_live_collector_aws_template_runs_separate_restartable_worker() -> None:
+    template = Path("deploy/aws/brti-live-collector.yaml").read_text(encoding="utf-8")
+    deploy_script = Path("deploy/aws/deploy-brti-live-collector.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "alphadb-brti-live-collector" in template
+    assert "AWS::ECS::Service" in template
+    assert "DesiredCount" in template
+    assert "alphadb-brti" in template
+    assert "live-collect" in template
+    assert "ALPHADB_ENABLE_LIVE_WS_SMOKE" in template
+    assert "ALPHADB_KALSHI_WS_URL" in template
+    assert "DATABASE_URL" in template
+    assert "KALSHI_API_KEY_ID" in template
+    assert "KALSHI_PRIVATE_KEY_PEM" in template
+    assert "secretsmanager:GetSecretValue" in template
+    assert "/ecs/${ServiceName}" in template
+    assert "ALPHADB_ENABLE_LIVE_ORDERS" not in template
+    assert "ALPHADB_HUMAN_CUTOVER_APPROVED" not in template
+    assert "ecs wait services-stable" in deploy_script
+
+
+def test_brti_primary_live_smoke_validator_requires_foundation_evidence(
+    tmp_path: Path,
+) -> None:
+    script = Path("scripts/validate-brti-primary-live-smoke.py")
+    passing_payload = {
+        "collector_service": {
+            "desired_count": 1,
+            "running_count": 1,
+            "log_group": "/ecs/alphadb-brti-live-collector",
+            "restart_behavior": "ecs_service_desired_count",
+        },
+        "collector": {
+            "summary": {
+                "accepted": 1,
+                "raw_events_inserted": 1,
+                "latest_context_updates": 1,
+            },
+            "latest_context": {
+                "status": "usable",
+                "age_seconds": 1.2,
+                "freshness_limit_seconds": 5,
+            },
+        },
+        "database_url_secret_match": True,
+        "fair_value_cycle": {
+            "task_definition_one_cycle": True,
+            "manifest_uri": "s3://alphadb-artifacts/fair-value-live/run/manifest.json",
+            "status_evidence_uri": "s3://alphadb-artifacts/fair-value-live/run/status.json",
+            "manifest": {
+                "config": {"market_context_source": "brti_primary"},
+                "runtime_config": {
+                    "snapshot": {"market_context_source": "brti_primary"},
+                },
+                "runtime_controls": {"market_context_source": "brti_primary"},
+                "market_context": {
+                    "market_context_source": "brti_primary",
+                    "external_close_from_brti": True,
+                },
+                "selected_row": {
+                    "market_context_source": "brti_primary",
+                    "external_close_source": "brti_latest_context",
+                },
+            },
+        },
+        "runtime_guard": {
+            "credentials_present": True,
+            "can_submit_live_orders": True,
+        },
+        "live_order_guards_preserved": True,
+        "fair_value_schedule_state_before": "DISABLED",
+        "fair_value_schedule_state_after": "DISABLED",
+        "expensive_yes_schedule_state_before": "ENABLED",
+        "expensive_yes_schedule_state_after": "ENABLED",
+        "rollback": {
+            "market_context_source": "coinbase_primary",
+            "command": (
+                "alphadb-runtime set-market-context --source coinbase_primary "
+                "--created-by rollback-alp-258"
+            ),
+        },
+    }
+    passing = write_smoke_payload(tmp_path, "brti_passing", passing_payload)
+
+    ok = subprocess.run(
+        [sys.executable, str(script), str(passing)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert ok.returncode == 0
+
+    cases = {
+        "collector_insert": (
+            lambda payload: payload["collector"]["summary"].update(
+                {"raw_events_inserted": 0}
+            ),
+            "raw_events_inserted",
+        ),
+        "latest_stale": (
+            lambda payload: payload["collector"]["latest_context"].update(
+                {"age_seconds": 6}
+            ),
+            "freshness limit",
+        ),
+        "market_context": (
+            lambda payload: payload["fair_value_cycle"]["manifest"]["config"].update(
+                {"market_context_source": "coinbase_primary"}
+            ),
+            "market_context_source",
+        ),
+        "external_close": (
+            lambda payload: (
+                payload["fair_value_cycle"]["manifest"]["market_context"].update(
+                    {"external_close_from_brti": False}
+                ),
+                payload["fair_value_cycle"]["manifest"]["selected_row"].update(
+                    {"external_close_source": "coinbase_live"}
+                ),
+            ),
+            "materialize BRTI context",
+        ),
+        "schedule": (
+            lambda payload: payload.update({"fair_value_schedule_state_after": "ENABLED"}),
+            "schedule state",
+        ),
+        "rollback": (
+            lambda payload: payload["rollback"].update(
+                {"market_context_source": "brti_primary"}
+            ),
+            "rollback market_context_source",
+        ),
+    }
+    for name, (mutate, expected) in cases.items():
+        payload = deepcopy(passing_payload)
+        mutate(payload)
+        path = write_smoke_payload(tmp_path, f"brti_{name}", payload)
+        bad = subprocess.run(
+            [sys.executable, str(script), str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert bad.returncode == 1
+        assert expected in bad.stderr
+
+
 def write_smoke_payload(tmp_path: Path, name: str, payload: dict) -> Path:
     path = tmp_path / f"{name}.json"
     path.write_text(json.dumps(payload), encoding="utf-8")

@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AlphaDB live BRTI collector service for latest market context.
+
+Parameters:
+  ServiceName:
+    Type: String
+    Default: alphadb-brti-live-collector
+  ContainerImage:
+    Type: String
+    Description: ECR image URI for the AlphaDB container.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for Fargate tasks with internet egress.
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+  TaskCpu:
+    Type: String
+    Default: "512"
+  TaskMemory:
+    Type: String
+    Default: "1024"
+  IndexId:
+    Type: String
+    Default: BRTI
+  MaxReconnects:
+    Type: String
+    Default: "1000000"
+  KalshiWebSocketUrl:
+    Type: String
+    Default: wss://external-api-ws.kalshi.com/trade-api/ws/v2
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is DATABASE_URL for shared runtime config.
+  KalshiApiKeyIdSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is KALSHI_API_KEY_ID.
+  KalshiPrivateKeyPemSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is the Kalshi private key PEM.
+  AwsRegionValue:
+    Type: String
+    Default: us-east-2
+
+Resources:
+  CollectorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ServiceName}
+      RetentionInDays: 14
+
+  CollectorCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ServiceName
+
+  CollectorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AlphaDB BRTI collector tasks with egress only.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  CollectorExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadBRTICollectorSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseUrlSecretArn
+                  - !Ref KalshiApiKeyIdSecretArn
+                  - !Ref KalshiPrivateKeyPemSecretArn
+
+  CollectorTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  CollectorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ServiceName
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt CollectorExecutionRole.Arn
+      TaskRoleArn: !GetAtt CollectorTaskRole.Arn
+      ContainerDefinitions:
+        - Name: brti-live-collector
+          Image: !Ref ContainerImage
+          Essential: true
+          Command:
+            - alphadb-brti
+            - live-collect
+            - --index-id
+            - !Ref IndexId
+            - --max-reconnects
+            - !Ref MaxReconnects
+          Environment:
+            - Name: ALPHADB_ENV
+              Value: aws
+            - Name: AWS_REGION
+              Value: !Ref AwsRegionValue
+            - Name: ALPHADB_AWS_REGION
+              Value: !Ref AwsRegionValue
+            - Name: ALPHADB_KALSHI_WS_URL
+              Value: !Ref KalshiWebSocketUrl
+            - Name: ALPHADB_ENABLE_LIVE_WS_SMOKE
+              Value: "1"
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+            - Name: KALSHI_API_KEY_ID
+              ValueFrom: !Ref KalshiApiKeyIdSecretArn
+            - Name: KALSHI_PRIVATE_KEY_PEM
+              ValueFrom: !Ref KalshiPrivateKeyPemSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CollectorLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: brti-live-collector
+
+  CollectorService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref CollectorCluster
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      TaskDefinition: !Ref CollectorTaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 200
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: !Ref AssignPublicIp
+          SecurityGroups:
+            - !Ref CollectorSecurityGroup
+          Subnets: !Ref SubnetIds
+
+Outputs:
+  ClusterName:
+    Value: !Ref CollectorCluster
+  ServiceName:
+    Value: !Ref CollectorService
+  TaskDefinitionArn:
+    Value: !Ref CollectorTaskDefinition
+  DesiredCount:
+    Value: !Ref DesiredCount
+  LogGroupName:
+    Value: !Ref CollectorLogGroup

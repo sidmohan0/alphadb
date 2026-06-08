@@ -9,6 +9,12 @@ from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
 from alphadb.config import Settings, settings_from_env
+from alphadb.live_runtime import (
+    FAIR_VALUE_LIVE_STRATEGY,
+    LiveRuntimeConfig,
+    LiveRuntimeConfigRepository,
+    validate_market_context_source,
+)
 
 
 class RuntimeMode(StrEnum):
@@ -124,6 +130,67 @@ def runtime_status_rows(settings: Settings | None = None) -> list[dict[str, str 
     ]
 
 
+def live_config_status(
+    *,
+    settings: Settings | None = None,
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+) -> dict[str, Any]:
+    settings = settings or settings_from_env()
+    active = LiveRuntimeConfigRepository(settings.database_url).get_active_config(
+        strategy=strategy,
+    )
+    if active is None:
+        return {
+            "ok": False,
+            "detail": "no active live runtime config",
+            "strategy": strategy,
+        }
+    return {
+        "ok": True,
+        "detail": "active live runtime config is readable",
+        "strategy": strategy,
+        "active_config": active.as_dict(),
+        "manifest_snapshot": active.manifest_snapshot(),
+    }
+
+
+def set_market_context_source(
+    *,
+    source: str,
+    settings: Settings | None = None,
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+    created_by: str = "alphadb-runtime",
+) -> dict[str, Any]:
+    validate_market_context_source(source)
+    settings = settings or settings_from_env()
+    repository = LiveRuntimeConfigRepository(settings.database_url)
+    current = repository.seed_defaults(strategy=strategy, created_by=created_by)
+    next_config = LiveRuntimeConfig.from_payload(
+        {"market_context_source": source},
+        current=current.config,
+    )
+    if current.config.market_context_source == source:
+        return {
+            "ok": True,
+            "detail": "market_context_source already active",
+            "strategy": strategy,
+            "action": "unchanged",
+            "previous_config": current.as_dict(),
+            "active_config": current.as_dict(),
+            "manifest_snapshot": current.manifest_snapshot(),
+        }
+    saved = repository.save_config(next_config, strategy=strategy, created_by=created_by)
+    return {
+        "ok": True,
+        "detail": "market_context_source saved",
+        "strategy": strategy,
+        "action": "saved",
+        "previous_config": current.as_dict(),
+        "active_config": saved.as_dict(),
+        "manifest_snapshot": saved.manifest_snapshot(),
+    }
+
+
 def settings_with_overrides(settings: Settings, overrides: Mapping[str, Any]) -> Settings:
     values = {**settings.__dict__, **dict(overrides)}
     return Settings(**values)
@@ -133,6 +200,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphadb-runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status", help="Show runtime and live-order status")
+    live_config = subparsers.add_parser(
+        "live-config-status",
+        help="Show the active dashboard-owned live runtime config",
+    )
+    live_config.add_argument("--strategy", default=FAIR_VALUE_LIVE_STRATEGY)
+    market_context = subparsers.add_parser(
+        "set-market-context",
+        help="Save a new fair-value live runtime config with the selected market context",
+    )
+    market_context.add_argument("--source", required=True)
+    market_context.add_argument("--strategy", default=FAIR_VALUE_LIVE_STRATEGY)
+    market_context.add_argument("--created-by", default="alphadb-runtime")
     return parser
 
 
@@ -140,5 +219,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "status":
         print(json.dumps(evaluate_runtime_guard().as_dict(), indent=2, sort_keys=True))
+        return 0
+    if args.command == "live-config-status":
+        print(
+            json.dumps(
+                live_config_status(strategy=args.strategy),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if args.command == "set-market-context":
+        print(
+            json.dumps(
+                set_market_context_source(
+                    source=args.source,
+                    strategy=args.strategy,
+                    created_by=args.created_by,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
     raise AssertionError(f"unhandled command: {args.command}")

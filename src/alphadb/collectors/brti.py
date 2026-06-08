@@ -29,7 +29,11 @@ from alphadb.collectors.kalshi_ws import (
 )
 from alphadb.config import Settings, settings_from_env
 from alphadb.events.log import RawEventLog, RawEventRecord
-from alphadb.live_orders import load_private_key, sign_kalshi_request
+from alphadb.live_orders import (
+    load_private_key,
+    materialize_private_key_from_env,
+    sign_kalshi_request,
+)
 from alphadb.state.repository import OperationalStateRepository
 
 BRTI_INDEX_ID = "BRTI"
@@ -628,6 +632,17 @@ async def run_live_collector(
     collector = BRTILiveCollector(database_url=database_url, index_id=index_id)
     aggregate = _MutableIngestAggregate(index_id=index_id)
     attempts = 0
+    _emit_live_collect_log(
+        "brti_live_collector_started",
+        {
+            "index_id": index_id,
+            "websocket_url": websocket_url,
+            "max_messages": max_messages,
+            "max_reconnects": max_reconnects,
+            "api_key_id_present": bool(credentials.api_key_id),
+            "private_key_path_present": bool(credentials.private_key_path),
+        },
+    )
 
     while True:
         try:
@@ -639,12 +654,25 @@ async def run_live_collector(
                 max_messages=None if max_messages is None else max_messages - aggregate.accepted,
             )
             aggregate.add(partial)
+            _emit_live_collect_log(
+                "brti_live_collector_connection_closed",
+                {"summary": aggregate.summary().as_dict()},
+            )
             if max_messages is not None and aggregate.accepted >= max_messages:
                 return aggregate.summary()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             attempts += 1
+            _emit_live_collect_log(
+                "brti_live_collector_reconnect",
+                {
+                    "attempt": attempts,
+                    "max_reconnects": max_reconnects,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
             aggregate.rejections.append(
                 BRTIRejection(
                     reason="websocket_connection_error",
@@ -653,6 +681,10 @@ async def run_live_collector(
                 )
             )
             if attempts > max_reconnects:
+                _emit_live_collect_log(
+                    "brti_live_collector_stopped",
+                    {"summary": aggregate.summary().as_dict()},
+                )
                 return aggregate.summary()
             await asyncio.sleep(min(2**attempts, 30))
 
@@ -680,10 +712,27 @@ async def _collect_live_once(
             frame = BRTIWebSocketFrame(message=message, received_at=datetime.now(UTC))
             summary = collector.ingest_frames([frame])
             aggregate.add(summary)
+            if summary.accepted and (aggregate.accepted == 1 or aggregate.accepted % 60 == 0):
+                _emit_live_collect_log(
+                    "brti_live_observation_accepted",
+                    {
+                        "partial": summary.as_dict(),
+                        "aggregate": aggregate.summary().as_dict(),
+                    },
+                )
             if max_messages is not None and aggregate.accepted >= max_messages:
                 break
 
     return aggregate.summary()
+
+
+def _emit_live_collect_log(event: str, payload: Mapping[str, Any]) -> None:
+    body = {
+        "event": event,
+        "generated_at": datetime.now(UTC).isoformat(),
+        **dict(payload),
+    }
+    print(json.dumps(body, sort_keys=True), flush=True)
 
 
 def signed_kalshi_ws_headers(
@@ -943,6 +992,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "live-collect":
+        materialize_private_key_from_env()
     settings = settings_from_env()
     OperationalStateRepository(settings.database_url).apply_migrations()
 
