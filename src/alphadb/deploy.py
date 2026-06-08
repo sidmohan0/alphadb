@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from alphadb.aws_deploy import add_aws_deploy_parser, run_aws_deployment_command
 from alphadb.config import Settings, settings_from_env
 from alphadb.dashboard.auth import DashboardAuthConfig
 from alphadb.health import HealthReport, collect_health
@@ -216,6 +217,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphadb-deploy")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    aws = subparsers.add_parser("aws", help="Plan or apply coordinated AWS deployment surfaces")
+    add_aws_deploy_parser(aws)
+
     subparsers.add_parser("migrate", help="Apply operational-state migrations")
 
     smoke = subparsers.add_parser("smoke", help="Run deployment smoke checks and emit JSON")
@@ -251,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "aws":
+        return run_aws_deployment_command(args)
+
     settings = settings_from_env()
     repository = OperationalStateRepository(settings.database_url)
 
