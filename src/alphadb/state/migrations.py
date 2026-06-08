@@ -743,6 +743,55 @@ LIVE_ORDER_ATTEMPT_REFRESH_EVIDENCE = Migration(
 )
 
 
+BRTI_LATEST_CONTEXT = Migration(
+    version="0016_brti_latest_context",
+    statements=(
+        """
+        create table if not exists brti_latest_contexts (
+            index_id text primary key,
+            value numeric not null check (value > 0),
+            source_timestamp timestamptz not null,
+            source_timestamp_ms bigint not null,
+            received_at timestamptz not null,
+            source_lag_ms bigint not null check (source_lag_ms >= 0),
+            raw_event_id text not null references raw_events(raw_event_id),
+            source_event_id text not null,
+            payload_hash text not null,
+            source text not null,
+            schema_version text not null,
+            source_sequence bigint,
+            source_sid bigint,
+            avg_60s_value numeric check (avg_60s_value is null or avg_60s_value > 0),
+            avg_60s_window_size integer check (
+                avg_60s_window_size is null or avg_60s_window_size >= 0
+            ),
+            avg_60s_window_start timestamptz,
+            avg_60s_window_end_exclusive timestamptz,
+            final_60s_value numeric check (
+                final_60s_value is null or final_60s_value > 0
+            ),
+            final_60s_window_size integer check (
+                final_60s_window_size is null or final_60s_window_size >= 0
+            ),
+            final_60s_window_start timestamptz,
+            final_60s_window_end_exclusive timestamptz,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists brti_latest_contexts_source_timestamp_idx
+        on brti_latest_contexts(source_timestamp desc)
+        """,
+        """
+        create index if not exists brti_latest_contexts_received_at_idx
+        on brti_latest_contexts(received_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -759,4 +808,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     LIVE_RISK_ADMISSION_STATE,
     LIVE_RISK_ADMISSION_BLOCKED_STATUS,
     LIVE_ORDER_ATTEMPT_REFRESH_EVIDENCE,
+    BRTI_LATEST_CONTEXT,
 )
