@@ -164,6 +164,31 @@ def test_collector_writes_index_level_raw_event_and_latest_context() -> None:
     assert replayed[0]["raw_event_id"] == latest.context.raw_event_id
 
 
+def test_collector_ingest_does_not_apply_migrations_per_frame(monkeypatch) -> None:
+    repository, _collector = brti_repository_or_skip()
+    unique_index = f"BRTI_NO_MIGRATE_{uuid4().hex[:8]}"
+    collector = BRTILiveCollector(
+        database_url=repository.database_url,
+        index_id=unique_index,
+    )
+    received_at = datetime.now(UTC)
+    frame = fixture_brti_frame(index_id=unique_index, received_at=received_at)
+
+    def fail_apply_migrations(_self: object) -> None:
+        raise AssertionError("BRTI frame ingestion must not run migrations")
+
+    monkeypatch.setattr(
+        OperationalStateRepository,
+        "apply_migrations",
+        fail_apply_migrations,
+    )
+
+    summary = collector.ingest_frames([frame])
+
+    assert summary.accepted == 1
+    assert summary.latest_context_updates == 1
+
+
 def test_collector_rejects_invalid_message_before_raw_persistence() -> None:
     repository, collector = brti_repository_or_skip()
     received_at = datetime.now(UTC)

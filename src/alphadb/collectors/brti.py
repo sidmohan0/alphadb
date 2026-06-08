@@ -449,7 +449,6 @@ class BRTILiveCollector:
         self.latest_contexts = BRTILatestContextRepository(database_url)
 
     def ingest_frames(self, frames: Iterable[BRTIWebSocketFrame]) -> BRTIIngestSummary:
-        OperationalStateRepository(self.database_url).apply_migrations()
         messages_seen = 0
         control_messages_seen = 0
         accepted = 0
@@ -633,6 +632,7 @@ async def run_live_collector(
 ) -> BRTIIngestSummary:
     credentials = assert_live_smoke_enabled(settings)
     websocket_url = credentials.websocket_url or DEFAULT_KALSHI_WS_URL
+    OperationalStateRepository(database_url).apply_migrations()
     collector = BRTILiveCollector(database_url=database_url, index_id=index_id)
     aggregate = _MutableIngestAggregate(index_id=index_id)
     attempts = 0
