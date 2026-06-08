@@ -97,6 +97,8 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - **Semantic Lab insight**: Generated or heuristic Lab note that connects entry history across hypotheses, features, evidence, outcomes, and verdicts. It is advisory research memory and does not authorize promotion, live trading, Current MVP changes, or target-platform cutover.
 - **Target platform dev environment**: Dev Container backed by Docker Compose that provides the reproducible local runtime for Postgres, target-platform services, AlphaDB API, and Cockpit.
 - **AWS Cockpit deployment**: Future AWS operator deployment where the public user-facing surface is the Next.js Cockpit, the Python AlphaDB API is a private service reached by Cockpit through private service discovery or service-to-service DNS, and Operational State remains private Postgres reachable only by Python target-platform services and authorized workers. The exact AWS private discovery mechanism is an implementation choice as long as the AlphaDB API is not publicly exposed.
+- **AWS deployment orchestrator**: Local operator command that resolves an AWS deployment profile, builds and deploys selected AlphaDB AWS surfaces, runs smoke gates, and records deployment evidence without becoming a Cockpit runtime-control surface.
+- **AWS deployment profile**: Explicit local environment contract for a deployment target, including account, region, network ids, secret ARNs, stack names, service names, image repository, selected surfaces, and schedule intent or preserve policy.
 
 ## Relationships
 
@@ -186,6 +188,8 @@ AlphaDB is the target-platform repo for a reusable Kalshi prediction-market trad
 - AWS deployment docs and templates should converge on the Cockpit public path rather than maintaining two equal dashboard runbooks; the Python-only dashboard deployment should be treated as a deprecated transition path once Cockpit AWS cutover lands.
 - The first AWS Cockpit MVP may keep the current ALB HTTP URL posture and defer custom domain and TLS wiring, because the initial operator audience is a single user and the project is prioritizing a clean target-boundary cutover over production polish.
 - AWS Cockpit deployment work should not modify live worker deployment, scheduling, or order-submission authority unless a separate live-runtime issue explicitly scopes that change.
+- A streamlined **AWS deployment orchestrator** may inspect and preserve live-worker schedule state for deployment safety, but it should not add Cockpit controls for pausing, resuming, or otherwise changing strategy authority.
+- An **AWS deployment profile** is the source of deployment intent; AWS discovery in the orchestrator should verify, enrich, and record evidence rather than silently choosing default VPCs, secret names, or live-authority settings during apply.
 - AWS Cockpit deployment work should avoid broad AlphaDB API hardening; preserve existing health and API behavior needed to verify Cockpit-to-API-to-Postgres reachability, and leave deeper API reliability work to separate issues.
 - The first AWS Cockpit cutover is a single-operator MVP path: rollback may stay image/service redeploy oriented, and does not need blue/green, multi-user draining, or parallel public surfaces.
 - AWS Cockpit MVP readiness should be proven with focused smoke gates rather than full CI/CD or production-observability machinery: public Cockpit/auth, proxied AlphaDB API health, Postgres reachability, and fail-closed live-order guard are the critical checks.
