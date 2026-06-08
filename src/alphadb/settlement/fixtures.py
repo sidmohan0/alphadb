@@ -185,7 +185,7 @@ def synthetic_official_input_payload(prints: list[dict[str, Any]]) -> dict[str, 
 
 
 def synthetic_print_payloads() -> list[dict[str, Any]]:
-    start = KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=60)
+    start = KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=59)
     return [
         synthetic_print_payload(
             effective_time_utc=start + timedelta(seconds=offset),

@@ -171,7 +171,7 @@ def expected_final_window_times(
     window = settlement_spec.final_settlement_window
     start = expiration_time_utc - timedelta(seconds=window.duration_seconds)
     return tuple(
-        start + timedelta(seconds=window.cadence_seconds * offset)
+        start + timedelta(seconds=window.cadence_seconds * (offset + 1))
         for offset in range(window.expected_print_count)
     )
 

@@ -17,6 +17,10 @@ htmlcov/
 /data/
 /research/
 /artifacts/
+experiments/**/raw/
+experiments/**/normalized/
+experiments/**/derived/
+experiments/**/results/
 *.parquet
 *.joblib
 *.pkl

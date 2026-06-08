@@ -41,14 +41,13 @@ def test_clean_rows_support_boundary_decision_times() -> None:
         for decision_time in kxbtc15m_synthetic_fixture_suite()["clean_above"].decision_times_utc
     ]
 
-    assert [row.locked_count for row in rows] == [0, 1, 31, 60, 60, 60]
-    assert [row.remaining_count for row in rows] == [60, 59, 29, 0, 0, 0]
+    assert [row.locked_count for row in rows] == [0, 0, 30, 59, 60, 60]
+    assert [row.remaining_count for row in rows] == [60, 60, 30, 1, 0, 0]
     assert all(row.row_valid for row in rows)
     assert all(row.promotion_safe for row in rows)
     assert rows[0].locked_average is None
-    assert rows[1].locked_sum == Decimal("100000.00")
-    assert rows[1].locked_average == Decimal("100000.00")
-    assert rows[-1].source_lag_seconds == 2
+    assert rows[1].locked_average is None
+    assert rows[-1].source_lag_seconds == 1
 
 
 def test_clean_final_row_has_required_audit_fields_and_hashes() -> None:
@@ -68,7 +67,7 @@ def test_clean_final_row_has_required_audit_fields_and_hashes() -> None:
     assert row.payout_comparator == "between"
     assert row.payout_thresholds == (Decimal("99990.00"), Decimal("100010.00"))
     assert row.threshold_precision == 2
-    assert row.final_window_start_utc == KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=60)
+    assert row.final_window_start_utc == KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=59)
     assert row.final_window_end_utc == KXBTC15M_SYNTHETIC_EXPIRATION
     assert row.expected_print_count == 60
     assert row.locked_count == 60
@@ -77,7 +76,7 @@ def test_clean_final_row_has_required_audit_fields_and_hashes() -> None:
     assert row.remaining_count == 0
     assert row.source_quality_flags == ()
     assert row.invalid_reason is None
-    assert row.max_source_event_timestamp_utc == KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=1)
+    assert row.max_source_event_timestamp_utc == KXBTC15M_SYNTHETIC_EXPIRATION
     assert row.source_id == "synthetic.cf-brti.kxbtc15m"
     assert row.source_version == "synthetic.v1"
     assert row.source_status == "synthetic_fixture"
@@ -114,7 +113,7 @@ def test_no_lookahead_future_print_values_do_not_change_partial_row() -> None:
         decision_time_utc=decision_time,
     )
 
-    assert baseline.locked_count == 31
+    assert baseline.locked_count == 30
     assert baseline.row_hash == changed.row_hash
     assert baseline.locked_prints_hash == changed.locked_prints_hash
     assert baseline.source_event_ids == changed.source_event_ids

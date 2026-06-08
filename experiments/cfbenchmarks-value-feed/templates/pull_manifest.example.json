@@ -1,0 +1,39 @@
+{
+  "schema_version": "cfbenchmarks_value_pull_manifest.v0",
+  "pull_id": "cfbval_pull_YYYYMMDDTHHMMSSZ",
+  "requested_at_utc": "2026-06-08T20:13:55Z",
+  "completed_at_utc": "2026-06-08T20:15:15Z",
+  "vendor": "Kalshi",
+  "dataset": "WebSocket cfbenchmarks_value",
+  "websocket_environment": "demo-or-production",
+  "channel": "cfbenchmarks_value",
+  "subscription": {
+    "index_ids": ["BRTI"],
+    "indexlist_requested": true,
+    "assigned_sid": 1
+  },
+  "client": {
+    "client_name": "alphadb",
+    "client_version": "0.1.0",
+    "auth_material_recorded": false
+  },
+  "capture": {
+    "started_at_utc": "2026-06-08T20:14:00Z",
+    "ended_at_utc": "2026-06-08T20:15:10Z",
+    "local_clock_source": "system_utc",
+    "messages_seen": 0,
+    "errors_seen": 0,
+    "reconnects": 0
+  },
+  "outputs": {
+    "raw_frames_jsonl": "research/cfbenchmarks-value-feed/<dataset_id>/raw/ws_frames.jsonl",
+    "pull_log": "artifacts/cfbenchmarks-value-feed/<dataset_id>/pull_log.json"
+  },
+  "checksums": {
+    "raw_frames_jsonl_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "pull_log_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "notes": [
+    "Example only. Do not commit raw frames, credentials, private keys, or live account data."
+  ]
+}

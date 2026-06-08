@@ -97,15 +97,15 @@ def test_synthetic_fixture_validity_expectations_are_enforced() -> None:
                 )
 
 
-def test_expected_final_window_times_use_sixty_seconds_prior_to_expiration() -> None:
+def test_expected_final_window_times_use_kalshi_close_inclusive_final_minute() -> None:
     times = expected_final_window_times(
         expiration_time_utc=KXBTC15M_SYNTHETIC_EXPIRATION,
         settlement_spec=kxbtc15m_settlement_spec(),
     )
 
     assert len(times) == 60
-    assert times[0] == KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=60)
-    assert times[-1] == KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=1)
+    assert times[0] == KXBTC15M_SYNTHETIC_EXPIRATION - timedelta(seconds=59)
+    assert times[-1] == KXBTC15M_SYNTHETIC_EXPIRATION
 
 
 def test_boundary_decision_times_are_public_fixture_data() -> None:
