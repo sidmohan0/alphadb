@@ -429,6 +429,8 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert 'MinContractPrice="${MIN_CONTRACT_PRICE:-0.25}"' in deploy_script
     assert "FAIR_VALUE_LIVE_SMOKE_EVIDENCE" in deploy_script
     assert "validate-fair-value-live-smoke.py" in deploy_script
+    assert "PRESERVE_ENABLED_SCHEDULE" in deploy_script
+    assert "describe-rule" in deploy_script
     assert "MaxOrderDollars" not in template
     assert "MaxTickerExposureDollars" not in template
     assert "--max-ticker-exposure-dollars" not in template

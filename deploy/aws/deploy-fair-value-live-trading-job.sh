@@ -33,12 +33,24 @@ require_command git
 require_command python3
 
 if [[ "${SCHEDULE_STATE:-DISABLED}" == "ENABLED" ]]; then
-  if [[ -z "${FAIR_VALUE_LIVE_SMOKE_EVIDENCE:-}" ]]; then
+  if [[ -n "${FAIR_VALUE_LIVE_SMOKE_EVIDENCE:-}" ]]; then
+    python3 scripts/validate-fair-value-live-smoke.py "$FAIR_VALUE_LIVE_SMOKE_EVIDENCE"
+  elif [[ "${PRESERVE_ENABLED_SCHEDULE:-0}" == "1" ]]; then
+    CURRENT_SCHEDULE_STATE="$(aws_cli events describe-rule \
+      --name "$SERVICE_NAME" \
+      --query State \
+      --output text 2>/dev/null || true)"
+    if [[ "$CURRENT_SCHEDULE_STATE" != "ENABLED" ]]; then
+      echo "Refusing to preserve ENABLED schedule; current state is ${CURRENT_SCHEDULE_STATE:-unknown}." >&2
+      echo "Run one-cycle smoke, write evidence JSON, then retry with that path." >&2
+      exit 1
+    fi
+    echo "Preserving already ENABLED schedule for $SERVICE_NAME." >&2
+  else
     echo "Refusing to enable schedule without FAIR_VALUE_LIVE_SMOKE_EVIDENCE." >&2
     echo "Run one-cycle smoke, write evidence JSON, then retry with that path." >&2
     exit 1
   fi
-  python3 scripts/validate-fair-value-live-smoke.py "$FAIR_VALUE_LIVE_SMOKE_EVIDENCE"
 fi
 
 ACCOUNT_ID="$(aws --profile "$PROFILE" sts get-caller-identity --query Account --output text)"
