@@ -361,9 +361,13 @@ class BRTILatestContextRepository:
         freshness_limit: timedelta = timedelta(
             seconds=DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS
         ),
+        future_tolerance: timedelta = timedelta(0),
     ) -> BRTILatestContextStatus:
         generated_at = _ensure_utc(now or datetime.now(UTC))
         freshness_limit_ms = int(freshness_limit.total_seconds() * 1000)
+        future_tolerance_ms = int(future_tolerance.total_seconds() * 1000)
+        if future_tolerance_ms < 0:
+            raise ValueError("future_tolerance must be non-negative")
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -412,7 +416,7 @@ class BRTILatestContextRepository:
 
         context = _latest_context_from_row(row)
         age_ms = int((generated_at - context.source_timestamp).total_seconds() * 1000)
-        if age_ms < 0:
+        if age_ms < -future_tolerance_ms:
             status = "unusable"
             reason = "future_brti_latest_context"
         elif age_ms > freshness_limit_ms:

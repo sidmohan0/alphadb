@@ -47,6 +47,7 @@ from alphadb.live_risk_refresh import (
     bounded_refresh_before_admission,
 )
 from alphadb.model_evaluation.fair_value_live import (
+    DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS,
     FairValueDecisionRowCollector,
     FairValueDecisionRowCollectorConfig,
     make_coinbase_client,
@@ -102,6 +103,7 @@ class FairValueLiveTradingJobConfig:
     live_risk_refresh_per_lookup_timeout_seconds: float = 1.0
     quote_stale_seconds: int = 15
     coinbase_feature_stale_seconds: int = 90
+    brti_future_tolerance_seconds: float = DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +135,7 @@ class FairValueLiveTradingJobConfig:
             ),
             "quote_stale_seconds": self.quote_stale_seconds,
             "coinbase_feature_stale_seconds": self.coinbase_feature_stale_seconds,
+            "brti_future_tolerance_seconds": self.brti_future_tolerance_seconds,
         }
 
 
@@ -146,6 +149,8 @@ class FairValueLiveTradingJob:
     ):
         self.config = config
         validate_market_context_source(config.market_context_source)
+        if config.brti_future_tolerance_seconds < 0:
+            raise ValueError("brti_future_tolerance_seconds must be non-negative")
         self._settings = settings
         self.order_client = order_client or HttpKalshiLiveOrderClient()
 
@@ -241,6 +246,7 @@ class FairValueLiveTradingJob:
                         source_mode=self.config.source,
                         coinbase_source_mode=self.config.coinbase_source,
                         market_context_source=self.config.market_context_source,
+                        brti_future_tolerance_seconds=self.config.brti_future_tolerance_seconds,
                         include_coinbase_features=self.config.decision_policy == "fair_value",
                         include_fair_value_score=self.config.decision_policy == "fair_value",
                     ),
@@ -745,6 +751,7 @@ class FairValueLiveTradingJob:
             "min_edge": self.config.min_edge,
             "min_contract_price": self.config.min_contract_price,
             "market_context_source": self.config.market_context_source,
+            "brti_future_tolerance_seconds": self.config.brti_future_tolerance_seconds,
             "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
             "daily_loss_accounting": dict(daily_loss_accounting),
             "runtime_guard": dict(runtime_guard),
@@ -1152,6 +1159,7 @@ def runtime_config_snapshot(config: FairValueLiveTradingJobConfig) -> dict[str, 
             "min_contract_price": config.min_contract_price,
             "max_markets": config.max_markets,
             "market_context_source": config.market_context_source,
+            "brti_future_tolerance_seconds": config.brti_future_tolerance_seconds,
         },
     }
 
@@ -1289,6 +1297,11 @@ def live_market_context_evidence(
             "received_at": source_row.get("brti_received_at"),
             "context_age_seconds": source_row.get("brti_context_age_seconds"),
             "freshness_limit_seconds": source_row.get("brti_freshness_limit_seconds"),
+            "source_ahead_seconds": source_row.get("brti_source_ahead_seconds"),
+            "future_tolerance_seconds": source_row.get("brti_future_tolerance_seconds"),
+            "future_tolerance_applied": source_row.get(
+                "brti_future_tolerance_applied"
+            ),
             "source_lag_ms": source_row.get("brti_source_lag_ms"),
             "raw_event_id": source_row.get("brti_raw_event_id"),
             "payload_hash": source_row.get("brti_payload_hash"),
@@ -1515,6 +1528,9 @@ def live_decision_freshness(
             "coinbase_feature_age_seconds": None,
             "brti_source_timestamp": None,
             "brti_context_age_seconds": None,
+            "brti_source_ahead_seconds": None,
+            "brti_future_tolerance_seconds": None,
+            "brti_future_tolerance_applied": None,
         }
     quote_seen_at = parse_datetime(
         row.get("quote_observed_at") or row.get("kalshi_received_at") or row.get("decision_timestamp")
@@ -1551,6 +1567,9 @@ def live_decision_freshness(
         else None,
         "brti_source_timestamp": brti_seen_at.isoformat() if brti_seen_at else None,
         "brti_context_age_seconds": round(brti_age, 6) if brti_age is not None else None,
+        "brti_source_ahead_seconds": row.get("brti_source_ahead_seconds"),
+        "brti_future_tolerance_seconds": row.get("brti_future_tolerance_seconds"),
+        "brti_future_tolerance_applied": row.get("brti_future_tolerance_applied"),
     }
 
 
@@ -2587,6 +2606,7 @@ def resolve_live_runtime_config(
                 "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
                 "market_context_source": config.market_context_source,
+                "brti_future_tolerance_seconds": config.brti_future_tolerance_seconds,
             },
         }
     if source == "cli":
@@ -2605,6 +2625,7 @@ def resolve_live_runtime_config(
                 "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
                 "market_context_source": config.market_context_source,
+                "brti_future_tolerance_seconds": config.brti_future_tolerance_seconds,
             },
         }
     try:
@@ -2630,6 +2651,7 @@ def resolve_live_runtime_config(
                 "min_contract_price": config.min_contract_price,
                 "max_markets": config.max_markets,
                 "market_context_source": config.market_context_source,
+                "brti_future_tolerance_seconds": config.brti_future_tolerance_seconds,
             },
         }
     dashboard_config = revision.config

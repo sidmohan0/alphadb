@@ -218,6 +218,40 @@ def test_latest_context_reports_missing_and_stale() -> None:
     assert stale.reason == "stale_brti_latest_context"
 
 
+def test_latest_context_future_tolerance_is_opt_in() -> None:
+    repository, _collector = brti_repository_or_skip()
+    unique_index = f"BRTI_FUTURE_TOL_{uuid4().hex[:8]}"
+    collector = BRTILiveCollector(
+        database_url=repository.database_url,
+        index_id=unique_index,
+    )
+    latest_contexts = BRTILatestContextRepository(repository.database_url)
+    decision_time = datetime.now(UTC)
+    frame = fixture_brti_frame(
+        index_id=unique_index,
+        source_timestamp=decision_time + timedelta(milliseconds=500),
+        received_at=decision_time + timedelta(milliseconds=600),
+    )
+    collector.ingest_frames([frame])
+
+    strict = latest_contexts.get_latest(
+        index_id=unique_index,
+        now=decision_time,
+    )
+    tolerated = latest_contexts.get_latest(
+        index_id=unique_index,
+        now=decision_time,
+        future_tolerance=timedelta(seconds=2),
+    )
+
+    assert strict.status == "unusable"
+    assert strict.reason == "future_brti_latest_context"
+    assert tolerated.status == "usable"
+    assert tolerated.reason is None
+    assert tolerated.age_ms is not None
+    assert tolerated.age_ms < 0
+
+
 def test_older_observation_does_not_replace_newer_latest_context() -> None:
     repository, _collector = brti_repository_or_skip()
     unique_index = f"BRTI_ORDER_{uuid4().hex[:8]}"

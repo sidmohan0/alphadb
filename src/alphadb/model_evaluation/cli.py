@@ -22,6 +22,7 @@ from alphadb.model_evaluation.fair_value_replay import (
     parse_min_edge_values,
 )
 from alphadb.model_evaluation.fair_value_live import (
+    DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS,
     FairValueDecisionRowCollector,
     FairValueDecisionRowCollectorConfig,
     make_coinbase_client,
@@ -243,6 +244,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="coinbase_primary",
     )
     fair_collect.add_argument("--max-markets", type=int, default=5)
+    fair_collect.add_argument(
+        "--brti-future-tolerance-seconds",
+        type=float,
+        default=DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS,
+    )
     fair_collect.add_argument("--run-id", default=None)
     fair_collect.add_argument("--output", default=None)
 
@@ -277,6 +283,11 @@ def build_parser() -> argparse.ArgumentParser:
     fair_live.add_argument("--live-risk-state-stale-seconds", type=int, default=60)
     fair_live.add_argument("--quote-stale-seconds", type=int, default=15)
     fair_live.add_argument("--coinbase-feature-stale-seconds", type=int, default=90)
+    fair_live.add_argument(
+        "--brti-future-tolerance-seconds",
+        type=float,
+        default=DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS,
+    )
     fair_live.add_argument(
         "--runtime-config-source",
         choices=("auto", "postgres", "cli"),
@@ -471,6 +482,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     source_mode=args.source,
                     coinbase_source_mode=args.coinbase_source,
                     market_context_source=args.market_context_source,
+                    brti_future_tolerance_seconds=args.brti_future_tolerance_seconds,
                 ),
             )
             .collect()
@@ -506,6 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 live_risk_state_stale_seconds=args.live_risk_state_stale_seconds,
                 quote_stale_seconds=args.quote_stale_seconds,
                 coinbase_feature_stale_seconds=args.coinbase_feature_stale_seconds,
+                brti_future_tolerance_seconds=args.brti_future_tolerance_seconds,
             )
         ).run()
     elif args.command == "expensive-yes-live-trading-job":

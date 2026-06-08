@@ -423,6 +423,7 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "postgres" in template
     assert "--quote-stale-seconds" in template
     assert "--coinbase-feature-stale-seconds" in template
+    assert "--brti-future-tolerance-seconds" in template
     assert "--live-risk-state-stale-seconds" in template
     assert "MinContractPrice" in template
     assert "--min-contract-price" in template

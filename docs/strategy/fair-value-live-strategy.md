@@ -22,10 +22,18 @@ Every minute, price the current BTC 15-minute Kalshi market from the configured 
 The dashboard-owned runtime config now carries `market_context_source`:
 
 - `coinbase_primary`: Coinbase BTC features supply the model external BTC price and freshness gate.
-- `brti_primary`: fresh BRTI latest context supplies `external_close`; missing, stale, invalid, wrong-index, or future-timestamp BRTI context skips cleanly with no implicit Coinbase fallback.
+- `brti_primary`: fresh BRTI latest context supplies `external_close`; missing, stale, invalid, wrong-index, or beyond-tolerance future-timestamp BRTI context skips cleanly with no implicit Coinbase fallback.
 - `fixture`: fixture-backed context for local smoke runs.
 
 Phase 1 BRTI mode intentionally keeps Coinbase diagnostic-only. When Coinbase is available, manifests can report Coinbase freshness and BRTI-vs-Coinbase basis; when Coinbase is unavailable, a fresh BRTI decision can still score. The BRTI Phase 1 model path uses the BRTI current value for `external_close`, zero momentum, and the configured volatility floor.
+
+For live MVP feasibility, BRTI-primary accepts a small source timestamp skew:
+the default `brti_future_tolerance_seconds` is `2.0`. If the BRTI source
+timestamp is slightly ahead of the decision timestamp within that tolerance, the
+row is usable and the decision/manifest records
+`brti_source_ahead_seconds`, `brti_future_tolerance_seconds`, and
+`brti_future_tolerance_applied=true`. Larger future timestamps still skip as
+`brti_context_future_timestamp`.
 
 ## Fair-Value Formula
 

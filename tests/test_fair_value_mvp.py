@@ -324,11 +324,105 @@ def test_live_fair_value_collector_uses_fresh_brti_primary_context() -> None:
         assert row["external_realized_vol_5_source"] == "brti_phase1_volatility_floor"
         assert row["brti_context_status"] == "usable"
         assert row["brti_raw_event_id"]
+        assert row["brti_source_ahead_seconds"] == 0.0
+        assert row["brti_future_tolerance_seconds"] == 2.0
+        assert row["brti_future_tolerance_applied"] is False
         assert row["coinbase_diagnostic_status"] == "available"
         assert row["coinbase_diagnostic_external_close"] == 101.0
         assert row["brti_coinbase_basis_dollars"] == 0.25
         assert row["fair_value_status"] == "complete"
         assert row["p_yes"] > 0.5
+    finally:
+        delete_brti_latest_context(database_url)
+
+
+def test_live_fair_value_collector_tolerates_small_brti_future_skew() -> None:
+    live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-BRTI-FUTURE-TOL"
+    delete_brti_latest_context(database_url)
+    try:
+        BRTILiveCollector(database_url=database_url).ingest_frames(
+            [
+                fixture_brti_frame(
+                    source_timestamp=now + timedelta(milliseconds=500),
+                    received_at=now + timedelta(milliseconds=600),
+                    value="101.25",
+                )
+            ]
+        )
+
+        payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=fair_value_kalshi_fixture(now=now, ticker=ticker),
+                coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+                settings=settings_from_env(),
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=1,
+                    market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+                ),
+            )
+            .collect(now=now)
+            .as_dict()
+        )
+
+        row = payload["rows"][0]
+        assert payload["counts"]["decisions"] == 1
+        assert row["market_context_status"] == "usable"
+        assert row["external_close_source"] == "brti_latest_context"
+        assert row["brti_context_status"] == "usable"
+        assert row["brti_context_age_seconds"] == -0.5
+        assert row["brti_source_ahead_seconds"] == 0.5
+        assert row["brti_future_tolerance_seconds"] == 2.0
+        assert row["brti_future_tolerance_applied"] is True
+        assert row["no_lookahead_source_check"] is False
+        assert row["fair_value_status"] == "complete"
+    finally:
+        delete_brti_latest_context(database_url)
+
+
+def test_live_fair_value_collector_skips_brti_future_skew_beyond_tolerance() -> None:
+    live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-BRTI-FUTURE-SKIP"
+    delete_brti_latest_context(database_url)
+    try:
+        BRTILiveCollector(database_url=database_url).ingest_frames(
+            [
+                fixture_brti_frame(
+                    source_timestamp=now + timedelta(milliseconds=2500),
+                    received_at=now + timedelta(milliseconds=2600),
+                    value="101.25",
+                )
+            ]
+        )
+
+        payload = (
+            FairValueDecisionRowCollector(
+                kalshi_client=fair_value_kalshi_fixture(now=now, ticker=ticker),
+                coinbase_client=FixtureCoinbaseClient(candles=fixture_candles(now)),
+                settings=settings_from_env(),
+                config=FairValueDecisionRowCollectorConfig(
+                    max_markets=1,
+                    market_context_source=MARKET_CONTEXT_BRTI_PRIMARY,
+                ),
+            )
+            .collect(now=now)
+            .as_dict()
+        )
+
+        row = payload["rows"][0]
+        assert payload["counts"]["skips"] == 1
+        assert row["skip_reason"] == "brti_context_future_timestamp"
+        assert row["market_context_status"] == "unusable"
+        assert row["brti_context_status"] == "unusable"
+        assert row["brti_context_reason"] == "future_brti_latest_context"
+        assert row["brti_context_age_seconds"] == -2.5
+        assert row["brti_source_ahead_seconds"] == 2.5
+        assert row["brti_future_tolerance_seconds"] == 2.0
+        assert row["brti_future_tolerance_applied"] is False
     finally:
         delete_brti_latest_context(database_url)
 
@@ -1709,8 +1803,8 @@ def test_live_trading_job_uses_dashboard_brti_market_context_source(
         BRTILiveCollector(database_url=database_url).ingest_frames(
             [
                 fixture_brti_frame(
-                    source_timestamp=now - timedelta(seconds=1),
-                    received_at=now,
+                    source_timestamp=now + timedelta(milliseconds=500),
+                    received_at=now + timedelta(milliseconds=600),
                     value="101.25",
                 )
             ]
@@ -1738,9 +1832,17 @@ def test_live_trading_job_uses_dashboard_brti_market_context_source(
             MARKET_CONTEXT_BRTI_PRIMARY
         )
         assert manifest["selected_row"]["external_close_source"] == "brti_latest_context"
+        assert manifest["selected_row"]["brti_source_ahead_seconds"] == 0.5
+        assert manifest["selected_row"]["brti_future_tolerance_seconds"] == 2.0
+        assert manifest["selected_row"]["brti_future_tolerance_applied"] is True
         assert manifest["market_context"]["external_close_from_brti"] is True
+        assert manifest["market_context"]["brti"]["source_ahead_seconds"] == 0.5
+        assert manifest["market_context"]["brti"]["future_tolerance_seconds"] == 2.0
+        assert manifest["market_context"]["brti"]["future_tolerance_applied"] is True
         assert manifest["market_context"]["coinbase_diagnostics"]["status"] == "available"
-        assert manifest["executable_quote"]["freshness"]["brti_context_age_seconds"] == 1.0
+        assert manifest["executable_quote"]["freshness"]["brti_context_age_seconds"] == 0.0
+        assert manifest["executable_quote"]["freshness"]["brti_source_ahead_seconds"] == 0.5
+        assert manifest["executable_quote"]["freshness"]["brti_future_tolerance_applied"] is True
     finally:
         repository.save_config(DEFAULT_FAIR_VALUE_LIVE_CONFIG)
         delete_brti_latest_context(database_url)

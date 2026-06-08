@@ -44,6 +44,7 @@ from alphadb.model_evaluation.fair_value_model import (
 from alphadb.model_evaluation.metrics import optional_float
 
 FAIR_VALUE_DECISION_ROWS_SCHEMA = "kxbtc_fair_value_decision_rows.v1"
+DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class FairValueDecisionRowCollectorConfig:
     coinbase_source_mode: str = "fixture"
     market_context_source: str = MARKET_CONTEXT_COINBASE_PRIMARY
     brti_freshness_limit_seconds: int = DEFAULT_BRTI_FRESHNESS_LIMIT_SECONDS
+    brti_future_tolerance_seconds: float = DEFAULT_BRTI_FUTURE_TOLERANCE_SECONDS
     model_config: ThresholdVolatilityFairValueConfig = ThresholdVolatilityFairValueConfig()
     include_coinbase_features: bool = True
     include_fair_value_score: bool = True
@@ -70,6 +72,7 @@ class FairValueDecisionRowCollectorConfig:
             "coinbase_source_mode": self.coinbase_source_mode,
             "market_context_source": self.market_context_source,
             "brti_freshness_limit_seconds": self.brti_freshness_limit_seconds,
+            "brti_future_tolerance_seconds": self.brti_future_tolerance_seconds,
             "model_config": self.model_config.as_dict(),
             "include_coinbase_features": self.include_coinbase_features,
             "include_fair_value_score": self.include_fair_value_score,
@@ -122,6 +125,8 @@ class FairValueDecisionRowCollector:
         validate_market_context_source(self.config.market_context_source)
         if self.config.brti_freshness_limit_seconds <= 0:
             raise ValueError("brti_freshness_limit_seconds must be positive")
+        if self.config.brti_future_tolerance_seconds < 0:
+            raise ValueError("brti_future_tolerance_seconds must be non-negative")
         self.kalshi_client = kalshi_client
         self.coinbase_client = coinbase_client
         self.spec = default_market_registry().get(self.config.series)
@@ -339,6 +344,7 @@ class FairValueDecisionRowCollector:
                 index_id=BRTI_INDEX_ID,
                 now=decision_ts,
                 freshness_limit=timedelta(seconds=self.config.brti_freshness_limit_seconds),
+                future_tolerance=timedelta(seconds=self.config.brti_future_tolerance_seconds),
             )
         except Exception as exc:
             return {
@@ -348,6 +354,9 @@ class FairValueDecisionRowCollector:
                 "brti_skip_reason": "brti_context_unavailable",
                 "brti_index_id": BRTI_INDEX_ID,
                 "brti_freshness_limit_seconds": self.config.brti_freshness_limit_seconds,
+                "brti_future_tolerance_seconds": self.config.brti_future_tolerance_seconds,
+                "brti_source_ahead_seconds": None,
+                "brti_future_tolerance_applied": False,
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
             }
@@ -355,6 +364,12 @@ class FairValueDecisionRowCollector:
             status,
             freshness_limit_seconds=self.config.brti_freshness_limit_seconds,
         )
+        timing = brti_timing_metadata(
+            status.context,
+            decision_timestamp=decision_ts,
+            future_tolerance_seconds=self.config.brti_future_tolerance_seconds,
+        )
+        base = {**base, **timing}
         if not status.is_usable or status.context is None:
             return {
                 **base,
@@ -374,7 +389,10 @@ class FairValueDecisionRowCollector:
                 "market_context_status": "unusable",
                 "brti_skip_reason": "brti_context_invalid",
             }
-        if context.source_timestamp > decision_ts:
+        if (
+            timing["brti_source_ahead_seconds"] is not None
+            and timing["brti_source_ahead_seconds"] > self.config.brti_future_tolerance_seconds
+        ):
             return {
                 **base,
                 "market_context_status": "unusable",
@@ -390,7 +408,7 @@ class FairValueDecisionRowCollector:
             "external_log_return_1_source": "brti_phase1_zero_momentum",
             "external_realized_vol_5": self.config.model_config.volatility_floor_pct,
             "external_realized_vol_5_source": "brti_phase1_volatility_floor",
-            "no_lookahead_source_check": True,
+            "no_lookahead_source_check": not timing["brti_future_tolerance_applied"],
         }
 
     def _coinbase_diagnostics(
@@ -410,7 +428,16 @@ class FairValueDecisionRowCollector:
         diagnostics = {
             f"coinbase_diagnostic_{key}": value for key, value in features.items()
         }
-        diagnostics.update(feature_metadata)
+        diagnostics.update(
+            {
+                (
+                    "coinbase_diagnostic_no_lookahead_source_check"
+                    if key == "no_lookahead_source_check"
+                    else key
+                ): value
+                for key, value in feature_metadata.items()
+            }
+        )
         diagnostics["coinbase_diagnostic_status"] = "available"
         primary_close = optional_float(primary_external_close)
         coinbase_close = optional_float(features.get("external_close"))
@@ -601,6 +628,33 @@ def brti_status_metadata(
     }
 
 
+def brti_timing_metadata(
+    context: Any,
+    *,
+    decision_timestamp: datetime,
+    future_tolerance_seconds: float,
+) -> dict[str, Any]:
+    if context is None:
+        return {
+            "brti_source_ahead_seconds": None,
+            "brti_future_tolerance_seconds": future_tolerance_seconds,
+            "brti_future_tolerance_applied": False,
+        }
+    decision_ts = ensure_utc(decision_timestamp)
+    source_ahead_seconds = max(
+        0.0,
+        (ensure_utc(context.source_timestamp) - decision_ts).total_seconds(),
+    )
+    return {
+        "brti_source_ahead_seconds": round(source_ahead_seconds, 6),
+        "brti_future_tolerance_seconds": future_tolerance_seconds,
+        "brti_future_tolerance_applied": (
+            source_ahead_seconds > 0
+            and source_ahead_seconds <= future_tolerance_seconds
+        ),
+    }
+
+
 def brti_skip_reason(status: BRTILatestContextStatus) -> str:
     if status.status == "missing":
         return "brti_context_missing"
@@ -616,6 +670,7 @@ def fair_value_config_id(config: FairValueDecisionRowCollectorConfig) -> str:
         f"{config.series}:max_markets={config.max_markets}:"
         f"source={config.source_mode}:coinbase={config.coinbase_source_mode}:"
         f"market_context={config.market_context_source}:"
+        f"brti_future_tolerance={config.brti_future_tolerance_seconds}:"
         f"model={config.model_config.probability_column}"
     )
 
