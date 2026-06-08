@@ -1,6 +1,8 @@
 # AlphaDB AWS Cockpit Deployment
 
-This is the canonical AWS operator path for the MVP cutover.
+This is the canonical AWS operator path for the MVP cutover. The streamlined
+local path is the `alphadb-deploy aws plan|apply` orchestrator. The older
+per-surface scripts remain fallback tools for narrow recovery work.
 
 The public AWS URL serves the production-built Next.js Cockpit. Browser API
 calls stay same-origin at `/api/alphadb/*`; the Cockpit server proxies those
@@ -22,6 +24,102 @@ browser -> public ALB -> Cockpit ECS service -> /api/alphadb/* proxy -> private 
 - Private product API: AlphaDB API only.
 - Private state: managed Postgres, provided before this stack is deployed.
 - Live worker: unchanged and out of scope for this deployment.
+
+## Streamlined Orchestrator
+
+Use the orchestrator from the repository root. Start with a real plan:
+
+```bash
+alphadb-deploy aws plan \
+  --profile deploy/aws/deployment-profile.example.yaml
+```
+
+Apply selected MVP surfaces with:
+
+```bash
+alphadb-deploy aws apply \
+  --profile deploy/aws/deployment-profile.example.yaml
+```
+
+For staged acceptance, override surfaces explicitly:
+
+```bash
+alphadb-deploy aws apply \
+  --profile deploy/aws/deployment-profile.example.yaml \
+  --surfaces cockpit
+
+alphadb-deploy aws apply \
+  --profile deploy/aws/deployment-profile.example.yaml \
+  --surfaces cockpit,brti-collector
+
+alphadb-deploy aws apply \
+  --profile deploy/aws/deployment-profile.example.yaml \
+  --surfaces cockpit,brti-collector,fair-value
+```
+
+The explicit safe-disable path for fair-value is:
+
+```bash
+alphadb-deploy aws apply \
+  --profile deploy/aws/deployment-profile.example.yaml \
+  --surfaces fair-value \
+  --fair-value-safe-disable
+```
+
+The deployment profile is the source of intent. It carries the AWS CLI profile,
+account id, region, VPC id, public/private/worker subnet ids, secret ARNs, stack
+names, service names, one ECR repository, selected surfaces, and fair-value
+schedule policy. AWS reads in `plan` are evidence only: observed identity,
+existing stack outputs, and observed schedule state. The orchestrator does not
+discover default VPCs, default subnets, or hard-coded secret names for apply.
+
+Supported MVP surfaces are:
+
+- `cockpit`: deploys public Cockpit plus private AlphaDB API.
+- `brti-collector`: deploys the long-running BRTI market-context collector.
+- `fair-value`: deploys fair-value live worker wiring.
+
+`expensive-yes` is rejected by this MVP orchestrator because its current AWS
+path defaults to an enabled schedule and needs separate schedule-safety gates.
+Cockpit pause/resume controls, CI/CD, custom domains, TLS, and managed Postgres
+provisioning are also out of scope.
+
+The orchestrator builds one Cockpit image and one Python runtime image per
+deployment id. Tags use:
+
+```text
+cockpit-<git-sha>-<timestamp>
+runtime-<git-sha>-<timestamp>
+```
+
+The runtime image is reused for AlphaDB API, BRTI collector, and fair-value
+wiring. `--skip-build` and `--skip-push` are explicit in plan and apply output
+for redeploying known-good images.
+
+Fair-value schedule behavior is intentionally narrow:
+
+- `schedule_policy: preserve` preserves the observed EventBridge rule state.
+- `--fair-value-safe-disable` or `schedule_policy: disable` deploys with the
+  schedule disabled.
+- Schedule enablement is rejected in this MVP.
+
+By default, Cockpit apply runs migrations, readiness seed, `alphadb-deploy
+smoke`, and public Cockpit smoke. BRTI apply waits for ECS service stability.
+Use `--skip-migrate`, `--skip-smoke`, or `--skip-service-stability` only when
+the handoff should explicitly record a skipped gate.
+
+Each plan or apply writes one ignored local JSON manifest under:
+
+```text
+artifacts/aws-deployments/
+```
+
+The manifest records deployment id, git sha, dirty-worktree flag, profile path,
+selected surfaces, AWS account and region, image URIs, stack outputs, observed
+and intended fair-value schedule state, smoke/status results, and rollback
+pointers such as previous stack outputs, task definitions, and schedule state
+when available. Raw secret values are not written; only profile secret ARN
+references are recorded.
 
 ## Required Inputs
 
@@ -78,9 +176,10 @@ SKIP_PUSH=1 \
 deploy/aws/deploy-cockpit-stack.sh
 ```
 
-## Deploy
+## Fallback Cockpit Script
 
-Run one command from the repository root:
+For Cockpit/API-only fallback work, the existing script can still be run from
+the repository root:
 
 ```bash
 AWS_PROFILE=alphadb \

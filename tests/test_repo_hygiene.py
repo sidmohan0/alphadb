@@ -85,6 +85,17 @@ def test_audit_warns_for_ignored_local_private_material(tmp_path: Path) -> None:
     }
 
 
+def test_cli_default_check_uses_current_directory(tmp_path: Path, monkeypatch, capsys) -> None:
+    init_repo(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text("# public\n", encoding="utf-8")
+    git_add(tmp_path, readme.name)
+    monkeypatch.chdir(tmp_path)
+
+    assert main([]) == 0
+    capsys.readouterr()
+
+
 def test_cli_check_and_audit_exit_codes(tmp_path: Path) -> None:
     init_repo(tmp_path)
     readme = tmp_path / "README.md"

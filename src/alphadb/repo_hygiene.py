@@ -295,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command or "check"
-    report = audit_repository(args.repo)
+    report = audit_repository(getattr(args, "repo", "."))
     strict_local = bool(getattr(args, "strict_local", False))
 
     if bool(getattr(args, "json", False)):

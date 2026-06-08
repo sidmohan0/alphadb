@@ -1,0 +1,64 @@
+name: alphadb-aws-mvp
+
+aws:
+  profile: alphadb
+  account_id: "123456789012"
+  region: us-east-2
+
+network:
+  vpc_id: vpc-0123456789abcdef0
+  public_subnet_ids:
+    - subnet-0publica
+    - subnet-0publicb
+  private_subnet_ids:
+    - subnet-0privatea
+    - subnet-0privateb
+  worker_subnet_ids:
+    - subnet-0privatea
+    - subnet-0privateb
+  assign_public_ip: DISABLED
+
+secrets:
+  database_url_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:alphadb/database-url
+  cockpit_pin_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:alphadb/cockpit-pin
+  cockpit_cookie_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:alphadb/cockpit-cookie-secret
+  kalshi_api_key_id_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:alphadb/kalshi-api-key-id
+  kalshi_private_key_pem_secret_arn: arn:aws:secretsmanager:us-east-2:123456789012:secret:alphadb/kalshi-private-key-pem
+
+images:
+  repository: alphadb-orchestrated
+  platform: linux/arm64
+
+surfaces:
+  selected:
+    - cockpit
+    - brti-collector
+    - fair-value
+
+cockpit:
+  stack_name: alphadb-cockpit
+  service_name: alphadb-cockpit
+  template_file: deploy/aws/ecs-fargate-dashboard.yaml
+  private_namespace_name: alphadb.local
+  runtime_mode: gated-live
+  desired_count: 1
+
+brti_collector:
+  stack_name: alphadb-brti-live-collector
+  service_name: alphadb-brti-live-collector
+  template_file: deploy/aws/brti-live-collector.yaml
+  desired_count: 1
+  index_id: BRTI
+  max_reconnects: "1000000"
+  kalshi_websocket_url: wss://external-api-ws.kalshi.com/trade-api/ws/v2
+
+fair_value:
+  stack_name: alphadb-fair-value-live
+  service_name: alphadb-fair-value-live
+  template_file: deploy/aws/fair-value-live-trading-job.yaml
+  report_bucket_name: alphadb-artifacts-123456789012-us-east-2
+  report_prefix: fair-value-live
+  schedule_expression: rate(1 minute)
+  schedule_policy: preserve
+  min_edge_values: "0.0,0.05,0.10"
+  min_contract_price: "0.25"
