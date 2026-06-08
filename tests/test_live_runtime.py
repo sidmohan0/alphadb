@@ -234,6 +234,35 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert no_recent.decision_outcome == "no_recent_run"
 
 
+def test_live_status_recent_attempt_rows_keep_last_50() -> None:
+    attempts = [
+        {
+            "submitted_at": f"2026-06-04T15:{minute:02d}:00+00:00",
+            "market_ticker": f"KXBTC15M-{minute:02d}",
+            "status": "skipped",
+            "reason": "edge_below_min",
+        }
+        for minute in range(60)
+    ]
+
+    status = build_fair_value_live_status(
+        manifest={
+            "run_id": "fv_live_recent_attempt_limit",
+            "generated_at": "2026-06-04T16:00:00+00:00",
+            "runtime_config": {"snapshot": {}},
+            "runtime_controls": {},
+            "counts": {"live_attempts": len(attempts)},
+        },
+        attempts_payload={"attempts": attempts},
+        reconciliation={"rows": []},
+    )
+
+    assert status.recent_attempt_count == 60
+    assert len(status.recent_attempts) == 50
+    assert status.recent_attempts[0]["market_ticker"] == "KXBTC15M-10"
+    assert status.recent_attempts[-1]["market_ticker"] == "KXBTC15M-59"
+
+
 def test_live_status_prefers_live_risk_day_accounting_over_full_history() -> None:
     status = build_fair_value_live_status(
         manifest={
