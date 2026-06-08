@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { apiGet, apiPost } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useSelectedStrategy } from "@/components/strategy/strategy-context"
-import { Activity, RefreshCw, Save, ShieldAlert, Square } from "lucide-react"
+import { Activity, CircleHelp, RefreshCw, Save, ShieldAlert, Square } from "lucide-react"
 
 interface LivePayload {
   strategy?: string
@@ -61,6 +62,47 @@ const MARKET_CONTEXT_OPTIONS = [
   { key: "brti_primary", label: "BRTI primary" },
   { key: "fixture", label: "Fixture" },
 ] as const
+
+const TABLE_TOOLTIPS = {
+  time: "When this order attempt was created or submitted.",
+  market: "Kalshi market ticker for the attempted live decision.",
+  status: "Recorded attempt status, such as submitted, skipped, or failed.",
+  reason: "Primary skip or guard reason recorded by the live worker.",
+  edge: "After-fee edge in contract-price percentage points. Positive means fair value is above executable price plus fees.",
+  min: "Minimum required after-fee edge from runtime config. 0.00% means require break-even or better.",
+  gap: "How far the calculated edge is above or below the configured minimum edge.",
+  fill: "Exchange submission or fill lifecycle status for the attempt.",
+} as const
+
+const CONFIG_TOOLTIPS = {
+  version: "Runtime config version currently active for this strategy.",
+  market_context_source: "External price/context source the next fair_value_live run should use.",
+  max_order_dollars: "Maximum dollars the live worker may reserve for a single order.",
+  max_market_exposure_dollars: "Maximum allowed exposure in one market before new orders are skipped.",
+  max_daily_loss_dollars: "Live risk day loss cap. Skips once used amount reaches this limit.",
+  min_edge: "Minimum after-fee edge required before submitting an order. 0.02 means 2 percentage points.",
+  min_contract_price: "Lowest executable contract price this strategy is allowed to trade.",
+  max_markets: "Maximum number of markets this strategy may act on in one live sweep.",
+} as const
+
+const MARKET_CONTEXT_TOOLTIPS = {
+  active_source: "Source currently selected in runtime config. Future runs should use this value.",
+  run_source: "Source the latest displayed live run actually used. It may lag the active source until another run completes.",
+  brti_value: "Latest BRTI index value available to the runtime.",
+  brti_age: "How old the latest BRTI context is when this status was generated.",
+  brti_health: "Whether the latest BRTI context is usable for live decisions.",
+  freshness: "Maximum BRTI age allowed before fair_value_live fails closed with a stale-context skip.",
+  basis: "BRTI minus Coinbase reference price, shown in dollars and as a percent of Coinbase.",
+  coinbase_diag: "Whether Coinbase reference data is available for diagnostics and basis comparison.",
+  recent_brti_skips: "Recent skip reasons caused by missing, stale, or invalid BRTI context.",
+} as const
+
+const RISK_TOOLTIPS = {
+  daily_used: "Live risk day loss budget already consumed or reserved by this strategy.",
+  daily_limit: "Configured max daily loss cap for this strategy.",
+  market_used: "Current exposure already used or reserved in this market.",
+  market_limit: "Configured per-market exposure cap for this strategy.",
+} as const
 
 type ConfigFieldKey = (typeof CONFIG_FIELDS)[number]["key"]
 type ConfigFormKey = ConfigFieldKey | "market_context_source"
@@ -424,14 +466,30 @@ export function LiveOperations() {
             <table className="min-w-[920px] w-full text-sm">
               <thead className="bg-muted/40 text-muted-foreground">
                 <tr>
-                  <th className="text-left px-4 py-2 font-medium">Time</th>
-                  <th className="text-left px-4 py-2 font-medium">Market</th>
-                  <th className="text-left px-4 py-2 font-medium">Status</th>
-                  <th className="text-left px-4 py-2 font-medium">Reason</th>
-                  <th className="text-right px-4 py-2 font-medium">Edge</th>
-                  <th className="text-right px-4 py-2 font-medium">Min</th>
-                  <th className="text-right px-4 py-2 font-medium">Gap</th>
-                  <th className="text-left px-4 py-2 font-medium">Fill</th>
+                  <th className="text-left px-4 py-2 font-medium">
+                    <TooltipLabel label="Time" tooltip={TABLE_TOOLTIPS.time} />
+                  </th>
+                  <th className="text-left px-4 py-2 font-medium">
+                    <TooltipLabel label="Market" tooltip={TABLE_TOOLTIPS.market} />
+                  </th>
+                  <th className="text-left px-4 py-2 font-medium">
+                    <TooltipLabel label="Status" tooltip={TABLE_TOOLTIPS.status} />
+                  </th>
+                  <th className="text-left px-4 py-2 font-medium">
+                    <TooltipLabel label="Reason" tooltip={TABLE_TOOLTIPS.reason} />
+                  </th>
+                  <th className="text-right px-4 py-2 font-medium">
+                    <TooltipLabel label="Edge" tooltip={TABLE_TOOLTIPS.edge} className="ml-auto" />
+                  </th>
+                  <th className="text-right px-4 py-2 font-medium">
+                    <TooltipLabel label="Min" tooltip={TABLE_TOOLTIPS.min} className="ml-auto" />
+                  </th>
+                  <th className="text-right px-4 py-2 font-medium">
+                    <TooltipLabel label="Gap" tooltip={TABLE_TOOLTIPS.gap} className="ml-auto" />
+                  </th>
+                  <th className="text-left px-4 py-2 font-medium">
+                    <TooltipLabel label="Fill" tooltip={TABLE_TOOLTIPS.fill} />
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -471,12 +529,17 @@ export function LiveOperations() {
               }}
             >
               <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                <span>Version</span>
+                <TooltipLabel label="Version" tooltip={CONFIG_TOOLTIPS.version} />
                 <span className="font-mono">{text(config?.version)}</span>
               </div>
-              <label className="space-y-1 text-sm">
-                <span className="block text-xs text-muted-foreground">Market context source</span>
+              <div className="space-y-1 text-sm">
+                <TooltipLabel
+                  className="text-xs text-muted-foreground"
+                  label="Market context source"
+                  tooltip={CONFIG_TOOLTIPS.market_context_source}
+                />
                 <select
+                  aria-label="Market context source"
                   className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
                   name="market_context_source"
                   onChange={(event) => handleConfigChange("market_context_source", event.target.value)}
@@ -489,14 +552,17 @@ export function LiveOperations() {
                 {configErrors.market_context_source && (
                   <span className="block text-xs text-destructive">{configErrors.market_context_source}</span>
                 )}
-              </label>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 {CONFIG_FIELDS.map((field) => (
-                  <label key={field.key} className="space-y-1 text-sm">
-                    <span className="block text-xs text-muted-foreground">
-                      {field.key === "min_contract_price" ? thresholdLabel : field.label}
-                    </span>
+                  <div key={field.key} className="space-y-1 text-sm">
+                    <TooltipLabel
+                      className="text-xs text-muted-foreground"
+                      label={field.key === "min_contract_price" ? thresholdLabel : field.label}
+                      tooltip={CONFIG_TOOLTIPS[field.key]}
+                    />
                     <input
+                      aria-label={field.key === "min_contract_price" ? thresholdLabel : field.label}
                       className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
                       inputMode="decimal"
                       max={field.max}
@@ -510,7 +576,7 @@ export function LiveOperations() {
                     {configErrors[field.key] && (
                       <span className="block text-xs text-destructive">{configErrors[field.key]}</span>
                     )}
-                  </label>
+                  </div>
                 ))}
               </div>
               <div className="flex min-h-7 items-center justify-between gap-3">
@@ -526,17 +592,29 @@ export function LiveOperations() {
           </Panel>
           <Panel title="Market Context">
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <Value label="Active source" value={sourceLabel(marketContext.active_source || config?.market_context_source)} />
-              <Value label="Run source" value={sourceLabel(latestRunContext.market_context_source)} />
-              <Value label="BRTI value" value={optionalNumber(brtiLatest.value)} />
-              <Value label="BRTI age" value={seconds(brtiLatest.age_seconds)} />
-              <Value label="BRTI health" value={text(brtiLatest.status)} />
-              <Value label="Freshness" value={seconds(brtiLatest.freshness_limit_seconds)} />
-              <Value label="Basis" value={basisText(coinbaseDiagnostics.basis_dollars, coinbaseDiagnostics.basis_pct)} />
-              <Value label="Coinbase diag" value={text(coinbaseDiagnostics.status)} />
+              <Value
+                label="Active source"
+                tooltip={MARKET_CONTEXT_TOOLTIPS.active_source}
+                value={sourceLabel(marketContext.active_source || config?.market_context_source)}
+              />
+              <Value
+                label="Run source"
+                tooltip={MARKET_CONTEXT_TOOLTIPS.run_source}
+                value={sourceLabel(latestRunContext.market_context_source)}
+              />
+              <Value label="BRTI value" tooltip={MARKET_CONTEXT_TOOLTIPS.brti_value} value={optionalNumber(brtiLatest.value)} />
+              <Value label="BRTI age" tooltip={MARKET_CONTEXT_TOOLTIPS.brti_age} value={seconds(brtiLatest.age_seconds)} />
+              <Value label="BRTI health" tooltip={MARKET_CONTEXT_TOOLTIPS.brti_health} value={text(brtiLatest.status)} />
+              <Value label="Freshness" tooltip={MARKET_CONTEXT_TOOLTIPS.freshness} value={seconds(brtiLatest.freshness_limit_seconds)} />
+              <Value label="Basis" tooltip={MARKET_CONTEXT_TOOLTIPS.basis} value={basisText(coinbaseDiagnostics.basis_dollars, coinbaseDiagnostics.basis_pct)} />
+              <Value label="Coinbase diag" tooltip={MARKET_CONTEXT_TOOLTIPS.coinbase_diag} value={text(coinbaseDiagnostics.status)} />
             </div>
             <div className="mt-3 border-t border-border pt-3">
-              <div className="text-xs text-muted-foreground">Recent BRTI skips</div>
+              <TooltipLabel
+                className="text-xs text-muted-foreground"
+                label="Recent BRTI skips"
+                tooltip={MARKET_CONTEXT_TOOLTIPS.recent_brti_skips}
+              />
               <div className="mt-2 flex flex-wrap gap-2">
                 {recentBrtiSkips.length ? recentBrtiSkips.map((reason) => (
                   <span key={reason} className="rounded-md border border-border bg-background px-2 py-1 font-mono text-xs">
@@ -550,10 +628,10 @@ export function LiveOperations() {
           </Panel>
           <Panel title="Risk">
             <div className="grid grid-cols-2 gap-3 text-sm">
-              <Value label="Daily used" value={money(status.daily_loss_used_dollars)} />
-              <Value label="Daily limit" value={money(status.daily_loss_limit_dollars)} />
-              <Value label="Market used" value={money(status.market_exposure_used_dollars)} />
-              <Value label="Market limit" value={money(status.market_exposure_limit_dollars)} />
+              <Value label="Daily used" tooltip={RISK_TOOLTIPS.daily_used} value={money(status.daily_loss_used_dollars)} />
+              <Value label="Daily limit" tooltip={RISK_TOOLTIPS.daily_limit} value={money(status.daily_loss_limit_dollars)} />
+              <Value label="Market used" tooltip={RISK_TOOLTIPS.market_used} value={money(status.market_exposure_used_dollars)} />
+              <Value label="Market limit" tooltip={RISK_TOOLTIPS.market_limit} value={money(status.market_exposure_limit_dollars)} />
             </div>
           </Panel>
           <Panel title="Recent Runs">
@@ -638,10 +716,33 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function Value({ label, value }: { label: string; value: string }) {
+function TooltipLabel({ label, tooltip, className = "" }: { label: string; tooltip: string; className?: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        aria-label={`${label}: ${tooltip}`}
+        className={`inline-flex items-center gap-1 rounded-sm text-left text-current underline decoration-dotted underline-offset-4 transition hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${className}`}
+        title={tooltip}
+        type="button"
+      >
+        <span>{label}</span>
+        <CircleHelp className="h-3 w-3 shrink-0 opacity-70" aria-hidden="true" />
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start">
+        {tooltip}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function Value({ label, value, tooltip }: { label: string; value: string; tooltip?: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-muted-foreground">{label}</span>
+      {tooltip ? (
+        <TooltipLabel className="text-muted-foreground" label={label} tooltip={tooltip} />
+      ) : (
+        <span className="text-muted-foreground">{label}</span>
+      )}
       <span className="font-mono text-xs">{value}</span>
     </div>
   )
