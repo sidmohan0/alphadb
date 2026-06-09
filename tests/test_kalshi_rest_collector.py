@@ -75,7 +75,7 @@ def test_collector_persists_status_and_recent_errors() -> None:
     summary = collector.collect(
         series="KXBTC15M",
         max_markets=1,
-        now=datetime(2026, 5, 31, 21, 12, tzinfo=UTC),
+        now=datetime.now(UTC),
     )
     recent_runs = collector.run_store.recent_runs(limit=1000)
     current_run = next(

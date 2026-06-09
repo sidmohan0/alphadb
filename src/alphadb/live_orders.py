@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from alphadb.config import Settings, settings_from_env
+from alphadb.live_settlement import reconcile_live_settlements
 from alphadb.paper.ioc import ApprovedOrderIntent, PaperExecutionRepository
 from alphadb.runtime import RuntimeGuardDecision, evaluate_runtime_guard
 from alphadb.state.repository import OperationalStateRepository
@@ -778,6 +779,14 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--order-intent-id", required=True)
     status = subparsers.add_parser("status", help="Show live adapter readiness and attempts")
     status.add_argument("--limit", type=int, default=10)
+    reconcile = subparsers.add_parser(
+        "reconcile-settlement",
+        help="Materialize canonical live settlement P&L rows",
+    )
+    reconcile.add_argument("--strategy", default="fair_value_live")
+    reconcile.add_argument("--market-ticker")
+    reconcile.add_argument("--live-risk-day")
+    reconcile.add_argument("--limit", type=int, default=500)
     return parser
 
 
@@ -807,5 +816,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 default=str,
             )
         )
+        return 0
+    if args.command == "reconcile-settlement":
+        live_risk_day = (
+            date.fromisoformat(args.live_risk_day)
+            if getattr(args, "live_risk_day", None)
+            else None
+        )
+        summary = reconcile_live_settlements(
+            database_url=settings.database_url,
+            settings=settings,
+            strategy=args.strategy,
+            market_ticker=args.market_ticker,
+            live_risk_day=live_risk_day,
+            limit=args.limit,
+        )
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
         return 0
     raise AssertionError(f"unhandled command: {args.command}")

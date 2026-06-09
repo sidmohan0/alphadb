@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 
 from alphadb.live_runtime import FAIR_VALUE_LIVE_STRATEGY
 from alphadb.live_edge_attribution import summarize_live_edge_attribution_buckets
+from alphadb.live_settlement import summarize_live_trade_reconciliations
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -21,6 +22,7 @@ DEFAULT_MARKET_SERIES = "KXBTC15M"
 PERFORMANCE_STALE_AFTER_SECONDS = 300
 DEFAULT_RECENT_RUN_LIMIT = 25
 DEFAULT_PAPER_ROW_LIMIT = 500
+DEFAULT_LIVE_RECONCILIATION_LIMIT = 500
 
 
 class PerformanceSummaryRepository:
@@ -44,6 +46,12 @@ class PerformanceSummaryRepository:
                     cursor,
                     strategy=strategy,
                     limit=recent_limit,
+                )
+                live_reconciliation_rows = _live_reconciliation_rows(
+                    cursor,
+                    strategy=strategy,
+                    market_series=market_series,
+                    limit=DEFAULT_LIVE_RECONCILIATION_LIMIT,
                 )
                 if strategy == FAIR_VALUE_LIVE_STRATEGY:
                     order_rows = _paper_order_rows(
@@ -71,6 +79,7 @@ class PerformanceSummaryRepository:
             generated_at=datetime.now(UTC),
             config_row=config_row,
             status_rows=status_rows,
+            live_reconciliation_rows=live_reconciliation_rows,
             order_rows=order_rows,
             fill_rows=fill_rows,
             position_rows=position_rows,
@@ -84,6 +93,7 @@ def build_performance_summary(
     generated_at: datetime,
     config_row: Mapping[str, Any] | None = None,
     status_rows: Sequence[Mapping[str, Any]] = (),
+    live_reconciliation_rows: Sequence[Mapping[str, Any]] = (),
     order_rows: Sequence[Mapping[str, Any]] = (),
     fill_rows: Sequence[Mapping[str, Any]] = (),
     position_rows: Sequence[Mapping[str, Any]] = (),
@@ -92,6 +102,7 @@ def build_performance_summary(
     rows = [dict(row) for row in status_rows]
     execution = summarize_execution(rows)
     pnl = summarize_pnl(
+        live_reconciliation_rows=live_reconciliation_rows,
         order_rows=order_rows,
         fill_rows=fill_rows,
         position_rows=position_rows,
@@ -182,10 +193,15 @@ def summarize_execution(status_rows: Sequence[Mapping[str, Any]]) -> dict[str, A
 
 def summarize_pnl(
     *,
+    live_reconciliation_rows: Sequence[Mapping[str, Any]] = (),
     order_rows: Sequence[Mapping[str, Any]] = (),
     fill_rows: Sequence[Mapping[str, Any]] = (),
     position_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
+    live_reconciliations = [dict(row) for row in live_reconciliation_rows]
+    if live_reconciliations:
+        return summarize_live_reconciliation_pnl(live_reconciliations)
+
     orders = [dict(row) for row in order_rows]
     fills = [dict(row) for row in fill_rows]
     positions = [dict(row) for row in position_rows]
@@ -199,9 +215,14 @@ def summarize_pnl(
             "net_pnl_dollars": None,
             "realized_pnl_dollars": None,
             "unrealized_pnl_dollars": None,
+            "gross_cost_dollars": None,
             "fees_dollars": None,
+            "payout_dollars": None,
             "unsettled_exposure_dollars": None,
             "filled_contracts": 0,
+            "settled_trade_count": 0,
+            "open_trade_count": 0,
+            "win_rate": None,
             "order_count": 0,
             "fill_count": 0,
             "position_count": 0,
@@ -246,9 +267,14 @@ def summarize_pnl(
         "net_pnl_dollars": _money(net_pnl),
         "realized_pnl_dollars": _money(realized),
         "unrealized_pnl_dollars": _money(unrealized),
+        "gross_cost_dollars": None,
         "fees_dollars": _money(fees),
+        "payout_dollars": None,
         "unsettled_exposure_dollars": _money(unsettled_exposure),
         "filled_contracts": filled_contracts,
+        "settled_trade_count": 0,
+        "open_trade_count": 0,
+        "win_rate": None,
         "order_count": len(orders),
         "fill_count": len(fills),
         "position_count": len(positions),
@@ -259,6 +285,41 @@ def summarize_pnl(
                 key=lambda item: item[0],
             )
         ),
+    }
+
+
+def summarize_live_reconciliation_pnl(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    summary = summarize_live_trade_reconciliations(rows)
+    pnl = dict(summary["pnl"])
+    settlement = dict(summary["settlement"])
+    settlement_state = str(settlement.get("state") or "unavailable")
+    status = "ok" if settlement_state == "complete" else "partial"
+    filled_contracts = _float(pnl.get("filled_contracts")) or 0.0
+    fees_status = "available" if filled_contracts > 0 else "not_applicable"
+    latest = _latest_live_reconciliation_observed_at(rows)
+    return {
+        "status": status,
+        "status_detail": "Canonical live trade reconciliation rows are available."
+        if status == "ok"
+        else "Some live trade settlement rows remain unresolved.",
+        "settlement_state": settlement_state,
+        "fees_status": fees_status,
+        "net_pnl_dollars": _money(_float(pnl.get("net_pnl_dollars"))),
+        "realized_pnl_dollars": _money(_float(pnl.get("realized_pnl_dollars"))),
+        "unrealized_pnl_dollars": None,
+        "gross_cost_dollars": _money(_float(pnl.get("gross_cost_dollars"))),
+        "fees_dollars": _money(_float(pnl.get("fees_dollars"))),
+        "payout_dollars": _money(_float(pnl.get("payout_dollars"))),
+        "unsettled_exposure_dollars": _money(_float(pnl.get("unsettled_exposure_dollars"))),
+        "filled_contracts": filled_contracts,
+        "settled_trade_count": int(pnl.get("settled_trade_count") or 0),
+        "open_trade_count": int(pnl.get("open_trade_count") or 0),
+        "win_rate": _float(pnl.get("win_rate")) if pnl.get("win_rate") is not None else None,
+        "order_count": len(rows),
+        "fill_count": len([row for row in rows if (_float(row.get("filled_contracts")) or 0) > 0]),
+        "position_count": 0,
+        "latest_observed_at_utc": _iso(latest),
+        "reconciliation_counts": dict(summary["counts"]),
     }
 
 
@@ -384,6 +445,47 @@ def _recent_status_rows(
         limit %s
         """,
         (strategy, limit),
+    )
+    return cursor.fetchall()
+
+
+def _live_reconciliation_rows(
+    cursor: psycopg.Cursor,
+    *,
+    strategy: str,
+    market_series: str,
+    limit: int,
+) -> list[Mapping[str, Any]]:
+    cursor.execute(
+        """
+        select
+            live_order_attempt_id,
+            strategy,
+            run_id,
+            live_risk_day,
+            market_ticker,
+            side,
+            filled_contracts,
+            cost_dollars,
+            fees_dollars,
+            market_status,
+            market_result,
+            settlement_status,
+            payout_dollars,
+            net_pnl_dollars,
+            unsettled_exposure_dollars,
+            decision_source,
+            settlement_source,
+            settlement_observed_at,
+            reconciled_at,
+            metadata
+        from live_trade_reconciliations
+        where strategy = %s
+          and (market_ticker = %s or market_ticker like %s)
+        order by reconciled_at desc, live_order_attempt_id desc
+        limit %s
+        """,
+        (strategy, market_series, f"{market_series}-%", limit),
     )
     return cursor.fetchall()
 
@@ -680,6 +782,19 @@ def _latest_observed_at(
     return max(parsed) if parsed else None
 
 
+def _latest_live_reconciliation_observed_at(rows: Sequence[Mapping[str, Any]]) -> datetime | None:
+    timestamps = [
+        _datetime(row.get("reconciled_at")) for row in rows if row.get("reconciled_at")
+    ]
+    timestamps.extend(
+        _datetime(row.get("settlement_observed_at"))
+        for row in rows
+        if row.get("settlement_observed_at")
+    )
+    parsed = [timestamp for timestamp in timestamps if timestamp is not None]
+    return max(parsed) if parsed else None
+
+
 def _overall_data_status(
     execution: Mapping[str, Any],
     pnl: Mapping[str, Any],
@@ -706,7 +821,7 @@ def _data_status_detail(
         return "Latest live run is older than the Performance freshness threshold."
     if status == "partial":
         if execution.get("data_status") == "empty":
-            return "Paper performance rows exist but no recent live run rows are recorded."
+            return "Performance rows exist but no recent live run rows are recorded."
         return str(pnl.get("status_detail") or "Some performance fields are unavailable.")
     return "Performance data is current."
 
