@@ -33,10 +33,12 @@ from alphadb.health import HealthReport, collect_health
 from alphadb.live_runtime import (
     EXPENSIVE_YES_LIVE_STRATEGY,
     FAIR_VALUE_LIVE_STRATEGY,
+    LiveRunStatus,
     LiveRunStatusRepository,
     LiveRuntimeConfig,
     LiveRuntimeConfigRepository,
     MARKET_CONTEXT_COINBASE_PRIMARY,
+    no_recent_live_run_status,
     runtime_strategy_metadata,
 )
 from alphadb.live_risk import LiveRiskAdmissionRepository
@@ -55,6 +57,7 @@ HealthCollector = Callable[[Settings], HealthReport]
 PortfolioBalanceProvider = Callable[[Settings], Mapping[str, Any]]
 LIVE_DASHBOARD_STRATEGIES = (FAIR_VALUE_LIVE_STRATEGY, EXPENSIVE_YES_LIVE_STRATEGY)
 LIVE_RISK_TIMEZONE = "America/Los_Angeles"
+STRATEGY_OPERATOR_LEDGER_SCHEMA_VERSION = "strategy_operator_ledger/v1"
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,25 @@ class DashboardService:
                 strategy=strategy,
                 limit=8,
             ),
+        }
+
+    def strategy_operator_ledger_payload(self) -> dict[str, Any]:
+        generated_at = datetime.now(UTC)
+        config_repository = self.config_repository_factory(self.settings.database_url)
+        status_repository = self.status_repository_factory(self.settings.database_url)
+        rows = [
+            _strategy_operator_ledger_row(
+                strategy=strategy,
+                config_repository=config_repository,
+                status_repository=status_repository,
+            )
+            for strategy in LIVE_DASHBOARD_STRATEGIES
+        ]
+        return {
+            "schema_version": STRATEGY_OPERATOR_LEDGER_SCHEMA_VERSION,
+            "generated_at": generated_at.isoformat(),
+            "fleet_health": _strategy_operator_fleet_health(rows),
+            "rows": rows,
         }
 
     def performance_payload(self, *, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> dict[str, Any]:
@@ -435,6 +457,266 @@ def market_context_label(source: str | None) -> str:
     return labels.get(str(source or ""), str(source or MARKET_CONTEXT_COINBASE_PRIMARY))
 
 
+def _strategy_operator_ledger_row(
+    *,
+    strategy: str,
+    config_repository: LiveRuntimeConfigRepository,
+    status_repository: LiveRunStatusRepository,
+) -> dict[str, Any]:
+    metadata = runtime_strategy_metadata(strategy)
+    active_config: dict[str, Any] | None = None
+    config_error: str | None = None
+    status_error: str | None = None
+    try:
+        active_config = config_repository.seed_defaults(strategy=strategy).as_dict()
+    except Exception as exc:
+        config_error = f"{type(exc).__name__}: {exc}"
+    try:
+        latest_status = status_repository.latest_status(strategy=strategy)
+    except Exception as exc:
+        latest_status = no_recent_live_run_status(strategy=strategy)
+        status_error = f"{type(exc).__name__}: {exc}"
+    recent_runs_error: str | None = None
+    try:
+        recent_runs = _recent_run_summaries(
+            status_repository.recent_details(strategy=strategy, limit=3)
+        )
+    except Exception as exc:
+        recent_runs = []
+        recent_runs_error = f"{type(exc).__name__}: {exc}"
+
+    health, health_detail = _strategy_operator_health(
+        latest_status,
+        config_error=config_error,
+        status_error=status_error,
+    )
+    live_state, live_state_detail = _strategy_operator_live_state(
+        latest_status,
+        status_error=status_error,
+    )
+    return {
+        "strategy_id": strategy,
+        "display_name": str(metadata.get("label") or strategy),
+        "health": health,
+        "health_detail": health_detail,
+        "live_state": live_state,
+        "live_state_detail": live_state_detail,
+        "data_state": _strategy_operator_data_state(
+            latest_status,
+            config_error=config_error,
+            status_error=status_error,
+        ),
+        "latest_run_id": latest_status.run_id,
+        "latest_run_generated_at": latest_status.generated_at.isoformat()
+        if latest_status.generated_at
+        else None,
+        "latest_decision": _strategy_operator_latest_decision(latest_status),
+        "recent_runs": recent_runs,
+        "risk_summary": _strategy_operator_risk_summary(
+            latest_status,
+            status_error=status_error,
+        ),
+        "context_summary": _strategy_operator_context_summary(
+            latest_status,
+            active_config=active_config,
+            config_error=config_error,
+            status_error=status_error,
+        ),
+        "decision_outcome": latest_status.decision_outcome,
+        "latest_attempt_status": latest_status.latest_attempt_status,
+        "latest_attempt_reason": latest_status.latest_attempt_reason,
+        "live_orders_enabled": latest_status.live_orders_enabled
+        if latest_status.run_id is not None
+        else None,
+        "active_config": active_config,
+        "config_error": config_error,
+        "status_error": status_error,
+        "recent_runs_error": recent_runs_error,
+    }
+
+
+def _strategy_operator_health(
+    status: LiveRunStatus,
+    *,
+    config_error: str | None,
+    status_error: str | None,
+) -> tuple[str, str]:
+    if status_error:
+        return "unknown", f"Live status unavailable: {status_error}"
+    if config_error:
+        return "unknown", f"Runtime config unavailable: {config_error}"
+    if status.run_id is None:
+        return "unknown", "No live run status recorded."
+    failed_states = {"error", "failed"}
+    if status.decision_outcome in failed_states or status.latest_attempt_status in failed_states:
+        reason = status.latest_attempt_reason or status.skip_reason or status.decision_outcome
+        return "failed", f"Latest run failed: {reason}"
+    if not status.live_orders_enabled:
+        return "paused", "Latest status has live orders disabled."
+    if status.decision_outcome == "skipped" and (
+        status.skip_reason or status.latest_attempt_reason
+    ):
+        return "healthy", f"Latest run skipped: {status.skip_reason or status.latest_attempt_reason}"
+    return "healthy", f"Latest run outcome: {status.decision_outcome}"
+
+
+def _strategy_operator_live_state(
+    status: LiveRunStatus,
+    *,
+    status_error: str | None,
+) -> tuple[str, str]:
+    if status_error:
+        return "unavailable", "Live status could not be read."
+    if status.run_id is None:
+        return "no_recent_run", "No live run has been recorded for this strategy."
+    if status.live_orders_enabled:
+        return "enabled", "Latest run reported live orders enabled."
+    return "disabled", "Latest run reported live orders disabled."
+
+
+def _strategy_operator_data_state(
+    status: LiveRunStatus,
+    *,
+    config_error: str | None,
+    status_error: str | None,
+) -> str:
+    if config_error or status_error:
+        return "unavailable"
+    if status.run_id is None:
+        return "sparse"
+    return "available"
+
+
+def _strategy_operator_latest_decision(status: LiveRunStatus) -> dict[str, Any]:
+    return {
+        "outcome": status.decision_outcome,
+        "side": status.selected_side,
+        "reason": status.skip_reason or status.latest_attempt_reason,
+        "market_ticker": status.current_market_ticker,
+        "run_id": status.run_id,
+        "generated_at": status.generated_at.isoformat() if status.generated_at else None,
+    }
+
+
+def _strategy_operator_risk_summary(
+    status: LiveRunStatus,
+    *,
+    status_error: str | None,
+) -> dict[str, Any]:
+    if status_error:
+        state = "unavailable"
+        detail = "Live risk inputs could not be read."
+    elif status.run_id is None:
+        state = "sparse"
+        detail = "No recent live risk status recorded."
+    else:
+        state = "available"
+        detail = (
+            f"Daily ${status.daily_loss_used_dollars:.2f}/${status.daily_loss_limit_dollars:.2f}; "
+            f"market ${status.market_exposure_used_dollars:.2f}/"
+            f"${status.market_exposure_limit_dollars:.2f}"
+        )
+    return {
+        "state": state,
+        "detail": detail,
+        "daily_loss_used_dollars": status.daily_loss_used_dollars
+        if status.run_id is not None
+        else None,
+        "daily_loss_limit_dollars": status.daily_loss_limit_dollars
+        if status.run_id is not None
+        else None,
+        "market_exposure_used_dollars": status.market_exposure_used_dollars
+        if status.run_id is not None
+        else None,
+        "market_exposure_limit_dollars": status.market_exposure_limit_dollars
+        if status.run_id is not None
+        else None,
+    }
+
+
+def _strategy_operator_context_summary(
+    status: LiveRunStatus,
+    *,
+    active_config: Mapping[str, Any] | None,
+    config_error: str | None,
+    status_error: str | None,
+) -> dict[str, Any]:
+    latest_context = _mapping_or_empty(status.summary.get("market_context"))
+    active_source = _optional_text(active_config.get("market_context_source")) if active_config else None
+    run_source = _optional_text(latest_context.get("market_context_source"))
+    context_status = _optional_text(latest_context.get("market_context_status"))
+    external_close_source = _optional_text(latest_context.get("external_close_source"))
+    if config_error or status_error:
+        state = "unavailable"
+        detail = "Market context inputs could not be read."
+    elif status.run_id is None:
+        state = "sparse"
+        detail = "No latest-run market context recorded."
+    else:
+        state = context_status or "available"
+        detail = f"{market_context_label(run_source or active_source)} context {state}."
+    return {
+        "state": state,
+        "detail": detail,
+        "active_source": active_source,
+        "active_source_label": market_context_label(active_source),
+        "latest_run_source": run_source,
+        "latest_run_source_label": market_context_label(run_source or active_source),
+        "latest_run_status": context_status,
+        "external_close_source": external_close_source,
+    }
+
+
+def _recent_run_summaries(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized = [dict(row) for row in rows if isinstance(row, Mapping)]
+    normalized.sort(key=lambda row: str(row.get("generated_at") or ""), reverse=True)
+    return normalized[:3]
+
+
+def _strategy_operator_fleet_health(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    counts = {
+        "healthy": 0,
+        "degraded": 0,
+        "paused": 0,
+        "failed": 0,
+        "unknown": 0,
+        "unavailable": 0,
+    }
+    for row in rows:
+        health = str(row.get("health") or "unknown")
+        if health in counts:
+            counts[health] += 1
+        else:
+            counts["unknown"] += 1
+        if row.get("data_state") == "unavailable":
+            counts["unavailable"] += 1
+    total = len(rows)
+    if counts["failed"]:
+        state = "failed"
+        detail = f"{counts['failed']} strategy health failure(s)."
+    elif counts["unavailable"]:
+        state = "unavailable"
+        detail = f"{counts['unavailable']} strategy data source(s) unavailable."
+    elif counts["degraded"]:
+        state = "degraded"
+        detail = f"{counts['degraded']} strategy health signal(s) degraded."
+    elif counts["unknown"]:
+        state = "unknown"
+        detail = f"{counts['unknown']} strategy health signal(s) unknown."
+    elif counts["paused"]:
+        state = "paused"
+        detail = f"{counts['paused']} strategy or strategies paused."
+    else:
+        state = "healthy"
+        detail = "All visible strategy health signals are healthy."
+    return {
+        "state": state,
+        "detail": detail,
+        "counts": counts,
+        "total": total,
+    }
+
+
 def dashboard_auth_config(settings: Settings) -> DashboardAuthConfig:
     return DashboardAuthConfig.from_settings(settings).validate()
 
@@ -685,6 +967,9 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/api/health":
                     self._json_ok(service.api_health())
+                    return
+                if path == "/api/live/ledger":
+                    self._json_ok(service.strategy_operator_ledger_payload())
                     return
                 if path == "/api/performance":
                     self._json_ok(

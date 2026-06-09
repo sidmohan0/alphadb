@@ -84,6 +84,7 @@ class FakeConfigRepository:
 class FakeStatusRepository:
     database_url: str
     status: LiveRunStatus = no_recent_live_run_status()
+    recent: list[dict[str, Any]] | None = None
 
     def latest_status(self, *, strategy: str) -> LiveRunStatus:
         if strategy == self.status.strategy:
@@ -91,7 +92,9 @@ class FakeStatusRepository:
         return no_recent_live_run_status(strategy=strategy)
 
     def recent_details(self, *, strategy: str, limit: int) -> list[dict[str, Any]]:
-        return []
+        if strategy != self.status.strategy:
+            return []
+        return list(self.recent or [])
 
 
 @dataclass
@@ -156,6 +159,7 @@ def service(
     repository: FakeConfigRepository,
     *,
     status: LiveRunStatus | None = None,
+    recent: list[dict[str, Any]] | None = None,
     live_risk_repository: FakeLiveRiskRepository | None = None,
 ) -> DashboardService:
     risk_repository = live_risk_repository or FakeLiveRiskRepository(
@@ -167,6 +171,7 @@ def service(
         status_repository_factory=lambda database_url: FakeStatusRepository(
             database_url,
             status=status or no_recent_live_run_status(),
+            recent=recent,
         ),
         live_risk_repository_factory=lambda database_url: risk_repository,
         health_collector=ok_health,
@@ -218,6 +223,116 @@ def test_live_payload_does_not_expose_dashboard_process_guard() -> None:
     assert payload["portfolio_balance"]["portfolio_balance_dollars"] == 123.45
     assert payload["portfolio_balance"]["cash_dollars"] == 67.89
     assert payload["portfolio_balance"]["assets_dollars"] == 55.56
+
+
+def test_strategy_operator_ledger_payload_returns_ordered_sparse_rows() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    status = replace(
+        no_recent_live_run_status(),
+        run_id="fv_live_20260604T150000Z",
+        generated_at=datetime(2026, 6, 4, 15, tzinfo=UTC),
+        live_orders_enabled=True,
+        decision_outcome="skipped",
+        skip_reason="edge_below_min",
+        latest_attempt_status="skipped",
+        latest_attempt_reason="edge_below_min",
+    )
+    dashboard = service(repository, status=status)
+
+    payload = dashboard.strategy_operator_ledger_payload()
+    rows = payload["rows"]
+
+    assert payload["schema_version"] == "strategy_operator_ledger/v1"
+    assert [row["strategy_id"] for row in rows] == [
+        FAIR_VALUE_LIVE_STRATEGY,
+        EXPENSIVE_YES_LIVE_STRATEGY,
+    ]
+    assert rows[0]["display_name"] == "Fair-value live"
+    assert rows[0]["health"] == "healthy"
+    assert rows[0]["health_detail"] == "Latest run skipped: edge_below_min"
+    assert rows[0]["live_state"] == "enabled"
+    assert rows[0]["data_state"] == "available"
+    assert rows[0]["latest_run_id"] == "fv_live_20260604T150000Z"
+    assert rows[0]["latest_decision"]["outcome"] == "skipped"
+    assert rows[0]["latest_decision"]["reason"] == "edge_below_min"
+    assert rows[0]["risk_summary"]["state"] == "available"
+    assert rows[0]["context_summary"]["active_source"] == "coinbase_primary"
+    assert rows[0]["active_config"]["strategy"] == FAIR_VALUE_LIVE_STRATEGY
+    assert rows[1]["display_name"] == "Expensive YES guarded live run"
+    assert rows[1]["health"] == "unknown"
+    assert rows[1]["health_detail"] == "No live run status recorded."
+    assert rows[1]["live_state"] == "no_recent_run"
+    assert rows[1]["data_state"] == "sparse"
+    assert rows[1]["latest_run_id"] is None
+    assert rows[1]["latest_decision"]["outcome"] == "no_recent_run"
+    assert rows[1]["risk_summary"]["state"] == "sparse"
+    assert rows[1]["context_summary"]["state"] == "sparse"
+    assert rows[1]["active_config"]["strategy"] == EXPENSIVE_YES_LIVE_STRATEGY
+    assert payload["fleet_health"]["counts"]["healthy"] == 1
+    assert payload["fleet_health"]["counts"]["unknown"] == 1
+
+
+def test_strategy_operator_ledger_caps_and_sorts_recent_runs() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    status = replace(
+        no_recent_live_run_status(),
+        run_id="fv_live_latest",
+        generated_at=datetime(2026, 6, 4, 15, 3, tzinfo=UTC),
+        live_orders_enabled=True,
+        decision_outcome="submitted",
+        latest_attempt_status="submitted",
+        current_market_ticker="KXBTC15M-LATEST",
+        daily_loss_used_dollars=1.25,
+        daily_loss_limit_dollars=50.0,
+        market_exposure_used_dollars=2.0,
+        market_exposure_limit_dollars=5.0,
+        summary={
+            "market_context": {
+                "market_context_source": "brti_primary",
+                "market_context_status": "fresh",
+                "external_close_source": "brti",
+            }
+        },
+    )
+    recent = [
+        {"run_id": "oldest", "generated_at": "2026-06-04T15:00:00+00:00"},
+        {"run_id": "newest", "generated_at": "2026-06-04T15:03:00+00:00"},
+        {"run_id": "middle", "generated_at": "2026-06-04T15:02:00+00:00"},
+        {"run_id": "fourth", "generated_at": "2026-06-04T15:01:00+00:00"},
+    ]
+    dashboard = service(repository, status=status, recent=recent)
+
+    row = dashboard.strategy_operator_ledger_payload()["rows"][0]
+
+    assert [run["run_id"] for run in row["recent_runs"]] == ["newest", "middle", "fourth"]
+    assert row["latest_decision"]["outcome"] == "submitted"
+    assert row["latest_decision"]["market_ticker"] == "KXBTC15M-LATEST"
+    assert row["risk_summary"]["detail"] == "Daily $1.25/$50.00; market $2.00/$5.00"
+    assert row["context_summary"]["latest_run_source"] == "brti_primary"
+    assert row["context_summary"]["latest_run_status"] == "fresh"
+
+
+def test_strategy_operator_ledger_marks_repository_failures_unavailable() -> None:
+    class BrokenStatusRepository:
+        def __init__(self, database_url: str):
+            self.database_url = database_url
+
+        def latest_status(self, *, strategy: str) -> LiveRunStatus:
+            raise RuntimeError("database unavailable")
+
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    dashboard = DashboardService(
+        settings=settings_from_env({"DATABASE_URL": "postgresql://example.test/alphadb"}),
+        config_repository_factory=lambda database_url: repository,
+        status_repository_factory=BrokenStatusRepository,
+        health_collector=ok_health,
+    )
+
+    payload = dashboard.strategy_operator_ledger_payload()
+
+    assert {row["data_state"] for row in payload["rows"]} == {"unavailable"}
+    assert all(row["live_state"] == "unavailable" for row in payload["rows"])
+    assert all(row["status_error"].startswith("RuntimeError: database unavailable") for row in payload["rows"])
 
 
 def test_live_payload_preserves_recent_attempt_edge_attribution() -> None:
@@ -289,6 +404,27 @@ def test_cockpit_runtime_config_exposes_daily_limit_reset_action() -> None:
     assert "Reset daily" in source
     assert "setDailyLimitsResetting" in source
     assert "Open and pending exposure will remain reserved" in source
+
+
+def test_cockpit_home_renders_api_backed_strategy_operator_ledger() -> None:
+    page_source = Path("apps/dashboard/app/page.tsx").read_text()
+    component_source = Path(
+        "apps/dashboard/components/live/strategy-operator-ledger.tsx"
+    ).read_text()
+    app_source = Path("src/alphadb/dashboard/app.py").read_text()
+
+    assert "StrategyOperatorLedger" in page_source
+    assert "StrategySummaryCardPrototype" not in page_source
+    assert 'apiGet<StrategyLedgerPayload>("/live/ledger")' in component_source
+    assert 'path == "/api/live/ledger"' in app_source
+    assert "setSelectedStrategyId" in component_source
+    assert "VISIBILITY_STORAGE_KEY" in component_source
+    assert "window.localStorage" in component_source
+    assert "RecentRunChips" in component_source
+    assert "RiskMeter" in component_source
+    assert not Path("apps/dashboard/components/live/strategy-summary-card-prototype.tsx").exists()
+    assert not Path("apps/dashboard/components/prototype/prototype-switcher.tsx").exists()
+    assert "sample state" not in component_source
 
 
 def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:
