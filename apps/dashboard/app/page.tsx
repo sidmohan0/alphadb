@@ -1,10 +1,10 @@
 import { AppShell } from "@/components/app-shell"
-import { LiveOperations } from "@/components/live/live-operations"
+import { StrategyOperatorLedger } from "@/components/live/strategy-operator-ledger"
 
 export default function HomePage() {
   return (
-    <AppShell>
-      <LiveOperations />
+    <AppShell showStrategySelector={false}>
+      <StrategyOperatorLedger />
     </AppShell>
   )
 }
