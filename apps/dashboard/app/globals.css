@@ -39,6 +39,18 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-surface-panel: var(--surface-panel);
+  --color-surface-panel-raised: var(--surface-panel-raised);
+  --color-surface-inset: var(--surface-inset);
+  --color-field: var(--field);
+  --color-field-border: var(--field-border);
+  --color-cockpit-accent: var(--cockpit-accent);
+  --color-cockpit-accent-strong: var(--cockpit-accent-strong);
+  --color-cockpit-accent-soft: var(--cockpit-accent-soft);
+  --color-cockpit-accent-border: var(--cockpit-accent-border);
+  --color-cockpit-accent-foreground: var(--cockpit-accent-foreground);
+  --color-cockpit-risk: var(--cockpit-risk);
+  --color-cockpit-risk-soft: var(--cockpit-risk-soft);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
@@ -58,6 +70,11 @@
   --foreground: oklch(0.95 0 0);
   --card: oklch(0.17 0.005 260);
   --card-foreground: oklch(0.95 0 0);
+  --surface-panel: oklch(0.185 0.006 260);
+  --surface-panel-raised: oklch(0.205 0.007 260);
+  --surface-inset: oklch(0.145 0.006 260);
+  --field: oklch(0.235 0.008 260);
+  --field-border: oklch(0.42 0.012 260);
   --popover: oklch(0.17 0.005 260);
   --popover-foreground: oklch(0.95 0 0);
   --primary: oklch(0.95 0 0);
@@ -66,12 +83,20 @@
   --secondary-foreground: oklch(0.85 0 0);
   --muted: oklch(0.22 0.005 260);
   --muted-foreground: oklch(0.65 0 0);
-  --accent: oklch(0.22 0.005 260);
+  /* Cockpit accent palette: British Racing Green and Guards Red */
+  --cockpit-accent: #004225;
+  --cockpit-accent-strong: #0b5d3d;
+  --cockpit-accent-border: #2f9a68;
+  --cockpit-accent-soft: color-mix(in oklch, var(--cockpit-accent) 34%, var(--surface-panel));
+  --cockpit-accent-foreground: oklch(0.97 0.012 145);
+  --cockpit-risk: #ce1126;
+  --cockpit-risk-soft: color-mix(in oklch, var(--cockpit-risk) 18%, var(--surface-panel));
+  --accent: var(--cockpit-accent-soft);
   --accent-foreground: oklch(0.95 0 0);
-  --destructive: oklch(0.65 0.2 25);
+  --destructive: var(--cockpit-risk);
   --border: oklch(0.28 0.005 260);
   --input: oklch(0.22 0.005 260);
-  --ring: oklch(0.5 0 0);
+  --ring: var(--cockpit-accent-border);
   /* Success - green for verified OK states */
   --success: oklch(0.72 0.17 142);
   --success-foreground: oklch(0.13 0.005 260);
@@ -99,11 +124,28 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-color: var(--field-border) var(--surface-inset);
+    scrollbar-width: thin;
   }
   body {
     @apply bg-background text-foreground;
   }
   html {
     @apply font-sans;
+  }
+  *::-webkit-scrollbar {
+    width: 0.625rem;
+    height: 0.625rem;
+  }
+  *::-webkit-scrollbar-track {
+    background: var(--surface-inset);
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--field-border);
+    border: 2px solid var(--surface-inset);
+    border-radius: 999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--cockpit-accent-border);
   }
 }
