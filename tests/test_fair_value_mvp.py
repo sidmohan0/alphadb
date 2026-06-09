@@ -1726,12 +1726,13 @@ def test_live_trading_job_resets_daily_cap_at_live_risk_day_boundary(
     assert admission_accounting["same_live_risk_day_rows"] == 0
     assert admission_accounting["daily_loss_used_dollars"] == 0.0
     assert post_run_accounting["basis"] == "live_risk_admission_state"
-    assert post_run_accounting["daily_loss_used_dollars"] > 0.0
+    assert post_run_accounting["daily_loss_used_dollars"] == 0.0
+    assert post_run_accounting["open_exposure_dollars"] > 0.0
     assert attempts["attempts"][0]["status"] == "submitted"
     assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 0.0
 
 
-def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_only(
+def test_live_trading_job_daily_loss_accounting_separates_settled_loss_and_unsettled_exposure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1789,9 +1790,11 @@ def test_live_trading_job_daily_cap_counts_settled_loss_and_unsettled_exposure_o
     assert admission_accounting["basis"] == "live_risk_admission_state"
     assert admission_accounting["daily_loss_realized_dollars"] == 20.5
     assert admission_accounting["open_exposure_dollars"] == 24.25
-    assert admission_accounting["daily_loss_used_dollars"] == 44.75
-    assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 44.75
-    assert manifest["runtime_controls"]["daily_loss_accounting"]["daily_loss_used_dollars"] > 44.75
+    assert admission_accounting["daily_loss_used_dollars"] == 20.5
+    assert attempts["attempts"][0]["daily_loss_used_before_dollars"] == 20.5
+    post_run_accounting = manifest["runtime_controls"]["daily_loss_accounting"]
+    assert post_run_accounting["daily_loss_used_dollars"] == 20.5
+    assert post_run_accounting["open_exposure_dollars"] > 24.25
 
 
 def test_live_trading_job_uses_dashboard_config_for_order_sizing_and_manifest(

@@ -6,12 +6,13 @@ import argparse
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 from alphadb.collectors.brti import (
     BRTI_INDEX_ID,
@@ -38,12 +39,14 @@ from alphadb.live_runtime import (
     MARKET_CONTEXT_COINBASE_PRIMARY,
     runtime_strategy_metadata,
 )
+from alphadb.live_risk import LiveRiskAdmissionRepository
 from alphadb.performance import PerformanceSummaryRepository
 from alphadb.portfolio import cached_portfolio_balance_payload
 
 
 ConfigRepositoryFactory = Callable[[str], LiveRuntimeConfigRepository]
 StatusRepositoryFactory = Callable[[str], LiveRunStatusRepository]
+LiveRiskRepositoryFactory = Callable[[str], LiveRiskAdmissionRepository]
 StrategyRepositoryFactory = Callable[[str], DashboardStrategyRepository]
 DataExplorerRepositoryFactory = Callable[[str], DashboardDataExplorerRepository]
 LabRepositoryFactory = Callable[[str], DashboardLabRepository]
@@ -51,6 +54,7 @@ PerformanceRepositoryFactory = Callable[[str], PerformanceSummaryRepository]
 HealthCollector = Callable[[Settings], HealthReport]
 PortfolioBalanceProvider = Callable[[Settings], Mapping[str, Any]]
 LIVE_DASHBOARD_STRATEGIES = (FAIR_VALUE_LIVE_STRATEGY, EXPENSIVE_YES_LIVE_STRATEGY)
+LIVE_RISK_TIMEZONE = "America/Los_Angeles"
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,7 @@ class DashboardService:
     settings: Settings
     config_repository_factory: ConfigRepositoryFactory = LiveRuntimeConfigRepository
     status_repository_factory: StatusRepositoryFactory = LiveRunStatusRepository
+    live_risk_repository_factory: LiveRiskRepositoryFactory = LiveRiskAdmissionRepository
     strategy_repository_factory: StrategyRepositoryFactory = DashboardStrategyRepository
     data_explorer_repository_factory: DataExplorerRepositoryFactory = (
         DashboardDataExplorerRepository
@@ -142,6 +147,55 @@ class DashboardService:
                     limit=6,
                 )
             ],
+        }
+
+    def reset_daily_limits(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        strategy = _live_strategy(str(payload.get("strategy") or FAIR_VALUE_LIVE_STRATEGY))
+        observed_at = _ensure_utc(now or datetime.now(UTC))
+        live_risk_day = _live_risk_day(observed_at)
+        repository = self.live_risk_repository_factory(self.settings.database_url)
+        state = repository.get_state(strategy=strategy, live_risk_day=live_risk_day)
+        if state is not None and state.status in {"locked", "reconciling"}:
+            raise ValueError(f"cannot reset daily limits while risk state is {state.status}")
+        previous_daily_loss = state.daily_loss_used_dollars if state else 0.0
+        metadata = dict(state.metadata or {}) if state else {}
+        reset_record = {
+            "actor": str(payload.get("actor") or "dashboard"),
+            "reset_at": observed_at.isoformat(),
+            "previous_daily_loss_used_dollars": round(previous_daily_loss, 6),
+            "preserved_open_exposure_dollars": round(
+                state.open_exposure_dollars if state else 0.0,
+                6,
+            ),
+            "preserved_pending_exposure_dollars": round(
+                state.pending_exposure_dollars if state else 0.0,
+                6,
+            ),
+        }
+        metadata["last_daily_loss_reset"] = reset_record
+        updated = repository.upsert_state(
+            strategy=strategy,
+            live_risk_day=live_risk_day,
+            daily_loss_used_dollars=0.0,
+            open_exposure_dollars=state.open_exposure_dollars if state else 0.0,
+            pending_exposure_dollars=state.pending_exposure_dollars if state else 0.0,
+            per_market_exposure_dollars=state.per_market_exposure_dollars if state else {},
+            pending_reservations=state.pending_reservations if state else {},
+            updated_at=observed_at,
+            status=state.status if state else "active",
+            metadata=metadata,
+        )
+        return {
+            "ok": True,
+            "strategy": strategy,
+            "live_risk_day": live_risk_day.isoformat(),
+            "reset": reset_record,
+            "live_risk_admission_state": updated.as_dict(),
         }
 
     def compile_strategy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -433,6 +487,16 @@ def _live_strategy(value: str | None) -> str:
     return strategy
 
 
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _live_risk_day(value: datetime) -> date:
+    return _ensure_utc(value).astimezone(ZoneInfo(LIVE_RISK_TIMEZONE)).date()
+
+
 def _query_int(query: Mapping[str, Sequence[str]], key: str, default: int) -> int:
     value = _query_text(query, key)
     return default if value is None else int(value)
@@ -708,6 +772,9 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                 return
             if path == "/api/ask":
                 self._json_ok(service.ask_agent(payload))
+                return
+            if path == "/api/live/reset-daily-limits":
+                self._json_ok(service.reset_daily_limits(payload))
                 return
             self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
 
@@ -1158,7 +1225,7 @@ function render(data) {{
   text("decision", status.decision_outcome || "--");
   text("decision-detail", status.selected_side || status.skip_reason || "--");
   text("risk", money(status.daily_loss_used_dollars));
-  text("risk-detail", "daily limit " + money(status.daily_loss_limit_dollars) + " · market " + money(status.market_exposure_used_dollars) + " / " + money(status.market_exposure_limit_dollars));
+  text("risk-detail", "daily loss limit " + money(status.daily_loss_limit_dollars) + " · market " + money(status.market_exposure_used_dollars) + " / " + money(status.market_exposure_limit_dollars));
   text("execution", status.latest_attempt_status || status.fill_status || "--");
   text("execution-detail", status.latest_attempt_reason || status.fill_status || "--");
   fields.forEach(key => {{ if (key in config) document.getElementById(key).value = config[key]; }});

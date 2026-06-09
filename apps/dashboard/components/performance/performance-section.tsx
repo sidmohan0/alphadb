@@ -319,7 +319,7 @@ export function PerformanceSection() {
 
           <Panel title="Risk Budget">
             <div className="space-y-2 text-sm">
-              <Value label="Daily used" value={optionalMoney(risk?.daily_loss_used_dollars)} />
+              <Value label="Daily loss" value={optionalMoney(risk?.daily_loss_used_dollars)} />
               <Value label="Daily limit" value={optionalMoney(risk?.daily_loss_limit_dollars)} />
               <Value label="Daily remaining" value={optionalMoney(risk?.daily_loss_remaining_dollars)} />
               <Value label="Daily usage" value={optionalPercent(risk?.daily_loss_usage_fraction)} />

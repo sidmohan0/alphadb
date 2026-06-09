@@ -303,7 +303,7 @@ class LiveRiskAdmissionRepository:
                             state=state,
                             market_ticker=market_ticker,
                         )
-                    daily_before = state.total_risk_used_dollars
+                    daily_before = round(state.daily_loss_used_dollars, 6)
                     market_before = state.market_exposure_dollars(market_ticker)
                     if daily_before + max_loss_dollars > max_daily_loss_dollars:
                         connection.rollback()

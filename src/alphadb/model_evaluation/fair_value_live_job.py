@@ -464,7 +464,7 @@ class FairValueLiveTradingJob:
             if sized_order is not None
             else 0.0
         )
-        risk_before = admission_state.total_risk_used_dollars if admission_state else 0.0
+        risk_before = admission_state.daily_loss_used_dollars if admission_state else 0.0
         freshness = live_decision_freshness(decision_row, generated_at=generated_at)
         attempt_id = f"{live_run_id_prefix(self.config.strategy)}_order_{uuid4().hex[:12]}"
         base = {
@@ -1774,7 +1774,7 @@ def live_risk_accounting_report(
         "pending_exposure_dollars": round(state.pending_exposure_dollars, 6),
         "pending_reservation_count": len(state.pending_reservations),
         "pending_reservation_ids": sorted(state.pending_reservations),
-        "daily_loss_used_dollars": state.total_risk_used_dollars,
+        "daily_loss_used_dollars": round(state.daily_loss_used_dollars, 6),
         "per_market_exposure_dollars": dict(state.per_market_exposure_dollars),
     }
 
