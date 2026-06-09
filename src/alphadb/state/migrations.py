@@ -874,6 +874,49 @@ LIVE_TRADE_RECONCILIATIONS = Migration(
 )
 
 
+DEPLOYMENT_INTENTS = Migration(
+    version="0019_deployment_intents",
+    statements=(
+        """
+        create table if not exists deployment_intents (
+            deployment_intent_id text primary key,
+            status text not null check (
+                status in ('pending', 'planning', 'planned', 'failed', 'canceled')
+            ),
+            actor text not null,
+            source text not null,
+            reason text not null,
+            profile_path text not null,
+            requested_surfaces jsonb not null default '[]'::jsonb,
+            build_policy jsonb not null default '{}'::jsonb,
+            schedule_policy jsonb not null default '{}'::jsonb,
+            live_authority jsonb not null default '{}'::jsonb,
+            confirmation jsonb not null default '{}'::jsonb,
+            image_identities jsonb not null default '{}'::jsonb,
+            evidence jsonb not null default '{}'::jsonb,
+            rollback_pointers jsonb not null default '{}'::jsonb,
+            metadata jsonb not null default '{}'::jsonb,
+            error jsonb not null default '{}'::jsonb,
+            claimed_by text,
+            claimed_at timestamptz,
+            completed_at timestamptz,
+            canceled_at timestamptz,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists deployment_intents_status_created_idx
+        on deployment_intents(status, created_at)
+        """,
+        """
+        create index if not exists deployment_intents_actor_created_idx
+        on deployment_intents(actor, created_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -893,4 +936,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     BRTI_LATEST_CONTEXT,
     LIVE_RUNTIME_MARKET_CONTEXT_SOURCE,
     LIVE_TRADE_RECONCILIATIONS,
+    DEPLOYMENT_INTENTS,
 )
