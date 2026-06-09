@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from alphadb.aws_deploy import add_aws_deploy_parser, run_aws_deployment_command
 from alphadb.config import Settings, settings_from_env
 from alphadb.dashboard.auth import DashboardAuthConfig
+from alphadb.deployment_intents import DeploymentIntentRepository
+from alphadb.deployment_worker import DeploymentIntentWorker
 from alphadb.health import HealthReport, collect_health
 from alphadb.live_runtime import LiveRuntimeConfigRepository
 from alphadb.markets.registry import default_market_registry
@@ -225,6 +229,13 @@ def build_parser() -> argparse.ArgumentParser:
     aws = subparsers.add_parser("aws", help="Plan or apply coordinated AWS deployment surfaces")
     add_aws_deploy_parser(aws)
 
+    worker = subparsers.add_parser(
+        "deployment-worker",
+        help="Claim one deployment intent and record dry-run plan evidence",
+    )
+    worker.add_argument("--worker-id", default=None)
+    worker.add_argument("--manifest-root", default="artifacts/aws-deployments")
+
     subparsers.add_parser("migrate", help="Apply operational-state migrations")
 
     release = subparsers.add_parser(
@@ -277,6 +288,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     settings = settings_from_env()
     repository = OperationalStateRepository(settings.database_url)
+
+    if args.command == "deployment-worker":
+        intent_repository = DeploymentIntentRepository(settings.database_url)
+        result = DeploymentIntentWorker(
+            intent_repository,
+            manifest_root=Path(args.manifest_root),
+        ).run_once(worker_id=args.worker_id or f"deployment-worker-{socket.gethostname()}")
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+        return 1 if result.status == "failed" else 0
 
     if args.command == "migrate":
         applied = repository.apply_migrations()

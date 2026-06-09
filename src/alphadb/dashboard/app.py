@@ -29,6 +29,10 @@ from alphadb.dashboard.skills import (
     terminal_response,
 )
 from alphadb.dashboard.strategy import DashboardStrategyRepository, compile_strategy_brief
+from alphadb.deployment_intents import (
+    DeploymentIntentRepository,
+    deployment_intent_kwargs_from_payload,
+)
 from alphadb.health import HealthReport, collect_health
 from alphadb.live_runtime import (
     EXPENSIVE_YES_LIVE_STRATEGY,
@@ -53,6 +57,7 @@ StrategyRepositoryFactory = Callable[[str], DashboardStrategyRepository]
 DataExplorerRepositoryFactory = Callable[[str], DashboardDataExplorerRepository]
 LabRepositoryFactory = Callable[[str], DashboardLabRepository]
 PerformanceRepositoryFactory = Callable[[str], PerformanceSummaryRepository]
+DeploymentIntentRepositoryFactory = Callable[[str], DeploymentIntentRepository]
 HealthCollector = Callable[[Settings], HealthReport]
 PortfolioBalanceProvider = Callable[[Settings], Mapping[str, Any]]
 LIVE_DASHBOARD_STRATEGIES = (FAIR_VALUE_LIVE_STRATEGY, EXPENSIVE_YES_LIVE_STRATEGY)
@@ -72,6 +77,9 @@ class DashboardService:
     )
     lab_repository_factory: LabRepositoryFactory = DashboardLabRepository
     performance_repository_factory: PerformanceRepositoryFactory = PerformanceSummaryRepository
+    deployment_intent_repository_factory: DeploymentIntentRepositoryFactory = (
+        DeploymentIntentRepository
+    )
     health_collector: HealthCollector = collect_health
     portfolio_balance_provider: PortfolioBalanceProvider = cached_portfolio_balance_payload
 
@@ -351,6 +359,36 @@ class DashboardService:
     def capabilities(self) -> dict[str, Any]:
         return capabilities_payload()
 
+    def create_deployment_intent(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        repository = self._deployment_intent_repository()
+        intent = repository.create_intent(**deployment_intent_kwargs_from_payload(payload))
+        return {"intent": intent.as_dict()}
+
+    def list_deployment_intents(self, *, limit: int = 50) -> dict[str, Any]:
+        repository = self._deployment_intent_repository()
+        return {
+            "intents": [intent.as_dict() for intent in repository.list_intents(limit=limit)]
+        }
+
+    def get_deployment_intent(self, deployment_intent_id: str) -> dict[str, Any]:
+        return {
+            "intent": self._deployment_intent_repository()
+            .get_intent(deployment_intent_id)
+            .as_dict()
+        }
+
+    def cancel_deployment_intent(
+        self,
+        deployment_intent_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        intent = self._deployment_intent_repository().cancel_intent(
+            deployment_intent_id,
+            actor=str(payload.get("actor") or "dashboard"),
+            reason=str(payload.get("reason") or ""),
+        )
+        return {"intent": intent.as_dict()}
+
     def ask_agent(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         skill, params = classify_terminal_request(payload)
         note = _optional_text(params.pop("note", None))
@@ -388,6 +426,9 @@ class DashboardService:
 
     def _lab_repository(self) -> DashboardLabRepository:
         return self.lab_repository_factory(self.settings.database_url)
+
+    def _deployment_intent_repository(self) -> DeploymentIntentRepository:
+        return self.deployment_intent_repository_factory(self.settings.database_url)
 
 
 def market_context_payload(
@@ -1031,6 +1072,18 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
                 if path == "/api/capabilities":
                     self._json_ok(service.capabilities())
                     return
+                if path == "/api/deployment/intents":
+                    self._json_ok(
+                        service.list_deployment_intents(
+                            limit=_query_int(query, "limit", 50)
+                        )
+                    )
+                    return
+                if path.startswith("/api/deployment/intents/"):
+                    parts = _path_parts(path)
+                    if len(parts) == 4:
+                        self._json_ok(service.get_deployment_intent(parts[3]))
+                        return
                 self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
             except Exception as exc:
                 self._json_error(str(exc), code=_error_code(exc), status=_error_status(exc))
@@ -1061,6 +1114,14 @@ def make_handler(service: DashboardService) -> type[BaseHTTPRequestHandler]:
             if path == "/api/live/reset-daily-limits":
                 self._json_ok(service.reset_daily_limits(payload))
                 return
+            if path == "/api/deployment/intents":
+                self._json_ok(service.create_deployment_intent(payload), status=HTTPStatus.ACCEPTED)
+                return
+            if path.startswith("/api/deployment/intents/"):
+                parts = _path_parts(path)
+                if len(parts) == 5 and parts[4] == "cancel":
+                    self._json_ok(service.cancel_deployment_intent(parts[3], payload))
+                    return
             self._json_error("not_found", status=HTTPStatus.NOT_FOUND)
 
         def _json(
