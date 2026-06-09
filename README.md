@@ -427,7 +427,7 @@ alphadb-strategy gated-live-loop --max-markets 3
 ```
 
 The fair-value live-money canary has separate ledger-style caps for each order,
-each market ticker, and the daily loss/exposure envelope. Locally, either pass
+each market ticker, and realized daily loss. Locally, either pass
 the CLI flags explicitly or set env vars and omit the flags:
 
 ```bash

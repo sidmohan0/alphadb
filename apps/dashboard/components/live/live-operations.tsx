@@ -39,6 +39,12 @@ interface SaveConfigResponse {
   config_history?: Array<Record<string, unknown>>
 }
 
+interface ResetDailyLimitsResponse {
+  ok?: boolean
+  live_risk_day?: string
+  live_risk_admission_state?: Record<string, unknown>
+}
+
 type Tone = "good" | "warn" | "bad" | "muted"
 
 interface LiveEdgeAttribution {
@@ -80,7 +86,7 @@ const CONFIG_TOOLTIPS = {
   market_context_source: "External price/context source the next fair_value_live run should use.",
   max_order_dollars: "Maximum dollars the live worker may reserve for a single order.",
   max_market_exposure_dollars: "Maximum allowed exposure in one market before new orders are skipped.",
-  max_daily_loss_dollars: "Live risk day loss cap. Skips once used amount reaches this limit.",
+  max_daily_loss_dollars: "Live risk day realized-loss cap. Skips once realized loss reaches this limit.",
   min_edge: "Minimum after-fee edge required before submitting an order. 0.02 means 2 percentage points.",
   min_contract_price: "Lowest executable contract price this strategy is allowed to trade.",
   max_markets: "Maximum number of markets this strategy may act on in one live sweep.",
@@ -99,8 +105,8 @@ const MARKET_CONTEXT_TOOLTIPS = {
 } as const
 
 const RISK_TOOLTIPS = {
-  daily_used: "Live risk day loss budget already consumed or reserved by this strategy.",
-  daily_limit: "Configured max daily loss cap for this strategy.",
+  daily_used: "Realized loss for this strategy in the current live risk day.",
+  daily_limit: "Configured max realized daily loss cap for this strategy.",
   market_used: "Current exposure already used or reserved in this market.",
   market_limit: "Configured per-market exposure cap for this strategy.",
 } as const
@@ -438,6 +444,7 @@ export function LiveOperations() {
   const [configDirty, setConfigDirty] = useState(false)
   const [configErrors, setConfigErrors] = useState<ConfigErrors>({})
   const [configSaving, setConfigSaving] = useState(false)
+  const [dailyLimitsResetting, setDailyLimitsResetting] = useState(false)
   const [configSaveMessage, setConfigSaveMessage] = useState<string | null>(null)
   const [expandedAttempts, setExpandedAttempts] = useState<Record<string, boolean>>({})
   const [panelLayout, setPanelLayout] = useState<PanelLayoutItem[]>(defaultPanelLayout)
@@ -696,6 +703,29 @@ export function LiveOperations() {
     }
   }
 
+  const resetDailyLimits = async () => {
+    const confirmed = window.confirm(
+      "Reset realized daily loss for the current live risk day? Open and pending exposure will remain reserved.",
+    )
+    if (!confirmed) return
+
+    setDailyLimitsResetting(true)
+    setConfigSaveMessage(null)
+    try {
+      const reset = await apiPost<ResetDailyLimitsResponse>(
+        "/live/reset-daily-limits",
+        { strategy: selectedStrategy },
+      )
+      setPayload(await apiGet<LivePayload>(`/live?strategy=${encodeURIComponent(selectedStrategy)}`))
+      setConfigDirty(false)
+      setConfigSaveMessage(reset.live_risk_day ? `Daily loss reset for ${reset.live_risk_day}` : "Daily loss reset")
+    } catch (err) {
+      setConfigSaveMessage(err instanceof Error ? err.message : "Reset failed")
+    } finally {
+      setDailyLimitsResetting(false)
+    }
+  }
+
   const panelContent: Record<PanelId, ReactNode> = {
     market: (
       <Metric label="Market" value={text(status.current_market_ticker, "No recent run")} detail={text(status.run_id, "")} />
@@ -704,7 +734,7 @@ export function LiveOperations() {
       <Metric label="Decision" value={text(status.decision_outcome)} detail={text(status.selected_side || status.skip_reason, "")} />
     ),
     "risk-summary": (
-      <Metric label="Risk" value={money(status.daily_loss_used_dollars)} detail={`limit ${money(status.daily_loss_limit_dollars)} · market ${money(status.market_exposure_used_dollars)} / ${money(status.market_exposure_limit_dollars)}`} />
+      <Metric label="Risk" value={money(status.daily_loss_used_dollars)} detail={`loss limit ${money(status.daily_loss_limit_dollars)} · market ${money(status.market_exposure_used_dollars)} / ${money(status.market_exposure_limit_dollars)}`} />
     ),
     execution: (
       <Metric label="Execution" value={text(status.latest_attempt_status || status.fill_status, "No attempt")} detail={text(status.latest_attempt_reason || status.fill_status, "")} />
@@ -778,13 +808,19 @@ export function LiveOperations() {
             ))}
           </div>
           <div className="flex min-h-7 items-center justify-between gap-3">
-            <span className={`text-xs ${configSaveMessage === "Saved" || configSaveMessage?.startsWith("Saved v") ? "text-success" : "text-muted-foreground"}`}>
+            <span className={`text-xs ${configSaveMessage === "Saved" || configSaveMessage?.startsWith("Saved v") || configSaveMessage?.startsWith("Daily loss reset") ? "text-success" : "text-muted-foreground"}`}>
               {configSaveMessage}
             </span>
-            <Button type="submit" size="sm" disabled={!config || configSaving}>
-              <Save className="h-4 w-4" />
-              {configSaving ? "Saving" : "Save"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" disabled={!config || dailyLimitsResetting} onClick={() => void resetDailyLimits()}>
+                <RotateCcw className="h-4 w-4" />
+                {dailyLimitsResetting ? "Resetting" : "Reset daily"}
+              </Button>
+              <Button type="submit" size="sm" disabled={!config || configSaving}>
+                <Save className="h-4 w-4" />
+                {configSaving ? "Saving" : "Save"}
+              </Button>
+            </div>
           </div>
         </form>
       </Panel>
@@ -830,7 +866,7 @@ export function LiveOperations() {
     risk: (
       <Panel title="Risk">
         <div className="grid grid-cols-2 gap-3 text-sm">
-          <Value label="Daily used" tooltip={RISK_TOOLTIPS.daily_used} value={money(status.daily_loss_used_dollars)} />
+          <Value label="Daily loss" tooltip={RISK_TOOLTIPS.daily_used} value={money(status.daily_loss_used_dollars)} />
           <Value label="Daily limit" tooltip={RISK_TOOLTIPS.daily_limit} value={money(status.daily_loss_limit_dollars)} />
           <Value label="Market used" tooltip={RISK_TOOLTIPS.market_used} value={money(status.market_exposure_used_dollars)} />
           <Value label="Market limit" tooltip={RISK_TOOLTIPS.market_limit} value={money(status.market_exposure_limit_dollars)} />

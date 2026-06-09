@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ from alphadb.live_runtime import (
     LiveRuntimeConfigRevision,
     no_recent_live_run_status,
 )
+from alphadb.live_risk import LiveRiskAdmissionState
 
 
 def ok_health(_) -> HealthReport:
@@ -93,6 +94,47 @@ class FakeStatusRepository:
         return []
 
 
+@dataclass
+class FakeLiveRiskRepository:
+    database_url: str
+    state: LiveRiskAdmissionState | None = None
+
+    def get_state(self, *, strategy: str, live_risk_day):
+        if self.state and self.state.strategy == strategy and self.state.live_risk_day == live_risk_day:
+            return self.state
+        return None
+
+    def upsert_state(
+        self,
+        *,
+        strategy: str,
+        live_risk_day,
+        daily_loss_used_dollars: float = 0.0,
+        open_exposure_dollars: float = 0.0,
+        pending_exposure_dollars: float = 0.0,
+        per_market_exposure_dollars=None,
+        pending_reservations=None,
+        updated_at=None,
+        status: str = "active",
+        metadata=None,
+    ):
+        version = (self.state.version + 1) if self.state else 1
+        self.state = LiveRiskAdmissionState(
+            strategy=strategy,
+            live_risk_day=live_risk_day,
+            daily_loss_used_dollars=daily_loss_used_dollars,
+            open_exposure_dollars=open_exposure_dollars,
+            pending_exposure_dollars=pending_exposure_dollars,
+            per_market_exposure_dollars=per_market_exposure_dollars or {},
+            pending_reservations=pending_reservations or {},
+            updated_at=updated_at or datetime(2026, 6, 4, 15, tzinfo=UTC),
+            version=version,
+            status=status,
+            metadata=metadata or {},
+        )
+        return self.state
+
+
 def revision(
     version: int,
     config: LiveRuntimeConfig,
@@ -114,7 +156,11 @@ def service(
     repository: FakeConfigRepository,
     *,
     status: LiveRunStatus | None = None,
+    live_risk_repository: FakeLiveRiskRepository | None = None,
 ) -> DashboardService:
+    risk_repository = live_risk_repository or FakeLiveRiskRepository(
+        "postgresql://example.test/alphadb"
+    )
     return DashboardService(
         settings=settings_from_env({"DATABASE_URL": "postgresql://example.test/alphadb"}),
         config_repository_factory=lambda database_url: repository,
@@ -122,6 +168,7 @@ def service(
             database_url,
             status=status or no_recent_live_run_status(),
         ),
+        live_risk_repository_factory=lambda database_url: risk_repository,
         health_collector=ok_health,
         portfolio_balance_provider=lambda settings: {
             "status": "ok",
@@ -235,6 +282,15 @@ def test_cockpit_recent_attempts_table_renders_edge_diagnostics() -> None:
     assert "window.localStorage" in source
 
 
+def test_cockpit_runtime_config_exposes_daily_limit_reset_action() -> None:
+    source = Path("apps/dashboard/components/live/live-operations.tsx").read_text()
+
+    assert "/live/reset-daily-limits" in source
+    assert "Reset daily" in source
+    assert "setDailyLimitsResetting" in source
+    assert "Open and pending exposure will remain reserved" in source
+
+
 def test_live_payload_keeps_simulated_summary_out_of_dashboard_api() -> None:
     repository = FakeConfigRepository("postgresql://example.test/alphadb")
     status = replace(
@@ -293,6 +349,46 @@ def test_dashboard_service_saves_config_and_reloads_active_values() -> None:
     assert payload["market_context"]["active_source"] == "brti_primary"
     assert payload["market_context"]["brti_latest"]["status"] == "unavailable"
     assert [row["version"] for row in payload["config_history"]] == [2, 1]
+
+
+def test_dashboard_service_resets_realized_daily_loss_without_erasing_exposure() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    risk_repository = FakeLiveRiskRepository(
+        "postgresql://example.test/alphadb",
+        state=LiveRiskAdmissionState(
+            strategy=FAIR_VALUE_LIVE_STRATEGY,
+            live_risk_day=date(2026, 6, 4),
+            daily_loss_used_dollars=12.5,
+            open_exposure_dollars=4.25,
+            pending_exposure_dollars=0.75,
+            per_market_exposure_dollars={"KXBTC15M-OPEN": 4.25, "KXBTC15M-PENDING": 0.75},
+            pending_reservations={
+                "res_pending": {
+                    "reservation_id": "res_pending",
+                    "market_ticker": "KXBTC15M-PENDING",
+                    "max_loss_dollars": 0.75,
+                }
+            },
+            updated_at=datetime(2026, 6, 4, 15, tzinfo=UTC),
+            version=3,
+        ),
+    )
+    dashboard = service(repository, live_risk_repository=risk_repository)
+
+    result = dashboard.reset_daily_limits(
+        {"strategy": FAIR_VALUE_LIVE_STRATEGY},
+        now=datetime(2026, 6, 5, 0, 30, tzinfo=UTC),
+    )
+
+    state = risk_repository.state
+    assert result["live_risk_day"] == "2026-06-04"
+    assert state is not None
+    assert state.daily_loss_used_dollars == 0.0
+    assert state.open_exposure_dollars == 4.25
+    assert state.pending_exposure_dollars == 0.75
+    assert state.pending_reservations["res_pending"]["market_ticker"] == "KXBTC15M-PENDING"
+    assert state.metadata["last_daily_loss_reset"]["previous_daily_loss_used_dollars"] == 12.5
+    assert result["live_risk_admission_state"]["daily_loss_used_dollars"] == 0.0
 
 
 def test_dashboard_service_exposes_compact_market_context_from_latest_run() -> None:
