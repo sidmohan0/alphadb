@@ -3,6 +3,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { apiGet, apiPost } from "@/lib/alphadb-api"
 import { Button } from "@/components/ui/button"
+import { Field, FieldMessage, Input, Select, fieldLabelClassName } from "@/components/ui/field"
+import { MetricSurface, NestedSurface, PanelBody, PanelHeader, PanelSurface } from "@/components/ui/surface"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useSelectedStrategy } from "@/components/strategy/strategy-context"
 import { Activity, ChevronDown, ChevronRight, CircleHelp, Eye, EyeOff, GripVertical, RefreshCw, RotateCcw, Save, ShieldAlert, Square } from "lucide-react"
@@ -760,15 +762,15 @@ export function LiveOperations() {
             <TooltipLabel label="Version" tooltip={CONFIG_TOOLTIPS.version} />
             <span className="font-mono">{text(config?.version)}</span>
           </div>
-          <div className="space-y-1 text-sm">
+          <Field>
             <TooltipLabel
-              className="text-xs text-muted-foreground"
+              className={fieldLabelClassName}
               label="Market context source"
               tooltip={CONFIG_TOOLTIPS.market_context_source}
             />
-            <select
+            <Select
               aria-label="Market context source"
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
+              aria-invalid={Boolean(configErrors.market_context_source) || undefined}
               name="market_context_source"
               onChange={(event) => handleConfigChange("market_context_source", event.target.value)}
               value={configForm.market_context_source}
@@ -776,22 +778,22 @@ export function LiveOperations() {
               {MARKET_CONTEXT_OPTIONS.map((option) => (
                 <option key={option.key} value={option.key}>{option.label}</option>
               ))}
-            </select>
+            </Select>
             {configErrors.market_context_source && (
-              <span className="block text-xs text-destructive">{configErrors.market_context_source}</span>
+              <FieldMessage tone="error">{configErrors.market_context_source}</FieldMessage>
             )}
-          </div>
+          </Field>
           <div className="grid grid-cols-2 gap-3">
             {CONFIG_FIELDS.map((field) => (
-              <div key={field.key} className="space-y-1 text-sm">
+              <Field key={field.key}>
                 <TooltipLabel
-                  className="text-xs text-muted-foreground"
+                  className={fieldLabelClassName}
                   label={field.key === "min_contract_price" ? thresholdLabel : field.label}
                   tooltip={CONFIG_TOOLTIPS[field.key]}
                 />
-                <input
+                <Input
                   aria-label={field.key === "min_contract_price" ? thresholdLabel : field.label}
-                  className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
+                  aria-invalid={Boolean(configErrors[field.key]) || undefined}
                   inputMode="decimal"
                   max={field.max}
                   min={field.min}
@@ -802,9 +804,9 @@ export function LiveOperations() {
                   value={configForm[field.key]}
                 />
                 {configErrors[field.key] && (
-                  <span className="block text-xs text-destructive">{configErrors[field.key]}</span>
+                  <FieldMessage tone="error">{configErrors[field.key]}</FieldMessage>
                 )}
-              </div>
+              </Field>
             ))}
           </div>
           <div className="flex min-h-7 items-center justify-between gap-3">
@@ -853,7 +855,7 @@ export function LiveOperations() {
           />
           <div className="mt-2 flex flex-wrap gap-2">
             {recentBrtiSkips.length ? recentBrtiSkips.map((reason) => (
-              <span key={reason} className="rounded-md border border-border bg-background px-2 py-1 font-mono text-xs">
+              <span key={reason} className="rounded-md border border-field-border/60 bg-surface-inset px-2 py-1 font-mono text-xs text-foreground">
                 {reason}
               </span>
             )) : (
@@ -877,10 +879,10 @@ export function LiveOperations() {
       <Panel title="Recent Runs">
         <div className="space-y-2">
           {recentRuns.length ? recentRuns.map((run, index) => (
-            <div key={index} className="text-sm border-t border-border first:border-0 pt-2 first:pt-0">
+            <NestedSurface key={index} className="px-2 py-1.5 text-sm">
               <div className="font-mono text-xs">{text(run.run_id)}</div>
               <div className="text-muted-foreground">{text(run.decision_outcome)} · {text(run.latest_attempt_reason, "")} · {shortTime(run.generated_at)}</div>
-            </div>
+            </NestedSurface>
           )) : (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <ShieldAlert className="h-4 w-4" />
@@ -958,7 +960,13 @@ export function LiveOperations() {
             <RefreshCw className="h-4 w-4" />
             Refresh
           </Button>
-          <Button variant="destructive" size="sm" disabled title="Backend stop skill is not wired yet">
+          <Button
+            className="disabled:border-cockpit-risk/35 disabled:bg-cockpit-risk/10 disabled:text-cockpit-risk/70 disabled:opacity-100"
+            variant="destructive"
+            size="sm"
+            disabled
+            title="Backend stop skill is not wired yet"
+          >
             <Square className="h-4 w-4" />
             Stop
           </Button>
@@ -966,7 +974,7 @@ export function LiveOperations() {
       </div>
 
       {error && (
-        <div className="border border-destructive/40 bg-destructive/10 rounded-lg p-3 text-sm text-destructive">
+        <div className="rounded-lg border border-cockpit-risk/45 bg-cockpit-risk/10 p-3 text-sm text-cockpit-risk">
           {error}
         </div>
       )}
@@ -984,7 +992,7 @@ export function LiveOperations() {
             {panelContent[item.id]}
           </ResizableDraggablePanel>
         )) : (
-          <div className="w-full rounded-lg border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
+          <div className="w-full rounded-lg border border-dashed border-field-border/70 bg-surface-panel p-6 text-sm text-muted-foreground">
             All panels are hidden. Use Panels to restore the view.
           </div>
         )}
@@ -1022,19 +1030,19 @@ function PanelVisibilityMenu({
         <span className="font-mono text-xs text-muted-foreground">{visibleCount}/{PANEL_IDS.length}</span>
       </Button>
       {open && (
-        <div className="absolute right-0 top-8 z-30 w-64 overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl">
-          <div className="border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
+        <div className="fixed left-20 right-4 top-44 z-30 overflow-hidden rounded-lg border border-field-border/70 bg-surface-panel text-popover-foreground shadow-2xl sm:absolute sm:left-auto sm:right-0 sm:top-8 sm:w-64">
+          <div className="border-b border-border/90 bg-surface-panel-raised px-3 py-2 text-xs font-medium text-muted-foreground">
             Home panels
           </div>
           <div className="max-h-80 overflow-auto p-1">
             {PANEL_IDS.map((id) => (
               <label
-                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted"
+                className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition hover:bg-cockpit-accent-soft hover:text-foreground"
                 key={id}
               >
                 <input
                   checked={!hiddenSet.has(id)}
-                  className="size-4 accent-foreground"
+                  className="size-4 accent-cockpit-accent-border"
                   onChange={() => onTogglePanel(id)}
                   type="checkbox"
                 />
@@ -1067,7 +1075,7 @@ function ResizableDraggablePanel({
   const dragging = draggingPanelId === item.id
   return (
     <div
-      className={`relative cursor-grab rounded-lg transition active:cursor-grabbing ${dragging ? "scale-[0.99] opacity-70 ring-2 ring-ring/50" : ""}`}
+      className={`relative cursor-grab rounded-lg transition active:cursor-grabbing ${dragging ? "scale-[0.99] opacity-75 ring-2 ring-cockpit-accent-border/60" : ""}`}
       data-panel-id={item.id}
       onMouseDown={(event) => {
         if (isInteractiveDragTarget(event.target)) return
@@ -1087,7 +1095,7 @@ function ResizableDraggablePanel({
     >
       <button
         aria-label={`Move ${definition.label} panel`}
-        className="absolute right-11 top-2 z-10 inline-flex size-8 touch-none cursor-grab items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm transition hover:border-ring/60 hover:text-foreground active:cursor-grabbing"
+        className="absolute right-11 top-2 z-10 inline-flex size-8 touch-none cursor-grab items-center justify-center rounded-md border border-field-border/80 bg-surface-inset/95 text-muted-foreground shadow-lg transition hover:border-cockpit-accent-border hover:bg-cockpit-accent-soft hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cockpit-accent-border/35 active:cursor-grabbing"
         data-panel-drag-handle={item.id}
         onMouseDown={(event) => onDragStart(event, item.id)}
         title={`Drag ${definition.label}`}
@@ -1097,7 +1105,7 @@ function ResizableDraggablePanel({
       </button>
       <button
         aria-label={`Hide ${definition.label} panel`}
-        className="absolute right-2 top-2 z-10 inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/95 text-muted-foreground shadow-sm transition hover:border-ring/60 hover:text-foreground"
+        className="absolute right-2 top-2 z-10 inline-flex size-8 items-center justify-center rounded-md border border-field-border/80 bg-surface-inset/95 text-muted-foreground shadow-lg transition hover:border-cockpit-accent-border hover:bg-cockpit-accent-soft hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cockpit-accent-border/35"
         data-no-panel-drag="true"
         onClick={() => onHidePanel(item.id)}
         title={`Hide ${definition.label}`}
@@ -1122,19 +1130,19 @@ function ActivityFeed({
   onToggleAttempt: (key: string) => void
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 pr-20">
+    <PanelSurface>
+      <PanelHeader className="flex items-center justify-between gap-3 pr-20">
         <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-muted-foreground" />
+          <Activity className="h-4 w-4 text-cockpit-accent-border" />
           <h2 className="text-sm font-medium">Activity Feed</h2>
         </div>
-        <span className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
+        <span className="rounded-md border border-field-border/70 bg-surface-inset px-2 py-1 text-xs text-muted-foreground">
           {countLabel}
         </span>
-      </div>
+      </PanelHeader>
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="min-w-[980px] w-full text-sm">
-          <thead className="sticky top-0 z-[1] bg-muted text-muted-foreground">
+          <thead className="sticky top-0 z-[1] border-b border-border/90 bg-surface-panel-raised text-muted-foreground">
             <tr>
               <th className="w-10 px-3 py-2 font-medium">
                 <TooltipLabel label="Details" tooltip={TABLE_TOOLTIPS.details} />
@@ -1172,7 +1180,7 @@ function ActivityFeed({
               const expanded = Boolean(expandedAttempts[key])
               return (
                 <Fragment key={key}>
-                  <tr key={key} className="border-t border-border">
+                  <tr key={key} className="border-t border-border/80 transition hover:bg-surface-panel-raised/45">
                     <td className="px-3 py-2 align-top">
                       <Button
                         aria-expanded={expanded}
@@ -1196,7 +1204,7 @@ function ActivityFeed({
                     <td className="px-4 py-2">{text(attempt.fill_status, "")}</td>
                   </tr>
                   {expanded && (
-                    <tr key={`${key}:details`} className="border-t border-border bg-background/60">
+                    <tr key={`${key}:details`} className="border-t border-border/80 bg-surface-inset">
                       <td colSpan={9} className="px-4 py-3">
                         <AttemptDetails attempt={attempt} />
                       </td>
@@ -1214,7 +1222,7 @@ function ActivityFeed({
           </tbody>
         </table>
       </div>
-    </div>
+    </PanelSurface>
   )
 }
 
@@ -1237,10 +1245,10 @@ function AttemptDetails({ attempt }: { attempt: Record<string, unknown> }) {
 
 function ActivityDetail({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card px-2 py-1.5">
+    <NestedSurface className="min-w-0 px-2 py-1.5">
       <div className="text-muted-foreground">{label}</div>
       <div className="mt-1 truncate font-mono text-foreground">{value}</div>
-    </div>
+    </NestedSurface>
   )
 }
 
@@ -1248,7 +1256,7 @@ function PortfolioStatus({ value, detail, tone }: { value: string; detail: strin
   return (
     <div
       aria-label={`Portfolio: ${value}`}
-      className="inline-flex h-7 items-center gap-2 rounded-md border border-border bg-card px-2 text-xs text-muted-foreground"
+      className="inline-flex h-7 items-center gap-2 rounded-md border border-field-border/60 bg-surface-panel-raised px-2 text-xs text-muted-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.03)]"
       title={detail}
     >
       <span>Portfolio</span>
@@ -1262,7 +1270,7 @@ function HeaderStatus({ label, value, detail, tone }: { label: string; value: st
   return (
     <div
       aria-label={`${label}: ${value}`}
-      className="inline-flex h-7 items-center gap-2 rounded-md border border-border bg-card px-2 text-xs text-muted-foreground"
+      className="inline-flex h-7 items-center gap-2 rounded-md border border-field-border/60 bg-surface-panel-raised px-2 text-xs text-muted-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.03)]"
       title={detail ? `${value}: ${detail}` : value}
     >
       <span>{label}</span>
@@ -1274,11 +1282,11 @@ function HeaderStatus({ label, value, detail, tone }: { label: string; value: st
 function Metric({ label, value, detail, tone = "muted" }: { label: string; value: string; detail?: string; tone?: Tone }) {
   const toneClass = toneTextClass(tone)
   return (
-    <div className="h-full min-h-24 overflow-hidden rounded-lg border border-border bg-card p-4">
+    <MetricSurface>
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className={`mt-2 text-xl font-semibold ${toneClass}`}>{value}</div>
       {detail && <div className="mt-1 text-xs text-muted-foreground truncate">{detail}</div>}
-    </div>
+    </MetricSurface>
   )
 }
 
@@ -1298,12 +1306,14 @@ function toneDotClass(tone: Tone) {
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card p-4">
-      <h2 className="mb-3 shrink-0 pr-20 text-sm font-medium">{title}</h2>
-      <div className="min-h-0 flex-1 overflow-auto pr-2">
+    <PanelSurface>
+      <PanelHeader className="pr-20">
+        <h2 className="text-sm font-medium">{title}</h2>
+      </PanelHeader>
+      <PanelBody className="pr-2">
         {children}
-      </div>
-    </div>
+      </PanelBody>
+    </PanelSurface>
   )
 }
 
@@ -1328,13 +1338,13 @@ function TooltipLabel({ label, tooltip, className = "" }: { label: string; toolt
 
 function Value({ label, value, tooltip }: { label: string; value: string; tooltip?: string }) {
   return (
-    <div className="flex items-center justify-between gap-3">
+    <NestedSurface className="flex min-w-0 items-center justify-between gap-3 px-2 py-1.5">
       {tooltip ? (
         <TooltipLabel className="text-muted-foreground" label={label} tooltip={tooltip} />
       ) : (
         <span className="text-muted-foreground">{label}</span>
       )}
       <span className="font-mono text-xs">{value}</span>
-    </div>
+    </NestedSurface>
   )
 }
