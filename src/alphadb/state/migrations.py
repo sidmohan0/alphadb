@@ -816,6 +816,64 @@ LIVE_RUNTIME_MARKET_CONTEXT_SOURCE = Migration(
 )
 
 
+LIVE_TRADE_RECONCILIATIONS = Migration(
+    version="0018_live_trade_reconciliations",
+    statements=(
+        """
+        create table if not exists live_trade_reconciliations (
+            live_order_attempt_id text primary key references live_order_attempts(live_order_attempt_id),
+            strategy text not null,
+            run_id text,
+            live_risk_day date,
+            market_ticker text not null,
+            side text check (side in ('yes', 'no') or side is null or side = ''),
+            filled_contracts numeric not null default 0 check (filled_contracts >= 0),
+            cost_dollars numeric not null default 0 check (cost_dollars >= 0),
+            fees_dollars numeric not null default 0 check (fees_dollars >= 0),
+            market_status text,
+            market_result text check (
+                market_result in ('yes', 'no') or market_result is null
+            ),
+            settlement_status text not null check (
+                settlement_status in (
+                    'no_fill',
+                    'open',
+                    'settled_win',
+                    'settled_loss',
+                    'settled_flat',
+                    'settlement_unavailable',
+                    'lookup_failed'
+                )
+            ),
+            payout_dollars numeric not null default 0 check (payout_dollars >= 0),
+            net_pnl_dollars numeric not null default 0,
+            unsettled_exposure_dollars numeric not null default 0
+                check (unsettled_exposure_dollars >= 0),
+            decision_source text,
+            settlement_source text,
+            settlement_observed_at timestamptz,
+            reconciled_at timestamptz not null,
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists live_trade_reconciliations_strategy_reconciled_idx
+        on live_trade_reconciliations(strategy, reconciled_at desc)
+        """,
+        """
+        create index if not exists live_trade_reconciliations_market_idx
+        on live_trade_reconciliations(market_ticker)
+        """,
+        """
+        create index if not exists live_trade_reconciliations_status_idx
+        on live_trade_reconciliations(strategy, settlement_status, reconciled_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -834,4 +892,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     LIVE_ORDER_ATTEMPT_REFRESH_EVIDENCE,
     BRTI_LATEST_CONTEXT,
     LIVE_RUNTIME_MARKET_CONTEXT_SOURCE,
+    LIVE_TRADE_RECONCILIATIONS,
 )
