@@ -106,6 +106,10 @@ def test_deployment_intent_payload_rejects_raw_secret_values() -> None:
             intent_payload(metadata={"debug": "postgresql://user:secret@example/db"})
         )
 
+    private_key_marker = "-----BEGIN " + "RSA PRIVATE KEY-----"
+    with pytest.raises(ValueError, match="raw secret value"):
+        deployment_intent_kwargs_from_payload(intent_payload(metadata={"debug": private_key_marker}))
+
 
 def test_deployment_intent_payload_requires_confirmation() -> None:
     repository = repository_or_skip()
