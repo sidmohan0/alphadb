@@ -7,14 +7,23 @@ ENV ALPHADB_DASHBOARD_PORT=8501
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-COPY src ./src
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends procps \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir '.[dashboard]'
+    && python -c "\
+import tomllib; \
+project = tomllib.load(open('pyproject.toml', 'rb'))['project']; \
+dependencies = [*project.get('dependencies', []), *project.get('optional-dependencies', {}).get('dashboard', [])]; \
+print('\n'.join(dependencies))\
+" > /tmp/alphadb-requirements.txt
+RUN python -m pip install --no-cache-dir -r /tmp/alphadb-requirements.txt
+
+COPY src ./src
+
+RUN python -m pip install --no-cache-dir --no-deps .
 
 EXPOSE 8501
 

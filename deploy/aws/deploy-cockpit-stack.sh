@@ -6,10 +6,6 @@ REGION="${AWS_REGION:-us-east-2}"
 STACK_NAME="${STACK_NAME:-alphadb-cockpit}"
 SERVICE_NAME="${SERVICE_NAME:-alphadb-cockpit}"
 REPOSITORY="${ECR_REPOSITORY:-alphadb-cockpit}"
-GIT_SHA="$(git rev-parse --short HEAD)"
-TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"
-COCKPIT_IMAGE_TAG="${COCKPIT_IMAGE_TAG:-cockpit-$GIT_SHA-$TIMESTAMP}"
-ALPHADB_API_IMAGE_TAG="${ALPHADB_API_IMAGE_TAG:-api-$GIT_SHA-$TIMESTAMP}"
 TEMPLATE_FILE="${TEMPLATE_FILE:-deploy/aws/ecs-fargate-dashboard.yaml}"
 PLATFORM="${PLATFORM:-linux/arm64}"
 ASSIGN_PUBLIC_IP="${ASSIGN_PUBLIC_IP:-DISABLED}"
@@ -19,7 +15,49 @@ DRY_RUN="${DRY_RUN:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_PUSH="${SKIP_PUSH:-0}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-0}"
+SKIP_RELEASE_CHECK="${SKIP_RELEASE_CHECK:-$SKIP_MIGRATE}"
 SKIP_SMOKE="${SKIP_SMOKE:-0}"
+FORCE_REBUILD="${FORCE_REBUILD:-0}"
+
+context_hash() {
+  local platform="$1"
+  shift
+  python3 - "$platform" "$@" <<'PY'
+import hashlib
+import pathlib
+import subprocess
+import sys
+
+platform = sys.argv[1]
+paths = sys.argv[2:]
+completed = subprocess.run(
+    [
+        "git",
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        *paths,
+    ],
+    text=True,
+    capture_output=True,
+    check=False,
+)
+if completed.returncode != 0:
+    raise SystemExit(completed.stderr or completed.stdout)
+digest = hashlib.sha256()
+digest.update(f"platform:{platform}\0".encode())
+for raw_path in sorted(line for line in completed.stdout.splitlines() if line.strip()):
+    path = pathlib.Path(raw_path)
+    if not path.is_file():
+        continue
+    digest.update(f"path:{raw_path}\0".encode())
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest()[:16])
+PY
+}
 
 aws_cli() {
   aws --profile "$PROFILE" --region "$REGION" "$@"
@@ -44,6 +82,13 @@ run() {
   if [[ "$DRY_RUN" != "1" ]]; then
     "$@"
   fi
+}
+
+ecr_image_exists() {
+  local tag="$1"
+  aws_cli ecr describe-images \
+    --repository-name "$REPOSITORY" \
+    --image-ids "imageTag=$tag" >/dev/null 2>&1
 }
 
 stack_output() {
@@ -122,6 +167,11 @@ require_env COCKPIT_COOKIE_SECRET_ARN
 require_env KALSHI_API_KEY_ID_SECRET_ARN
 require_env KALSHI_PRIVATE_KEY_PEM_SECRET_ARN
 
+COCKPIT_CONTEXT_HASH="$(context_hash "$PLATFORM" apps/dashboard)"
+RUNTIME_CONTEXT_HASH="$(context_hash "$PLATFORM" Dockerfile pyproject.toml README.md src)"
+COCKPIT_IMAGE_TAG="${COCKPIT_IMAGE_TAG:-cockpit-$COCKPIT_CONTEXT_HASH}"
+ALPHADB_API_IMAGE_TAG="${ALPHADB_API_IMAGE_TAG:-runtime-$RUNTIME_CONTEXT_HASH}"
+
 ACCOUNT_ID="${AWS_ACCOUNT_ID:-}"
 if [[ -z "$ACCOUNT_ID" ]]; then
   ACCOUNT_ID="$(aws_cli sts get-caller-identity --query Account --output text)"
@@ -145,20 +195,39 @@ if [[ "$SKIP_PUSH" != "1" && "$DRY_RUN" != "1" ]]; then
     | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
 fi
 
-if [[ "$SKIP_BUILD" != "1" ]]; then
+COCKPIT_IMAGE_EXISTS=0
+ALPHADB_API_IMAGE_EXISTS=0
+if [[ "$SKIP_PUSH" != "1" && "$FORCE_REBUILD" != "1" && "$DRY_RUN" != "1" ]]; then
+  if ecr_image_exists "$COCKPIT_IMAGE_TAG"; then
+    COCKPIT_IMAGE_EXISTS=1
+    echo "ecr reuse: $COCKPIT_IMAGE_URI"
+  fi
+  if ecr_image_exists "$ALPHADB_API_IMAGE_TAG"; then
+    ALPHADB_API_IMAGE_EXISTS=1
+    echo "ecr reuse: $ALPHADB_API_IMAGE_URI"
+  fi
+fi
+
+if [[ "$SKIP_BUILD" != "1" && "$COCKPIT_IMAGE_EXISTS" != "1" ]]; then
   run docker build --platform "$PLATFORM" \
     -t "$REPOSITORY:$COCKPIT_IMAGE_TAG" \
     -f apps/dashboard/Dockerfile \
     apps/dashboard
+fi
+
+if [[ "$SKIP_BUILD" != "1" && "$ALPHADB_API_IMAGE_EXISTS" != "1" ]]; then
   run docker build --platform "$PLATFORM" \
     -t "$REPOSITORY:$ALPHADB_API_IMAGE_TAG" \
     .
 fi
 
-if [[ "$SKIP_PUSH" != "1" ]]; then
+if [[ "$SKIP_PUSH" != "1" && "$COCKPIT_IMAGE_EXISTS" != "1" ]]; then
   run docker tag "$REPOSITORY:$COCKPIT_IMAGE_TAG" "$COCKPIT_IMAGE_URI"
-  run docker tag "$REPOSITORY:$ALPHADB_API_IMAGE_TAG" "$ALPHADB_API_IMAGE_URI"
   run docker push "$COCKPIT_IMAGE_URI"
+fi
+
+if [[ "$SKIP_PUSH" != "1" && "$ALPHADB_API_IMAGE_EXISTS" != "1" ]]; then
+  run docker tag "$REPOSITORY:$ALPHADB_API_IMAGE_TAG" "$ALPHADB_API_IMAGE_URI"
   run docker push "$ALPHADB_API_IMAGE_URI"
 fi
 
@@ -188,10 +257,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-if [[ "$SKIP_MIGRATE" != "1" ]]; then
-  run_api_command alphadb-deploy migrate
-  run_api_command alphadb-deploy seed-readiness --series KXBTC15M
-  run_api_command alphadb-deploy smoke
+if [[ "$SKIP_RELEASE_CHECK" != "1" ]]; then
+  run_api_command alphadb-deploy release-check --series KXBTC15M
 fi
 
 if [[ "$SKIP_SMOKE" != "1" ]]; then

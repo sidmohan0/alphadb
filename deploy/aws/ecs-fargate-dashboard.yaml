@@ -203,13 +203,20 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 5
       HealthCheckPath: /healthz
       HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 3
+      HealthyThresholdCount: 2
       Matcher:
         HttpCode: "200"
       Port: !Ref CockpitPort
       Protocol: HTTP
       TargetType: ip
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "15"
+      UnhealthyThresholdCount: 2
       VpcId: !Ref VpcId
 
   DashboardListener:
@@ -387,11 +394,11 @@ Resources:
     Type: AWS::ECS::Service
     DependsOn:
       - DashboardListener
-      - AlphaDbApiService
     Properties:
       ServiceName: !Sub ${ServiceName}-cockpit
       Cluster: !Ref DashboardCluster
       DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 60
       LaunchType: FARGATE
       TaskDefinition: !Ref CockpitTaskDefinition
       NetworkConfiguration:
@@ -414,6 +421,12 @@ Outputs:
     Value: !Ref AlphaDbApiService
   AlphaDbApiTaskDefinitionArn:
     Value: !Ref AlphaDbApiTaskDefinition
+  CockpitTaskDefinitionArn:
+    Value: !Ref CockpitTaskDefinition
+  CockpitContainerImageUri:
+    Value: !Ref CockpitContainerImage
+  AlphaDbApiContainerImageUri:
+    Value: !Ref AlphaDbApiContainerImage
   AlphaDbApiSecurityGroupId:
     Value: !Ref AlphaDbApiServiceSecurityGroup
   PrivateSubnetIds:

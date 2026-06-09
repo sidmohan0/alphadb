@@ -158,11 +158,16 @@ def runtime_guard_status(
 
 def runtime_config_status(settings: Settings) -> dict[str, Any]:
     try:
-        revision = LiveRuntimeConfigRepository(settings.database_url).seed_defaults()
+        revision = LiveRuntimeConfigRepository(settings.database_url).get_active_config()
     except Exception as exc:
         return {
             "ok": False,
             "detail": f"runtime config unavailable: {exc}",
+        }
+    if revision is None:
+        return {
+            "ok": False,
+            "detail": "active dashboard-owned live runtime config is missing",
         }
     return {
         "ok": True,
@@ -222,6 +227,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("migrate", help="Apply operational-state migrations")
 
+    release = subparsers.add_parser(
+        "release-check",
+        help="Apply release-only gates in one deployed task",
+    )
+    release.add_argument("--series", default="KXBTC15M")
+    release.add_argument(
+        "--allow-live-orders",
+        action="store_true",
+        help="Do not fail when runtime guard permits live order submission",
+    )
+
     smoke = subparsers.add_parser("smoke", help="Run deployment smoke checks and emit JSON")
     smoke.add_argument(
         "--allow-pending-migrations",
@@ -277,6 +293,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0 if not pending else 1
+
+    if args.command == "release-check":
+        applied = repository.apply_migrations()
+        pending = repository.pending_migrations()
+        config_revision = LiveRuntimeConfigRepository(settings.database_url).seed_defaults(
+            apply_migrations=False
+        )
+        spec = default_market_registry().get(args.series)
+        tracer = repository.create_tracer_run(spec)
+        report = build_smoke_report(
+            settings,
+            allow_live_orders=args.allow_live_orders,
+        )
+        release_report = {
+            "ok": not pending and report["ok"],
+            "applied_migrations": applied,
+            "pending_migrations": pending,
+            "runtime_config": config_revision.manifest_snapshot(),
+            "readiness_tracer": {
+                "tracer": tracer.as_dict(),
+                "summary": repository.get_run_summary(tracer.run_id),
+            },
+            "smoke": report,
+        }
+        print(json.dumps(release_report, indent=2, sort_keys=True))
+        return 0 if release_report["ok"] else 1
 
     if args.command == "smoke":
         report = build_smoke_report(
