@@ -39,6 +39,7 @@ from alphadb.model_evaluation.fair_value_replay import (
     build_fair_value_walk_forward_report,
 )
 from alphadb.config import settings_from_env
+from alphadb.live_authority import LiveDecisionAuthorityLeaseRepository
 from alphadb.live_runtime import (
     DEFAULT_FAIR_VALUE_LIVE_CONFIG,
     LiveRunStatusRepository,
@@ -1919,6 +1920,54 @@ def test_live_trading_job_uses_dashboard_brti_market_context_source(
     finally:
         repository.save_config(DEFAULT_FAIR_VALUE_LIVE_CONFIG)
         delete_brti_latest_context(database_url)
+
+
+def test_report_only_postgres_runtime_records_authority_lease_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    live_runtime_repository_or_skip()
+    database_url = settings_from_env().database_url
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-AUTHORITY"
+    strategy = f"test_authority_{uuid4().hex[:10]}"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            strategy=strategy,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            submit_live_orders=False,
+            runtime_config_source="postgres",
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=live_enabled_settings(),
+        order_client=SequencedOrderClient([]),
+    ).run(now=now)
+
+    lease = manifest["runtime_controls"]["live_decision_authority_lease"]
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    persisted = LiveDecisionAuthorityLeaseRepository(database_url).get(strategy=strategy)
+
+    assert manifest["runtime_config"]["source"] == "dashboard_postgres"
+    assert manifest["runtime_controls"]["live_run_lock"]["backend"] == "postgres"
+    assert lease["backend"] == "postgres"
+    assert lease["strategy"] == strategy
+    assert lease["run_id"] == manifest["run_id"]
+    assert lease["fencing_token"] >= 1
+    assert attempts["attempts"][0]["live_decision_authority_lease"]["fencing_token"] == (
+        lease["fencing_token"]
+    )
+    assert "postgres_authority_lease" in manifest["timing"]["phase_seconds"]
+    assert manifest["timing"]["phase_seconds"]["postgres_authority_lease"] >= 0.0
+    assert manifest["timing"]["phase_seconds"]["live_run_lock"] == 0.0
+    assert persisted is not None
+    assert persisted.fencing_token == lease["fencing_token"]
+    assert persisted.status == "released"
+    assert persisted.released_at is not None
 
 
 def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
