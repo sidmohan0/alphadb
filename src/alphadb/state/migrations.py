@@ -917,6 +917,36 @@ DEPLOYMENT_INTENTS = Migration(
 )
 
 
+LIVE_DECISION_AUTHORITY_LEASES = Migration(
+    version="0020_live_decision_authority_leases",
+    statements=(
+        """
+        create table if not exists live_decision_authority_leases (
+            strategy text primary key,
+            run_id text not null,
+            owner_id text not null,
+            fencing_token bigint not null check (fencing_token >= 1),
+            acquired_at timestamptz not null,
+            expires_at timestamptz not null,
+            released_at timestamptz,
+            status text not null check (status in ('active', 'released')),
+            metadata jsonb not null default '{}'::jsonb,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )
+        """,
+        """
+        create index if not exists live_decision_authority_leases_expires_idx
+        on live_decision_authority_leases(strategy, expires_at)
+        """,
+        """
+        create index if not exists live_decision_authority_leases_status_idx
+        on live_decision_authority_leases(status, updated_at desc)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     INITIAL_OPERATIONAL_STATE,
     RAW_EVENT_LOG,
@@ -937,4 +967,5 @@ MIGRATIONS: tuple[Migration, ...] = (
     LIVE_RUNTIME_MARKET_CONTEXT_SOURCE,
     LIVE_TRADE_RECONCILIATIONS,
     DEPLOYMENT_INTENTS,
+    LIVE_DECISION_AUTHORITY_LEASES,
 )

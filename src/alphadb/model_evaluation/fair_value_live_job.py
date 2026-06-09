@@ -24,6 +24,11 @@ from alphadb.live_orders import (
     exchange_response_accepted,
     materialize_private_key_from_env,
 )
+from alphadb.live_authority import (
+    LIVE_DECISION_AUTHORITY_LEASE_SCHEMA,
+    LiveDecisionAuthorityLease,
+    LiveDecisionAuthorityLeaseRepository,
+)
 from alphadb.live_runtime import (
     EXPENSIVE_YES_LIVE_STRATEGY,
     FAIR_VALUE_LIVE_STRATEGY,
@@ -162,7 +167,12 @@ class FairValueLiveTradingJob:
         run_dir = self.config.output_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         timer = PhaseTimer()
-        with timer.phase("live_run_lock"):
+        authority_phase = (
+            "postgres_authority_lease"
+            if should_use_postgres_authority_lease(self.config)
+            else "live_run_lock"
+        )
+        with timer.phase(authority_phase):
             live_run_lock = acquire_live_run_lock(
                 output_root=self.config.output_root,
                 s3_prefix=self.config.s3_prefix,
@@ -170,6 +180,8 @@ class FairValueLiveTradingJob:
                 generated_at=generated_at,
                 enabled=self.config.submit_live_orders,
                 strategy=self.config.strategy,
+                settings=settings,
+                use_postgres_authority=should_use_postgres_authority_lease(self.config),
             )
         try:
             if not live_run_lock.acquired:
@@ -180,6 +192,7 @@ class FairValueLiveTradingJob:
                     strategy=self.config.strategy,
                 )
                 timer.ensure_phases(
+                    "postgres_authority_lease",
                     "runtime_config",
                     "collection",
                     "decision",
@@ -505,6 +518,8 @@ class FairValueLiveTradingJob:
             "live_run_lock": live_run_lock.as_dict(),
             "attempt_index": 0,
         }
+        if live_run_lock.backend == "postgres":
+            base["live_decision_authority_lease"] = live_run_lock.as_dict()
         if decision.get("decision") != "trade":
             return (
                 {**base, "status": "skipped", "reason": str(decision.get("reason") or "no_trade")},
@@ -720,6 +735,7 @@ class FairValueLiveTradingJob:
     ) -> dict[str, Any]:
         timer.ensure_phases(
             "live_run_lock",
+            "postgres_authority_lease",
             "runtime_config",
             "collection",
             "decision",
@@ -758,6 +774,8 @@ class FairValueLiveTradingJob:
             "live_run_lock": live_run_lock.as_dict(),
             "live_status_materialized": False,
         }
+        if live_run_lock.backend == "postgres":
+            runtime_controls["live_decision_authority_lease"] = live_run_lock.as_dict()
         latest_raw_attempt = dict(live_attempts[-1]) if live_attempts else {}
         attempt_timing = timer.snapshot(
             quote_seen_at=parse_datetime(latest_raw_attempt.get("quote_seen_at")),
@@ -1052,6 +1070,8 @@ class FairValueLiveTradingJob:
                 "live_run_lock": live_run_lock.as_dict(),
                 "attempt_index": index,
             }
+            if live_run_lock.backend == "postgres":
+                base["live_decision_authority_lease"] = live_run_lock.as_dict()
             if sized_order is None:
                 attempts.append(
                     {**base, "status": "skipped", "reason": "market_exposure_cap_reached"}
@@ -1230,7 +1250,7 @@ def lock_held_attempt(
     live_run_lock: "LiveRunLock",
     strategy: str = FAIR_VALUE_LIVE_STRATEGY,
 ) -> dict[str, Any]:
-    return {
+    attempt = {
         "attempt_id": f"{live_run_id_prefix(strategy)}_order_{uuid4().hex[:12]}",
         "run_id": run_id,
         "strategy": strategy,
@@ -1250,6 +1270,9 @@ def lock_held_attempt(
         "status": "skipped",
         "reason": live_run_lock.reason or "live_run_lock_held",
     }
+    if live_run_lock.backend == "postgres":
+        attempt["live_decision_authority_lease"] = live_run_lock.as_dict()
+    return attempt
 
 
 def live_run_id_prefix(strategy: str) -> str:
@@ -1917,21 +1940,47 @@ class LiveRunLock:
     backend: str
     acquired: bool
     token: str
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY
+    run_id: str | None = None
     reason: str | None = None
     path: Path | None = None
     bucket: str | None = None
     key: str | None = None
     existing: Mapping[str, Any] | None = None
     client: Any = None
+    owner_id: str | None = None
+    fencing_token: int | None = None
+    lease_status: str | None = None
+    acquired_at: datetime | None = None
+    expires_at: datetime | None = None
+    released_at: datetime | None = None
+    authority_repository: LiveDecisionAuthorityLeaseRepository | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "schema_version": FAIR_VALUE_LIVE_LOCK_SCHEMA,
+            "schema_version": LIVE_DECISION_AUTHORITY_LEASE_SCHEMA
+            if self.backend == "postgres"
+            else FAIR_VALUE_LIVE_LOCK_SCHEMA,
             "backend": self.backend,
             "acquired": self.acquired,
             "token": self.token,
+            "strategy": self.strategy,
             "reason": self.reason,
         }
+        if self.owner_id is not None:
+            payload["owner_id"] = self.owner_id
+        if self.run_id is not None:
+            payload["run_id"] = self.run_id
+        if self.fencing_token is not None:
+            payload["fencing_token"] = self.fencing_token
+        if self.lease_status is not None:
+            payload["status"] = self.lease_status
+        if self.acquired_at is not None:
+            payload["acquired_at"] = self.acquired_at.isoformat()
+        if self.expires_at is not None:
+            payload["expires_at"] = self.expires_at.isoformat()
+        if self.released_at is not None:
+            payload["released_at"] = self.released_at.isoformat()
         if self.path is not None:
             payload["path"] = str(self.path)
         if self.bucket is not None:
@@ -1954,6 +2003,17 @@ class LiveRunLock:
                 key=self.key,
                 token=self.token,
             )
+        if (
+            self.backend == "postgres"
+            and self.authority_repository is not None
+            and self.owner_id is not None
+            and self.fencing_token is not None
+        ):
+            self.authority_repository.release(
+                strategy=self.strategy,
+                owner_id=self.owner_id,
+                fencing_token=self.fencing_token,
+            )
 
 
 def should_materialize_live_run_status(live_run_lock: LiveRunLock) -> bool:
@@ -1969,12 +2029,24 @@ def acquire_live_run_lock(
     enabled: bool,
     strategy: str = FAIR_VALUE_LIVE_STRATEGY,
     ttl_seconds: int = FAIR_VALUE_LIVE_LOCK_TTL_SECONDS,
+    settings: Settings | None = None,
+    use_postgres_authority: bool = False,
 ) -> LiveRunLock:
+    if use_postgres_authority:
+        return acquire_postgres_live_decision_authority(
+            settings=settings or settings_from_env(),
+            run_id=run_id,
+            generated_at=generated_at,
+            strategy=strategy,
+            ttl_seconds=ttl_seconds,
+        )
     if not enabled:
         return LiveRunLock(
             backend="none",
             acquired=True,
             token="",
+            strategy=strategy,
+            run_id=run_id,
             reason="submit_live_orders_false",
         )
     token = uuid4().hex
@@ -1998,6 +2070,77 @@ def acquire_live_run_lock(
         token=token,
         payload=payload,
         now=generated_at,
+    )
+
+
+def should_use_postgres_authority_lease(config: FairValueLiveTradingJobConfig) -> bool:
+    return (
+        not config.submit_live_orders
+        and config.runtime_config_source == "postgres"
+    )
+
+
+def acquire_postgres_live_decision_authority(
+    *,
+    settings: Settings,
+    run_id: str,
+    generated_at: datetime,
+    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+    ttl_seconds: int = FAIR_VALUE_LIVE_LOCK_TTL_SECONDS,
+) -> LiveRunLock:
+    repository = LiveDecisionAuthorityLeaseRepository(settings.database_url)
+    owner_id = f"{run_id}:{uuid4().hex[:12]}"
+    result = repository.acquire(
+        strategy=strategy,
+        run_id=run_id,
+        owner_id=owner_id,
+        now=generated_at,
+        ttl_seconds=ttl_seconds,
+        metadata={
+            "source": "fair_value_live_report_only",
+            "submit_live_orders": False,
+        },
+    )
+    lease = result.lease or result.current_lease
+    if result.acquired and lease is not None:
+        return live_run_lock_from_authority_lease(
+            lease,
+            acquired=True,
+            authority_repository=repository,
+        )
+    return LiveRunLock(
+        backend="postgres",
+        acquired=False,
+        token=str(lease.fencing_token) if lease else "",
+        strategy=strategy,
+        run_id=lease.run_id if lease else run_id,
+        reason=result.reason or "live_decision_authority_held",
+        existing=lease.as_dict() if lease else None,
+        owner_id=owner_id,
+        authority_repository=repository,
+    )
+
+
+def live_run_lock_from_authority_lease(
+    lease: LiveDecisionAuthorityLease,
+    *,
+    acquired: bool,
+    authority_repository: LiveDecisionAuthorityLeaseRepository,
+) -> LiveRunLock:
+    return LiveRunLock(
+        backend="postgres",
+        acquired=acquired,
+        token=str(lease.fencing_token),
+        strategy=lease.strategy,
+        run_id=lease.run_id,
+        reason=None if acquired else "live_decision_authority_held",
+        owner_id=lease.owner_id,
+        fencing_token=lease.fencing_token,
+        lease_status=lease.status,
+        acquired_at=lease.acquired_at,
+        expires_at=lease.expires_at,
+        released_at=lease.released_at,
+        authority_repository=authority_repository,
     )
 
 
@@ -2043,17 +2186,25 @@ def acquire_local_live_run_lock(
                 backend="local",
                 acquired=False,
                 token=token,
+                strategy=strategy,
                 reason="live_run_lock_held",
                 path=path,
                 existing=existing,
             )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(dict(payload), handle, sort_keys=True)
-        return LiveRunLock(backend="local", acquired=True, token=token, path=path)
+        return LiveRunLock(
+            backend="local",
+            acquired=True,
+            token=token,
+            strategy=strategy,
+            path=path,
+        )
     return LiveRunLock(
         backend="local",
         acquired=False,
         token=token,
+        strategy=strategy,
         reason="live_run_lock_held",
         path=path,
         existing=read_json_file_or_empty(path),
@@ -2098,6 +2249,7 @@ def acquire_s3_live_run_lock(
                 backend="s3",
                 acquired=True,
                 token=token,
+                strategy=strategy,
                 bucket=bucket,
                 key=key,
                 client=client,
@@ -2116,6 +2268,7 @@ def acquire_s3_live_run_lock(
                 backend="s3",
                 acquired=False,
                 token=token,
+                strategy=strategy,
                 reason="live_run_lock_held",
                 bucket=bucket,
                 key=key,
@@ -2125,6 +2278,7 @@ def acquire_s3_live_run_lock(
         backend="s3",
         acquired=False,
         token=token,
+        strategy=strategy,
         reason="live_run_lock_held",
         bucket=bucket,
         key=key,
