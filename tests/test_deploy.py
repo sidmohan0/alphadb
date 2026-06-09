@@ -240,6 +240,12 @@ def test_dashboard_fargate_template_defines_public_cockpit_and_private_api() -> 
     assert "LoadBalancers:" in cockpit_service
     assert "SourceSecurityGroupId: !Ref CockpitServiceSecurityGroup" in template
     assert "AWS::Events::Rule" not in template
+    assert "HealthCheckIntervalSeconds: 5" in template
+    assert "HealthyThresholdCount: 2" in template
+    assert "HealthCheckTimeoutSeconds: 3" in template
+    assert "deregistration_delay.timeout_seconds" in template
+    assert "HealthCheckGracePeriodSeconds: 60" in cockpit_service
+    assert "- AlphaDbApiService" not in cockpit_service
 
 
 def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secrets() -> None:
@@ -247,8 +253,14 @@ def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secr
     smoke_script = Path("deploy/aws/smoke-cockpit-stack.sh").read_text(encoding="utf-8")
     local_auth_smoke = Path("apps/dashboard/scripts/smoke-auth.sh").read_text(encoding="utf-8")
 
-    assert 'COCKPIT_IMAGE_TAG="${COCKPIT_IMAGE_TAG:-cockpit-' in deploy_script
-    assert 'ALPHADB_API_IMAGE_TAG="${ALPHADB_API_IMAGE_TAG:-api-' in deploy_script
+    assert 'COCKPIT_IMAGE_TAG="${COCKPIT_IMAGE_TAG:-cockpit-$COCKPIT_CONTEXT_HASH}"' in deploy_script
+    assert (
+        'ALPHADB_API_IMAGE_TAG="${ALPHADB_API_IMAGE_TAG:-runtime-$RUNTIME_CONTEXT_HASH}"'
+        in deploy_script
+    )
+    assert "context_hash" in deploy_script
+    assert "ecr reuse:" in deploy_script
+    assert 'SKIP_RELEASE_CHECK="${SKIP_RELEASE_CHECK:-$SKIP_MIGRATE}"' in deploy_script
     assert "-f apps/dashboard/Dockerfile" in deploy_script
     assert "apps/dashboard" in deploy_script
     assert 'CockpitContainerImage="$COCKPIT_IMAGE_URI"' in deploy_script
@@ -264,9 +276,10 @@ def test_cockpit_deploy_script_builds_two_images_and_runs_smoke_without_raw_secr
         in deploy_script
     )
     assert "DATABASE_URL=" not in deploy_script
-    assert "run_api_command alphadb-deploy migrate" in deploy_script
-    assert "run_api_command alphadb-deploy seed-readiness --series KXBTC15M" in deploy_script
-    assert "run_api_command alphadb-deploy smoke" in deploy_script
+    assert "run_api_command alphadb-deploy release-check --series KXBTC15M" in deploy_script
+    assert "run_api_command alphadb-deploy migrate" not in deploy_script
+    assert "run_api_command alphadb-deploy seed-readiness --series KXBTC15M" not in deploy_script
+    assert "run_api_command alphadb-deploy smoke" not in deploy_script
     assert "deploy/aws/smoke-cockpit-stack.sh" in deploy_script
     assert "DRY_RUN" in deploy_script
 
@@ -721,7 +734,7 @@ def test_runtime_config_status_reports_readable_active_config(monkeypatch) -> No
         def __init__(self, database_url: str):
             self.database_url = database_url
 
-        def seed_defaults(self) -> FakeRevision:
+        def get_active_config(self) -> FakeRevision:
             return FakeRevision()
 
     monkeypatch.setattr("alphadb.deploy.LiveRuntimeConfigRepository", FakeRepository)

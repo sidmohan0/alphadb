@@ -96,8 +96,8 @@ Capture these items before calling the cutover complete:
 
 - Dashboard reachability: `DashboardUrl`, login result, `/healthz`, and
   `/api/live` or visible Live workspace confirmation.
-- Deployment smoke result: `alphadb-deploy migrate`, `alphadb-deploy smoke`,
-  dashboard startup logs, and active runtime config read result.
+- Deployment smoke result: `alphadb-deploy release-check`, dashboard startup
+  logs, and active runtime config read result.
 - Shared Postgres source: dashboard stack `DatabaseUrlSecretArn`, live worker
   stack `DatabaseUrlSecretArn`, and confirmation they are the same secret/source.
 - Saved config revision: `config_id`, `version`, `created_at`, prior rollback

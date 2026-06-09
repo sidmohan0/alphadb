@@ -4,13 +4,14 @@ Issues and PRDs for this repo live in Linear.
 
 ## Location
 
-- Workspace/team URL: https://linear.app/threadfork/team/ALP/all
-- Team key: `ALP`
+- Workspace/team URL: https://linear.app/threadfork/team/ADB/all
+- Team key: `ADB`
+- Linear team name: `alphadb`
 - Repository: `sidmohan0/alphadb`
 
 ## Conventions
 
-Use the Linear connector/app when available. If a skill says "publish to the issue tracker", create a Linear issue in team `ALP`.
+Use the Linear connector/app when available. If a skill says "publish to the issue tracker", create a Linear issue in team `alphadb`.
 
 When creating issues:
 

@@ -15,6 +15,8 @@ from alphadb.markets.spec import MarketSpec
 from alphadb.state.migrations import MIGRATIONS
 from alphadb.state.models import OperationalCounts, TracerRunRecord
 
+MIGRATION_ADVISORY_LOCK_ID = 3947852101
+
 
 class OperationalStateRepository:
     def __init__(self, database_url: str):
@@ -27,9 +29,16 @@ class OperationalStateRepository:
 
     def apply_migrations(self) -> list[str]:
         applied: list[str] = []
-        applied_versions = set(self.applied_migrations())
         with self.connect() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("select pg_advisory_xact_lock(%s)", (MIGRATION_ADVISORY_LOCK_ID,))
+                cursor.execute("select to_regclass('public.schema_migrations') as table_name")
+                table_row = cursor.fetchone()
+                if table_row is None or table_row["table_name"] is None:
+                    applied_versions: set[str] = set()
+                else:
+                    cursor.execute("select version from schema_migrations order by version")
+                    applied_versions = {str(row["version"]) for row in cursor.fetchall()}
                 for migration in MIGRATIONS:
                     if migration.version in applied_versions:
                         continue

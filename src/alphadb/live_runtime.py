@@ -215,8 +215,10 @@ class LiveRuntimeConfigRepository:
         *,
         strategy: str = FAIR_VALUE_LIVE_STRATEGY,
         created_by: str = "system",
+        apply_migrations: bool = False,
     ) -> LiveRuntimeConfigRevision:
-        OperationalStateRepository(self.database_url).apply_migrations()
+        if apply_migrations:
+            OperationalStateRepository(self.database_url).apply_migrations()
         active = self.get_active_config(strategy=strategy, apply_migrations=False)
         if active is not None:
             return active
@@ -248,7 +250,7 @@ class LiveRuntimeConfigRepository:
         self,
         *,
         strategy: str = FAIR_VALUE_LIVE_STRATEGY,
-        apply_migrations: bool = True,
+        apply_migrations: bool = False,
     ) -> LiveRuntimeConfigRevision | None:
         if apply_migrations:
             OperationalStateRepository(self.database_url).apply_migrations()

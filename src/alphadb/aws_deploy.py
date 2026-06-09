@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -89,6 +90,18 @@ class SecretConfig:
 
 
 @dataclass(frozen=True)
+class ImageContextHashes:
+    cockpit: str
+    runtime: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "cockpit": self.cockpit,
+            "runtime": self.runtime,
+        }
+
+
+@dataclass(frozen=True)
 class ImageConfig:
     repository: str
     platform: str
@@ -152,8 +165,10 @@ class ImagePlan:
     runtime_tag: str
     cockpit_uri: str
     runtime_uri: str
+    context_hashes: ImageContextHashes
     skip_build: bool
     skip_push: bool
+    force_rebuild: bool
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -164,14 +179,18 @@ class ImagePlan:
                 "tag": self.cockpit_tag,
                 "uri": self.cockpit_uri,
                 "local_tag": f"{self.repository}:{self.cockpit_tag}",
+                "context_hash": self.context_hashes.cockpit,
             },
             "runtime": {
                 "tag": self.runtime_tag,
                 "uri": self.runtime_uri,
                 "local_tag": f"{self.repository}:{self.runtime_tag}",
+                "context_hash": self.context_hashes.runtime,
             },
+            "context_hashes": self.context_hashes.as_dict(),
             "skip_build": self.skip_build,
             "skip_push": self.skip_push,
+            "force_rebuild": self.force_rebuild,
         }
 
 
@@ -357,6 +376,8 @@ class ResolvedDeployment:
             "skip_behavior": {
                 "skip_build": self.images.skip_build,
                 "skip_push": self.images.skip_push,
+                "force_rebuild": self.images.force_rebuild,
+                "skip_release_check": self.skip_migrate,
                 "skip_migrate": self.skip_migrate,
                 "skip_smoke": self.skip_smoke,
                 "skip_service_stability": self.skip_service_stability,
@@ -392,6 +413,7 @@ def run_aws_deployment_command(args: argparse.Namespace) -> int:
             skip_aws_read=args.skip_aws_read,
             skip_build=args.skip_build,
             skip_push=args.skip_push,
+            force_rebuild=args.force_rebuild,
             skip_migrate=args.skip_migrate,
             skip_smoke=args.skip_smoke,
             skip_service_stability=args.skip_service_stability,
@@ -445,12 +467,14 @@ def create_deployment_plan(
     *,
     surfaces: Sequence[str] | None = None,
     source: SourceRevision | None = None,
+    image_context_hashes: ImageContextHashes | None = None,
     timestamp: str | None = None,
     deployment_id: str | None = None,
     aws_reader: AwsReadClient | None = None,
     skip_aws_read: bool = False,
     skip_build: bool = False,
     skip_push: bool = False,
+    force_rebuild: bool = False,
     skip_migrate: bool = False,
     skip_smoke: bool = False,
     skip_service_stability: bool = False,
@@ -466,10 +490,11 @@ def create_deployment_plan(
     deployment_id = deployment_id or f"aws-{timestamp}-{source.short_sha}"
     images = build_image_plan(
         profile,
-        source=source,
-        timestamp=timestamp,
+        context_hashes=image_context_hashes
+        or collect_image_context_hashes(platform=profile.images.platform),
         skip_build=skip_build,
         skip_push=skip_push,
+        force_rebuild=force_rebuild,
     )
 
     reader = NullAwsReadClient() if skip_aws_read else aws_reader or AwsCliReadClient()
@@ -550,7 +575,41 @@ def prepare_images(resolved: ResolvedDeployment, *, runner: CommandRunner) -> di
         "push": "skipped" if images.skip_push else "pending",
         "built_images": [],
         "pushed_images": [],
+        "reused_images": [],
+        "force_rebuild": images.force_rebuild,
     }
+    image_specs = (
+        (
+            "cockpit",
+            images.cockpit_tag,
+            images.cockpit_uri,
+            [
+                "docker",
+                "build",
+                "--platform",
+                images.platform,
+                "-t",
+                f"{images.repository}:{images.cockpit_tag}",
+                "-f",
+                "apps/dashboard/Dockerfile",
+                "apps/dashboard",
+            ],
+        ),
+        (
+            "runtime",
+            images.runtime_tag,
+            images.runtime_uri,
+            [
+                "docker",
+                "build",
+                "--platform",
+                images.platform,
+                "-t",
+                f"{images.repository}:{images.runtime_tag}",
+                ".",
+            ],
+        ),
+    )
     if not images.skip_push:
         describe = [
             *aws,
@@ -580,39 +639,26 @@ def prepare_images(resolved: ResolvedDeployment, *, runner: CommandRunner) -> di
             input_text=password,
         )
 
+    existing_tags: set[str] = set()
+    if not images.skip_push and not images.force_rebuild:
+        for _, tag, uri, _ in image_specs:
+            if _ecr_image_tag_exists(resolved, tag, runner=runner):
+                existing_tags.add(tag)
+                results["reused_images"].append(uri)
+
     if not images.skip_build:
-        runner.run(
-            [
-                "docker",
-                "build",
-                "--platform",
-                images.platform,
-                "-t",
-                f"{images.repository}:{images.cockpit_tag}",
-                "-f",
-                "apps/dashboard/Dockerfile",
-                "apps/dashboard",
-            ]
-        )
-        runner.run(
-            [
-                "docker",
-                "build",
-                "--platform",
-                images.platform,
-                "-t",
-                f"{images.repository}:{images.runtime_tag}",
-                ".",
-            ]
-        )
+        for _, tag, uri, build_command in image_specs:
+            if tag in existing_tags:
+                continue
+            runner.run(build_command)
+            results["built_images"].append(uri)
         results["build"] = "passed"
-        results["built_images"] = [images.cockpit_uri, images.runtime_uri]
 
     if not images.skip_push:
-        for local_tag, image_uri in (
-            (f"{images.repository}:{images.cockpit_tag}", images.cockpit_uri),
-            (f"{images.repository}:{images.runtime_tag}", images.runtime_uri),
-        ):
+        for _, tag, image_uri, _ in image_specs:
+            if tag in existing_tags:
+                continue
+            local_tag = f"{images.repository}:{tag}"
             runner.run(["docker", "tag", local_tag, image_uri])
             runner.run(["docker", "push", image_uri])
             results["pushed_images"].append(image_uri)
@@ -629,20 +675,14 @@ def apply_cockpit_surface(
     outputs = describe_stack_outputs(resolved, resolved.profile.cockpit.stack_name, runner=runner)  # type: ignore[union-attr]
     smoke_results: dict[str, Any] = {}
     if resolved.skip_migrate:
-        smoke_results["migrations"] = {"status": "skipped"}
-        smoke_results["readiness_seed"] = {"status": "skipped"}
-        smoke_results["deployment_smoke"] = {"status": "skipped"}
+        smoke_results["release_check"] = {"status": "skipped"}
     else:
-        _run_api_command(resolved, ["alphadb-deploy", "migrate"], runner=runner)
-        smoke_results["migrations"] = {"status": "passed"}
         _run_api_command(
             resolved,
-            ["alphadb-deploy", "seed-readiness", "--series", "KXBTC15M"],
+            ["alphadb-deploy", "release-check", "--series", "KXBTC15M"],
             runner=runner,
         )
-        smoke_results["readiness_seed"] = {"status": "passed"}
-        _run_api_command(resolved, ["alphadb-deploy", "smoke"], runner=runner)
-        smoke_results["deployment_smoke"] = {"status": "passed"}
+        smoke_results["release_check"] = {"status": "passed"}
 
     if resolved.skip_smoke:
         smoke_results["cockpit_smoke"] = {"status": "skipped"}
@@ -957,13 +997,13 @@ def build_deployment_manifest(
 def build_image_plan(
     profile: DeploymentProfile,
     *,
-    source: SourceRevision,
-    timestamp: str,
+    context_hashes: ImageContextHashes,
     skip_build: bool,
     skip_push: bool,
+    force_rebuild: bool,
 ) -> ImagePlan:
-    cockpit_tag = f"cockpit-{source.short_sha}-{timestamp}"
-    runtime_tag = f"runtime-{source.short_sha}-{timestamp}"
+    cockpit_tag = f"cockpit-{context_hashes.cockpit[:16]}"
+    runtime_tag = f"runtime-{context_hashes.runtime[:16]}"
     registry = f"{profile.account_id}.dkr.ecr.{profile.region}.amazonaws.com"
     repository_uri = f"{registry}/{profile.images.repository}"
     return ImagePlan(
@@ -974,8 +1014,10 @@ def build_image_plan(
         runtime_tag=runtime_tag,
         cockpit_uri=f"{repository_uri}:{cockpit_tag}",
         runtime_uri=f"{repository_uri}:{runtime_tag}",
+        context_hashes=context_hashes,
         skip_build=skip_build,
         skip_push=skip_push,
+        force_rebuild=force_rebuild,
     )
 
 
@@ -1113,6 +1155,26 @@ def collect_source_revision() -> SourceRevision:
     return SourceRevision(git_sha=full, short_sha=short, dirty_worktree=bool(status))
 
 
+def collect_image_context_hashes(
+    *,
+    platform: str,
+    repo_root: Path | None = None,
+) -> ImageContextHashes:
+    root = repo_root or Path.cwd()
+    return ImageContextHashes(
+        cockpit=_hash_build_context(
+            root,
+            platform=platform,
+            paths=("apps/dashboard",),
+        ),
+        runtime=_hash_build_context(
+            root,
+            platform=platform,
+            paths=("Dockerfile", "pyproject.toml", "README.md", "src"),
+        ),
+    )
+
+
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
@@ -1130,7 +1192,13 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-aws-read", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--skip-push", action="store_true")
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Rebuild and push content-addressed images even when the ECR tag already exists",
+    )
     parser.add_argument("--skip-migrate", action="store_true")
+    parser.add_argument("--skip-release-check", dest="skip_migrate", action="store_true")
     parser.add_argument("--skip-smoke", action="store_true")
     parser.add_argument("--skip-service-stability", action="store_true")
     parser.add_argument(
@@ -1258,9 +1326,7 @@ def _surface_plan_dict(resolved: ResolvedDeployment) -> dict[str, Any]:
                 "runtime": resolved.images.runtime_uri,
             },
             "smoke_gates": {
-                "migrations": "skipped" if resolved.skip_migrate else "default",
-                "readiness_seed": "skipped" if resolved.skip_migrate else "default",
-                "deployment_smoke": "skipped" if resolved.skip_migrate else "default",
+                "release_check": "skipped" if resolved.skip_migrate else "default",
                 "cockpit_smoke": "skipped" if resolved.skip_smoke else "default",
             },
         }
@@ -1379,6 +1445,28 @@ def _run_api_command(
             f"ECS one-off failed: {' '.join(command_args)}; "
             f"task={task} exit_code={exit_code} stopped_reason={stopped_reason}"
         )
+
+
+def _ecr_image_tag_exists(
+    resolved: ResolvedDeployment,
+    tag: str,
+    *,
+    runner: CommandRunner,
+) -> bool:
+    result = runner.run(
+        [
+            *_aws_base(resolved.profile),
+            "ecr",
+            "describe-images",
+            "--repository-name",
+            resolved.images.repository,
+            "--image-ids",
+            f"imageTag={tag}",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def _stack_output(
@@ -1559,6 +1647,34 @@ def _git_output(command: Sequence[str]) -> str:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise DeploymentProfileError(f"git command failed: {' '.join(command)}: {detail}")
     return completed.stdout.strip()
+
+
+def _hash_build_context(root: Path, *, platform: str, paths: Sequence[str]) -> str:
+    command = [
+        "git",
+        "-C",
+        str(root),
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        *paths,
+    ]
+    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise DeploymentProfileError(f"git context hash failed: {' '.join(command)}: {detail}")
+    hasher = hashlib.sha256()
+    hasher.update(f"platform:{platform}\0".encode("utf-8"))
+    for raw_path in sorted(line for line in completed.stdout.splitlines() if line.strip()):
+        path = root / raw_path
+        if not path.is_file():
+            continue
+        hasher.update(f"path:{raw_path}\0".encode("utf-8"))
+        hasher.update(path.read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
 
 
 def _utc_now_iso() -> str:

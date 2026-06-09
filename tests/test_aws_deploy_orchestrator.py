@@ -11,6 +11,7 @@ from alphadb.aws_deploy import (
     CommandResult,
     CommandRunner,
     DeploymentProfileError,
+    ImageContextHashes,
     SourceRevision,
     build_brti_deploy_command,
     build_cockpit_deploy_command,
@@ -28,6 +29,7 @@ SOURCE = SourceRevision(
     dirty_worktree=False,
 )
 TIMESTAMP = "20260608211530"
+CONTEXT_HASHES = ImageContextHashes(cockpit="1" * 64, runtime="2" * 64)
 
 
 class FakeAwsReader(AwsReadClient):
@@ -76,6 +78,22 @@ class RecordingRunner(CommandRunner):
         check=True,
     ) -> CommandResult:
         self.commands.append(tuple(command))
+        if "describe-images" in command:
+            return CommandResult(args=tuple(command), returncode=1, stdout="", stderr="missing")
+        return CommandResult(args=tuple(command), returncode=0, stdout="", stderr="")
+
+
+class ExistingImageRunner(RecordingRunner):
+    def run(
+        self,
+        command,
+        *,
+        env=None,
+        input_text=None,
+        capture_output=False,
+        check=True,
+    ) -> CommandResult:
+        self.commands.append(tuple(command))
         return CommandResult(args=tuple(command), returncode=0, stdout="", stderr="")
 
 
@@ -85,15 +103,17 @@ def test_aws_deployment_plan_orders_surfaces_and_builds_predictable_tags(tmp_pat
     resolved = create_deployment_plan(
         profile,
         source=SOURCE,
+        image_context_hashes=CONTEXT_HASHES,
         timestamp=TIMESTAMP,
         aws_reader=FakeAwsReader(schedule_state="ENABLED"),
     )
     plan = resolved.plan_dict()
 
     assert plan["surface_order"] == ["cockpit", "brti-collector", "fair-value"]
-    assert plan["images"]["cockpit"]["tag"] == f"cockpit-{SOURCE.short_sha}-{TIMESTAMP}"
-    assert plan["images"]["runtime"]["tag"] == f"runtime-{SOURCE.short_sha}-{TIMESTAMP}"
-    assert plan["images"]["runtime"]["uri"].endswith(":runtime-abcdef1-20260608211530")
+    assert plan["images"]["cockpit"]["tag"] == "cockpit-1111111111111111"
+    assert plan["images"]["runtime"]["tag"] == "runtime-2222222222222222"
+    assert plan["images"]["runtime"]["uri"].endswith(":runtime-2222222222222222")
+    assert plan["images"]["context_hashes"] == CONTEXT_HASHES.as_dict()
     assert plan["surfaces"]["cockpit"]["private_api"] == "AlphaDB API"
     assert plan["fair_value_schedule"]["intended_state"] == "ENABLED"
     assert plan["fair_value_schedule"]["behavior"] == "preserve-enabled"
@@ -112,14 +132,26 @@ def test_aws_deployment_rejects_expensive_yes_surface(tmp_path: Path) -> None:
     profile = write_profile(tmp_path, selected=["cockpit", "expensive-yes"])
 
     with pytest.raises(DeploymentProfileError, match="expensive-yes is outside"):
-        create_deployment_plan(profile, source=SOURCE, timestamp=TIMESTAMP, skip_aws_read=True)
+        create_deployment_plan(
+            profile,
+            source=SOURCE,
+            image_context_hashes=CONTEXT_HASHES,
+            timestamp=TIMESTAMP,
+            skip_aws_read=True,
+        )
 
 
 def test_aws_deployment_rejects_fair_value_schedule_enablement(tmp_path: Path) -> None:
     profile = write_profile(tmp_path, fair_value_schedule_policy="enabled")
 
     with pytest.raises(DeploymentProfileError, match="enablement is rejected"):
-        create_deployment_plan(profile, source=SOURCE, timestamp=TIMESTAMP, skip_aws_read=True)
+        create_deployment_plan(
+            profile,
+            source=SOURCE,
+            image_context_hashes=CONTEXT_HASHES,
+            timestamp=TIMESTAMP,
+            skip_aws_read=True,
+        )
 
 
 def test_fair_value_schedule_preserves_observed_state_and_safe_disables() -> None:
@@ -140,6 +172,7 @@ def test_plan_renders_skip_build_and_push_behavior(tmp_path: Path) -> None:
     resolved = create_deployment_plan(
         profile,
         source=SOURCE,
+        image_context_hashes=CONTEXT_HASHES,
         timestamp=TIMESTAMP,
         skip_aws_read=True,
         skip_build=True,
@@ -149,6 +182,8 @@ def test_plan_renders_skip_build_and_push_behavior(tmp_path: Path) -> None:
     assert resolved.plan_dict()["skip_behavior"] == {
         "skip_build": True,
         "skip_push": True,
+        "force_rebuild": False,
+        "skip_release_check": False,
         "skip_migrate": False,
         "skip_smoke": False,
         "skip_service_stability": False,
@@ -160,6 +195,7 @@ def test_prepare_images_builds_each_unique_image_once_without_real_docker(tmp_pa
     resolved = create_deployment_plan(
         profile,
         source=SOURCE,
+        image_context_hashes=CONTEXT_HASHES,
         timestamp=TIMESTAMP,
         skip_aws_read=True,
         skip_push=True,
@@ -173,9 +209,31 @@ def test_prepare_images_builds_each_unique_image_once_without_real_docker(tmp_pa
     assert result["build"] == "passed"
     assert result["push"] == "skipped"
     assert {command[5] for command in docker_builds} == {
-        "alphadb-orchestrated:cockpit-abcdef1-20260608211530",
-        "alphadb-orchestrated:runtime-abcdef1-20260608211530",
+        "alphadb-orchestrated:cockpit-1111111111111111",
+        "alphadb-orchestrated:runtime-2222222222222222",
     }
+
+
+def test_prepare_images_reuses_existing_content_addressed_ecr_tags(tmp_path: Path) -> None:
+    profile = write_profile(tmp_path, selected=["cockpit"])
+    resolved = create_deployment_plan(
+        profile,
+        source=SOURCE,
+        image_context_hashes=CONTEXT_HASHES,
+        timestamp=TIMESTAMP,
+        skip_aws_read=True,
+    )
+    runner = ExistingImageRunner()
+
+    result = prepare_images(resolved, runner=runner)
+
+    docker_builds = [command for command in runner.commands if command[:2] == ("docker", "build")]
+    docker_pushes = [command for command in runner.commands if command[:2] == ("docker", "push")]
+    assert docker_builds == []
+    assert docker_pushes == []
+    assert result["built_images"] == []
+    assert result["pushed_images"] == []
+    assert set(result["reused_images"]) == {resolved.images.cockpit_uri, resolved.images.runtime_uri}
 
 
 def test_apply_commands_use_shared_runtime_image_and_explicit_profile_inputs(
@@ -185,6 +243,7 @@ def test_apply_commands_use_shared_runtime_image_and_explicit_profile_inputs(
     resolved = create_deployment_plan(
         profile,
         source=SOURCE,
+        image_context_hashes=CONTEXT_HASHES,
         timestamp=TIMESTAMP,
         aws_reader=FakeAwsReader(schedule_state="DISABLED"),
     )
@@ -210,6 +269,7 @@ def test_manifest_shape_records_evidence_without_raw_secret_values(tmp_path: Pat
     resolved = create_deployment_plan(
         profile,
         source=SourceRevision(SOURCE.git_sha, SOURCE.short_sha, dirty_worktree=True),
+        image_context_hashes=CONTEXT_HASHES,
         timestamp=TIMESTAMP,
         aws_reader=FakeAwsReader(schedule_state="DISABLED"),
     )

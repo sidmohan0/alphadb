@@ -79,22 +79,27 @@ Supported MVP surfaces are:
 - `brti-collector`: deploys the long-running BRTI market-context collector.
 - `fair-value`: deploys fair-value live worker wiring.
 
-`expensive-yes` is rejected by this MVP orchestrator because its current AWS
-path defaults to an enabled schedule and needs separate schedule-safety gates.
-Cockpit pause/resume controls, CI/CD, custom domains, TLS, and managed Postgres
-provisioning are also out of scope.
+`expensive-yes` is rejected by this local MVP orchestrator because its current
+AWS path defaults to an enabled schedule and needs an explicit deployment-intent
+contract before Cockpit can control it. Per ADR 0005, the future Cockpit
+deployment workspace should be broadly permissive for the single-operator MVP:
+it may request all supported surfaces plus explicit live schedule/authority
+changes through AlphaDB API, Operational State, and a deployment worker. CI/CD,
+custom domains, TLS, and managed Postgres provisioning remain out of scope.
 
-The orchestrator builds one Cockpit image and one Python runtime image per
-deployment id. Tags use:
+The orchestrator plans one Cockpit image and one Python runtime image per
+deployment. Image tags are content-addressed by build context and platform:
 
 ```text
-cockpit-<git-sha>-<timestamp>
-runtime-<git-sha>-<timestamp>
+cockpit-<context-hash>
+runtime-<context-hash>
 ```
 
 The runtime image is reused for AlphaDB API, BRTI collector, and fair-value
-wiring. `--skip-build` and `--skip-push` are explicit in plan and apply output
-for redeploying known-good images.
+wiring. If an ECR image tag already exists and `--force-rebuild` is not set,
+the apply path reuses that image instead of rebuilding and pushing it again.
+`--skip-build`, `--skip-push`, and `--force-rebuild` are explicit in plan and
+apply output.
 
 Fair-value schedule behavior is intentionally narrow:
 
@@ -103,10 +108,13 @@ Fair-value schedule behavior is intentionally narrow:
   schedule disabled.
 - Schedule enablement is rejected in this MVP.
 
-By default, Cockpit apply runs migrations, readiness seed, `alphadb-deploy
-smoke`, and public Cockpit smoke. BRTI apply waits for ECS service stability.
-Use `--skip-migrate`, `--skip-smoke`, or `--skip-service-stability` only when
-the handoff should explicitly record a skipped gate.
+By default, Cockpit apply runs one deployed API `alphadb-deploy release-check`
+task and then public Cockpit smoke. The release check applies release-only
+migrations, seeds runtime config when missing, creates readiness evidence, and
+runs API smoke in one Fargate task. BRTI apply waits for ECS service stability.
+Use `--skip-release-check`, `--skip-smoke`, or `--skip-service-stability` only
+when the handoff should explicitly record a skipped gate. The legacy
+`--skip-migrate` flag remains an alias for `--skip-release-check`.
 
 Each plan or apply writes one ignored local JSON manifest under:
 
@@ -115,11 +123,11 @@ artifacts/aws-deployments/
 ```
 
 The manifest records deployment id, git sha, dirty-worktree flag, profile path,
-selected surfaces, AWS account and region, image URIs, stack outputs, observed
-and intended fair-value schedule state, smoke/status results, and rollback
-pointers such as previous stack outputs, task definitions, and schedule state
-when available. Raw secret values are not written; only profile secret ARN
-references are recorded.
+selected surfaces, AWS account and region, image URIs, image context hashes,
+stack outputs, observed and intended fair-value schedule state, smoke/status
+results, and rollback pointers such as previous stack outputs, task
+definitions, image parameters, and schedule state when available. Raw secret
+values are not written; only profile secret ARN references are recorded.
 
 ## Required Inputs
 
@@ -159,6 +167,8 @@ DRY_RUN=1
 SKIP_BUILD=1
 SKIP_PUSH=1
 SKIP_MIGRATE=1
+SKIP_RELEASE_CHECK=1
+FORCE_REBUILD=1
 SKIP_SMOKE=1
 ```
 
@@ -199,11 +209,11 @@ The script:
 
 - Builds the Cockpit image from `apps/dashboard/Dockerfile`.
 - Builds the AlphaDB API image from the root `Dockerfile`.
-- Tags both images separately in one ECR repository.
+- Tags both images separately in one ECR repository using content-addressed
+  defaults.
 - Deploys `deploy/aws/ecs-fargate-dashboard.yaml`.
-- Runs one-off AlphaDB API tasks for `alphadb-deploy migrate`,
-  `alphadb-deploy seed-readiness --series KXBTC15M`, and
-  `alphadb-deploy smoke`.
+- Runs one one-off AlphaDB API task for
+  `alphadb-deploy release-check --series KXBTC15M`.
 - Runs public Cockpit smoke against the ALB URL.
 
 Use a dry run to check inputs and rendered commands without touching AWS:
@@ -256,8 +266,8 @@ The smoke verifies:
   prints only redacted status/detail and does not log cash, assets, or portfolio
   balance values.
 
-The API one-off `alphadb-deploy smoke` verifies migrations, runtime config, and
-that live order submission remains fail-closed.
+The API one-off `alphadb-deploy release-check` verifies migrations, runtime
+config, readiness evidence, and that live order submission remains fail-closed.
 
 ## Rollback
 
