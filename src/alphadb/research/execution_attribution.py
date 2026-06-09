@@ -53,6 +53,7 @@ PHASE_ALIASES: Mapping[str, tuple[str, ...]] = {
 
 CSV_COLUMNS: tuple[str, ...] = (
     "run_id",
+    "evidence_type",
     "strategy",
     "market_ticker",
     "decision_ts",
@@ -61,12 +62,21 @@ CSV_COLUMNS: tuple[str, ...] = (
     "quote_age_at_submit_seconds",
     "coinbase_source_ts",
     "coinbase_age_seconds",
+    "active_context_source",
+    "active_context_status",
+    "active_context_age_seconds",
+    "active_context_stale_seconds",
     "side",
     "decision",
     "skip_reason",
     "intended_price",
     "intended_contracts",
     "decision_edge",
+    "min_edge",
+    "edge_shortfall",
+    "diagnostic_class",
+    "fresh_quote_counterfactual_status",
+    "fresh_quote_counterfactual_basis",
     "time_to_expiry_seconds",
     "risk_admission_status",
     "risk_admission_reason",
@@ -124,12 +134,15 @@ class LiveRunArtifacts:
     run_id: str
     run_dir: Path
     manifest: Mapping[str, Any]
+    decision_rows_payload: Mapping[str, Any]
     attempts_payload: Mapping[str, Any]
     reconciliation: Mapping[str, Any]
 
     def generated_at_sort_key(self) -> str:
-        generated_at = self.attempts_payload.get("generated_at") or self.manifest.get(
-            "generated_at"
+        generated_at = (
+            self.attempts_payload.get("generated_at")
+            or self.decision_rows_payload.get("generated_at")
+            or self.manifest.get("generated_at")
         )
         return str(generated_at or "")
 
@@ -235,10 +248,12 @@ def discover_live_run_artifacts(input_path: Path) -> list[LiveRunArtifacts]:
 
 def load_live_run_artifacts(run_dir: Path) -> LiveRunArtifacts:
     manifest = load_optional_json(run_dir / "manifest.json")
+    decision_rows_payload = load_optional_json(run_dir / "decision_rows.json")
     attempts_payload = load_optional_json(run_dir / "live_order_attempts.json")
     reconciliation = load_optional_json(run_dir / "live_reconciliation_report.json")
     run_id = str(
         attempts_payload.get("run_id")
+        or decision_rows_payload.get("run_id")
         or manifest.get("run_id")
         or reconciliation.get("run_id")
         or run_dir.name
@@ -247,6 +262,7 @@ def load_live_run_artifacts(run_dir: Path) -> LiveRunArtifacts:
         run_id=run_id,
         run_dir=run_dir,
         manifest=manifest,
+        decision_rows_payload=decision_rows_payload,
         attempts_payload=attempts_payload,
         reconciliation=reconciliation,
     )
@@ -261,6 +277,11 @@ def load_optional_json(path: Path) -> Mapping[str, Any]:
 def build_execution_rows(runs: Sequence[LiveRunArtifacts]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for run in runs:
+        for candidate_value in as_sequence(run.decision_rows_payload.get("rows")):
+            candidate = as_mapping(candidate_value)
+            if candidate.get("row_type") != "decision":
+                continue
+            rows.append(normalize_candidate_row(run=run, candidate=candidate))
         attempts = as_sequence(run.attempts_payload.get("attempts"))
         reconciliation_by_attempt = reconciliation_index(run.reconciliation)
         for attempt_value in attempts:
@@ -287,6 +308,14 @@ def normalize_attempt_row(
     decision_for_context = original_decision or decision
     source_row = as_mapping(attempt.get("source_row")) or as_mapping(manifest.get("selected_row"))
     freshness = as_mapping(attempt.get("freshness"))
+    attribution = as_mapping(attempt.get("live_edge_attribution"))
+    attribution_freshness = as_mapping(attribution.get("freshness"))
+    active_context = active_context_from(
+        attribution=attribution,
+        freshness=freshness,
+        source_row=source_row,
+    )
+    fresh_quote = as_mapping(attribution.get("fresh_quote_counterfactual"))
     risk_admission = as_mapping(attempt.get("risk_admission"))
     response = as_mapping(attempt.get("response_payload"))
     timing = timing_for_attempt(run=run, attempt=attempt)
@@ -331,6 +360,7 @@ def normalize_attempt_row(
         quote_age = seconds_between(generated_at, quote_seen_at)
     quote_age_at_submit = seconds_between(order_submit_at, quote_seen_at)
     coinbase_age = first_float(
+        attribution_freshness.get("coinbase_feature_age_seconds"),
         freshness.get("coinbase_feature_age_seconds"),
         source_row.get("coinbase_feature_age_seconds"),
     )
@@ -377,7 +407,7 @@ def normalize_attempt_row(
     )
     decision_edge = first_float(
         decision_for_context.get("edge"),
-        as_mapping(attempt.get("live_edge_attribution")).get("edge"),
+        attribution.get("edge"),
     )
     realized_pnl = realized_pnl_from_reconciliation(reconciliation_row)
     counterfactual_pnl = first_float(
@@ -392,6 +422,7 @@ def normalize_attempt_row(
 
     row = {
         "run_id": text(attempt.get("run_id")) or run.run_id,
+        "evidence_type": "attempt",
         "strategy": text(attempt.get("strategy"))
         or text(run.attempts_payload.get("strategy"))
         or text(manifest.get("strategy")),
@@ -408,12 +439,25 @@ def normalize_attempt_row(
         "quote_age_at_submit_seconds": rounded(quote_age_at_submit),
         "coinbase_source_ts": format_datetime(coinbase_source_ts),
         "coinbase_age_seconds": rounded(coinbase_age),
+        "active_context_source": text(active_context.get("evidence_source")),
+        "active_context_status": text(active_context.get("status")),
+        "active_context_age_seconds": rounded(
+            optional_float(active_context.get("age_seconds"))
+        ),
+        "active_context_stale_seconds": rounded(
+            optional_float(active_context.get("stale_seconds"))
+        ),
         "side": text(attempt.get("side")) or text(decision_for_context.get("side")),
         "decision": final_decision,
         "skip_reason": skip_reason,
         "intended_price": rounded(intended_price),
         "intended_contracts": intended_contracts,
         "decision_edge": rounded(decision_edge),
+        "min_edge": rounded(optional_float(attribution.get("min_edge"))),
+        "edge_shortfall": rounded(optional_float(attribution.get("edge_shortfall"))),
+        "diagnostic_class": text(attribution.get("attribution_class")),
+        "fresh_quote_counterfactual_status": text(fresh_quote.get("status")),
+        "fresh_quote_counterfactual_basis": text(fresh_quote.get("basis")),
         "time_to_expiry_seconds": rounded(time_to_expiry_seconds(source_row, decision_ts)),
         "risk_admission_status": text(risk_admission.get("status")),
         "risk_admission_reason": text(risk_admission.get("reason")),
@@ -435,6 +479,102 @@ def normalize_attempt_row(
     return {column: row.get(column) for column in CSV_COLUMNS}
 
 
+def normalize_candidate_row(
+    *,
+    run: LiveRunArtifacts,
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    manifest = run.manifest
+    attribution = as_mapping(candidate.get("live_edge_attribution"))
+    freshness = as_mapping(attribution.get("freshness"))
+    active_context = active_context_from(
+        attribution=attribution,
+        freshness=freshness,
+        source_row=candidate,
+    )
+    fresh_quote = as_mapping(attribution.get("fresh_quote_counterfactual"))
+    timing = as_mapping(attribution.get("timing")) or as_mapping(manifest.get("timing"))
+    phase_seconds = as_mapping(timing.get("phase_seconds"))
+    generated_at = parse_datetime(
+        run.decision_rows_payload.get("generated_at")
+        or manifest.get("generated_at")
+    )
+    decision_ts = parse_datetime(candidate.get("decision_timestamp") or generated_at)
+    quote_seen_at = parse_datetime(
+        freshness.get("quote_seen_at")
+        or candidate.get("quote_observed_at")
+        or candidate.get("kalshi_received_at")
+        or candidate.get("decision_timestamp")
+    )
+    coinbase_source_ts = parse_datetime(
+        freshness.get("coinbase_max_source_event_timestamp")
+        or candidate.get("coinbase_max_source_event_timestamp")
+    )
+    quote_age = first_float(freshness.get("quote_age_seconds"))
+    if quote_age is None and quote_seen_at is not None and generated_at is not None:
+        quote_age = seconds_between(generated_at, quote_seen_at)
+    coinbase_age = first_float(
+        freshness.get("coinbase_feature_age_seconds"),
+        candidate.get("coinbase_feature_age_seconds"),
+    )
+    if coinbase_age is None and coinbase_source_ts is not None and generated_at is not None:
+        coinbase_age = seconds_between(generated_at, coinbase_source_ts)
+
+    decision = text(attribution.get("decision"))
+    row = {
+        "run_id": text(run.decision_rows_payload.get("run_id")) or run.run_id,
+        "evidence_type": "candidate",
+        "strategy": text(manifest.get("strategy"))
+        or text(run.attempts_payload.get("strategy")),
+        "market_ticker": text(candidate.get("market_ticker") or candidate.get("ticker")),
+        "decision_ts": format_datetime(decision_ts),
+        "quote_seen_at": format_datetime(quote_seen_at),
+        "quote_age_seconds": rounded(quote_age),
+        "quote_age_at_submit_seconds": None,
+        "coinbase_source_ts": format_datetime(coinbase_source_ts),
+        "coinbase_age_seconds": rounded(coinbase_age),
+        "active_context_source": text(active_context.get("evidence_source")),
+        "active_context_status": text(active_context.get("status")),
+        "active_context_age_seconds": rounded(
+            optional_float(active_context.get("age_seconds"))
+        ),
+        "active_context_stale_seconds": rounded(
+            optional_float(active_context.get("stale_seconds"))
+        ),
+        "side": text(attribution.get("side")),
+        "decision": decision,
+        "skip_reason": text(attribution.get("reason")) if decision != "trade" else None,
+        "intended_price": rounded(optional_float(attribution.get("price"))),
+        "intended_contracts": None,
+        "decision_edge": rounded(optional_float(attribution.get("edge"))),
+        "min_edge": rounded(optional_float(attribution.get("min_edge"))),
+        "edge_shortfall": rounded(optional_float(attribution.get("edge_shortfall"))),
+        "diagnostic_class": text(attribution.get("attribution_class")),
+        "fresh_quote_counterfactual_status": text(fresh_quote.get("status")),
+        "fresh_quote_counterfactual_basis": text(fresh_quote.get("basis")),
+        "time_to_expiry_seconds": rounded(time_to_expiry_seconds(candidate, decision_ts)),
+        "risk_admission_status": None,
+        "risk_admission_reason": None,
+        "order_submit_at": None,
+        "submit_response_at": None,
+        "submit_roundtrip_ms": None,
+        "decision_to_submit_latency_seconds": None,
+        "order_status": "candidate",
+        "fill_count": None,
+        "remaining_count": None,
+        "realized_pnl": None,
+        "counterfactual_pnl_if_available": rounded(
+            optional_float(fresh_quote.get("counterfactual_pnl_if_available"))
+        ),
+        "phase_total_seconds": rounded(first_float(timing.get("total_elapsed_seconds"))),
+    }
+    for phase_name, aliases in PHASE_ALIASES.items():
+        row[f"phase_{phase_name}_seconds"] = rounded(
+            first_float(*(phase_seconds.get(alias) for alias in aliases))
+        )
+    return {column: row.get(column) for column in CSV_COLUMNS}
+
+
 def timing_for_attempt(
     *,
     run: LiveRunArtifacts,
@@ -447,6 +587,85 @@ def timing_for_attempt(
     if attribution_timing:
         return attribution_timing
     return {}
+
+
+def active_context_from(
+    *,
+    attribution: Mapping[str, Any],
+    freshness: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    attribution_freshness = as_mapping(attribution.get("freshness"))
+    active_context = as_mapping(attribution_freshness.get("active_context"))
+    if active_context:
+        return active_context
+
+    source = text(
+        freshness.get("market_context_source")
+        or source_row.get("market_context_source")
+    )
+    if source == "brti_primary":
+        age = first_float(
+            freshness.get("brti_context_age_seconds"),
+            source_row.get("brti_context_age_seconds"),
+        )
+        stale_seconds = first_float(
+            freshness.get("brti_freshness_limit_seconds"),
+            source_row.get("brti_freshness_limit_seconds"),
+        )
+        return {
+            "market_context_source": source,
+            "evidence_source": "brti_latest_context",
+            "status": context_status(
+                raw_status=text(
+                    freshness.get("brti_context_status")
+                    or source_row.get("brti_context_status")
+                    or source_row.get("market_context_status")
+                ),
+                age_seconds=age,
+                stale_seconds=stale_seconds,
+            ),
+            "age_seconds": rounded(age),
+            "stale_seconds": rounded(stale_seconds),
+        }
+    if source == "fixture":
+        return {
+            "market_context_source": source,
+            "evidence_source": "fixture",
+            "status": "not_applicable",
+            "age_seconds": None,
+            "stale_seconds": None,
+        }
+    age = first_float(
+        freshness.get("coinbase_feature_age_seconds"),
+        source_row.get("coinbase_feature_age_seconds"),
+    )
+    return {
+        "market_context_source": source or "coinbase_primary",
+        "evidence_source": "coinbase_features",
+        "status": context_status(
+            raw_status=text(source_row.get("market_context_status")),
+            age_seconds=age,
+            stale_seconds=None,
+        ),
+        "age_seconds": rounded(age),
+        "stale_seconds": None,
+    }
+
+
+def context_status(
+    *,
+    raw_status: str | None,
+    age_seconds: float | None,
+    stale_seconds: float | None,
+) -> str:
+    if raw_status in {"missing", "unavailable", "unusable"}:
+        return raw_status
+    if age_seconds is None:
+        return "missing"
+    if stale_seconds is not None and age_seconds > stale_seconds:
+        return "stale"
+    return "fresh"
 
 
 def reconciliation_index(reconciliation: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -486,15 +705,27 @@ def build_summary_tables(
         "dominant_hot_path_area": dominant_hot_path_area(rows),
         "quote_age_bucket_summary": bucket_summary(rows, "quote_age_seconds", AGE_BUCKETS),
         "coinbase_age_bucket_summary": bucket_summary(rows, "coinbase_age_seconds", AGE_BUCKETS),
+        "active_context_age_bucket_summary": bucket_summary(
+            rows,
+            "active_context_age_seconds",
+            AGE_BUCKETS,
+        ),
         "decision_to_submit_latency_bucket_summary": bucket_summary(
             rows,
             "decision_to_submit_latency_seconds",
+            LATENCY_BUCKETS,
+        ),
+        "hot_path_total_latency_bucket_summary": bucket_summary(
+            rows,
+            "phase_total_seconds",
             LATENCY_BUCKETS,
         ),
         "fill_vs_no_fill_summary": fill_vs_no_fill_summary(rows),
         "side_bucket_summary": categorical_summary(rows, "side"),
         "price_bucket_summary": bucket_summary(rows, "intended_price", PRICE_BUCKETS),
         "edge_bucket_summary": bucket_summary(rows, "decision_edge", EDGE_BUCKETS),
+        "diagnostic_class_summary": categorical_summary(rows, "diagnostic_class"),
+        "fresh_quote_counterfactual": fresh_quote_counterfactual_summary(rows),
         "skip_reject_error_reason_summary": reason_summary(rows),
         "adverse_selection": adverse_selection_summary(rows),
         "implementation_drag": implementation_drag_summary(rows),
@@ -515,6 +746,11 @@ def data_coverage_summary(
         "quote_age_at_submit_seconds",
         "coinbase_source_ts",
         "coinbase_age_seconds",
+        "active_context_source",
+        "active_context_status",
+        "active_context_age_seconds",
+        "diagnostic_class",
+        "fresh_quote_counterfactual_status",
         "order_submit_at",
         "submit_response_at",
         "submit_roundtrip_ms",
@@ -639,6 +875,7 @@ def categorical_summary(rows: Sequence[Mapping[str, Any]], field: str) -> list[d
 
 def fill_vs_no_fill_summary(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[Mapping[str, Any]]] = {
+        "candidate_only": [],
         "filled": [],
         "submitted_no_fill": [],
         "skipped": [],
@@ -647,7 +884,9 @@ def fill_vs_no_fill_summary(rows: Sequence[Mapping[str, Any]]) -> list[dict[str,
     for row in rows:
         status = text(row.get("order_status"))
         fill_count = optional_float(row.get("fill_count")) or 0.0
-        if status == "submitted" and fill_count > 0:
+        if text(row.get("evidence_type")) == "candidate":
+            grouped["candidate_only"].append(row)
+        elif status == "submitted" and fill_count > 0:
             grouped["filled"].append(row)
         elif status == "submitted":
             grouped["submitted_no_fill"].append(row)
@@ -747,6 +986,34 @@ def adverse_selection_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, An
     }
 
 
+def fresh_quote_counterfactual_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    statuses = Counter(
+        text(row.get("fresh_quote_counterfactual_status")) or "missing"
+        for row in rows
+    )
+    available = statuses.get("available", 0)
+    if not rows:
+        status = "insufficient_data"
+    elif available:
+        status = "available" if available == len(rows) else "mixed"
+    else:
+        status = "unavailable"
+    return {
+        "status": status,
+        "status_counts": [
+            {"status": name, "count": count}
+            for name, count in sorted(
+                statuses.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ],
+        "basis": (
+            "Fresh-quote counterfactuals require independent quote evidence at or "
+            "after submit time; exchange responses alone are not used."
+        ),
+    }
+
+
 def implementation_drag_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     counterfactual_rows = [
         row
@@ -755,11 +1022,11 @@ def implementation_drag_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, 
     ]
     if not counterfactual_rows:
         return {
-            "status": "insufficient_data",
+            "status": "unavailable",
             "estimated_drag_dollars": None,
             "basis": (
-                "No edge-at-submit, fresh-quote counterfactual, or counterfactual PnL fields "
-                "were present in the input artifacts."
+                "No independent fresh-quote counterfactual or counterfactual PnL "
+                "fields were present in the input artifacts."
             ),
         }
     drag_values: list[float] = []
@@ -790,9 +1057,18 @@ def bottleneck_verdict(
         for row in rows
         if row.get("skip_reason")
     }
+    diagnostic_classes = {
+        text(row.get("diagnostic_class"))
+        for row in rows
+        if text(row.get("diagnostic_class"))
+    }
     if "quote_stale" in reason_counts:
         return "quote_staleness_problem"
+    if "quote_freshness_suspect" in diagnostic_classes:
+        return "quote_staleness_problem"
     if "coinbase_context_stale" in reason_counts:
+        return "coinbase_staleness_problem"
+    if "coinbase_freshness_suspect" in diagnostic_classes:
         return "coinbase_staleness_problem"
     phase_p95 = {
         str(row.get("phase")): optional_float(row.get("p95_seconds"))
@@ -825,6 +1101,8 @@ def data_limitations(
         limitations.append("insufficient_data:submit_roundtrip_ms_not_derivable")
     if count_present(rows, "coinbase_source_ts") == 0:
         limitations.append("insufficient_data:coinbase_source_ts_missing")
+    if count_present(rows, "active_context_source") == 0:
+        limitations.append("insufficient_data:active_context_evidence_missing")
     if count_present(rows, "counterfactual_pnl_if_available") == 0:
         limitations.append("insufficient_data:implementation_drag_counterfactual_missing")
     if count_present(rows, "realized_pnl") == 0:
@@ -855,6 +1133,9 @@ def render_markdown_report(
 ) -> str:
     coverage = as_mapping(summaries.get("data_coverage"))
     implementation_drag = as_mapping(summaries.get("implementation_drag"))
+    fresh_quote_counterfactual = as_mapping(
+        summaries.get("fresh_quote_counterfactual")
+    )
     adverse = as_mapping(summaries.get("adverse_selection"))
     dominant_area = as_mapping(summaries.get("dominant_hot_path_area"))
     lines: list[str] = [
@@ -911,11 +1192,25 @@ def render_markdown_report(
             as_sequence(summaries.get("coinbase_age_bucket_summary")),
         ),
         "",
+        "Active context age buckets:",
+        "",
+        markdown_table(
+            SUMMARY_TABLE_COLUMNS,
+            as_sequence(summaries.get("active_context_age_bucket_summary")),
+        ),
+        "",
         "Decision-to-submit latency buckets:",
         "",
         markdown_table(
             SUMMARY_TABLE_COLUMNS,
             as_sequence(summaries.get("decision_to_submit_latency_bucket_summary")),
+        ),
+        "",
+        "Hot-path total latency buckets:",
+        "",
+        markdown_table(
+            SUMMARY_TABLE_COLUMNS,
+            as_sequence(summaries.get("hot_path_total_latency_bucket_summary")),
         ),
         "",
         "## Fillability and adverse-selection checks",
@@ -939,6 +1234,13 @@ def render_markdown_report(
         "",
         markdown_table(SUMMARY_TABLE_COLUMNS, as_sequence(summaries.get("edge_bucket_summary"))),
         "",
+        "Diagnostic class buckets:",
+        "",
+        markdown_table(
+            SUMMARY_TABLE_COLUMNS,
+            as_sequence(summaries.get("diagnostic_class_summary")),
+        ),
+        "",
         "Skip/reject/error reasons:",
         "",
         markdown_table(
@@ -950,6 +1252,14 @@ def render_markdown_report(
         f"- Basis: {adverse.get('basis', 'insufficient_data')}",
         "",
         "## PnL / implementation-drag estimate",
+        "",
+        f"- Fresh-quote counterfactual status: `{fresh_quote_counterfactual.get('status', 'unavailable')}`",
+        f"- Fresh-quote counterfactual basis: {fresh_quote_counterfactual.get('basis', 'insufficient_data')}",
+        "",
+        markdown_table(
+            ("status", "count"),
+            as_sequence(fresh_quote_counterfactual.get("status_counts")),
+        ),
         "",
         f"- Status: `{implementation_drag.get('status', 'insufficient_data')}`",
         f"- Estimated drag dollars: {md_value(implementation_drag.get('estimated_drag_dollars'))}",

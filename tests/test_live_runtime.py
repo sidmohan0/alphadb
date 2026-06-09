@@ -128,6 +128,9 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
             "edge": 0.03,
             "edge_shortfall": 0.02,
         },
+        "candidate_live_edge_attributions": [
+            {"attribution_class": "quote_freshness_suspect", "edge": 0.2}
+        ],
     }
     submitted = build_fair_value_live_status(
         manifest=manifest,
@@ -224,6 +227,7 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert skipped.skip_reason == "daily_loss_cap_reached"
     assert skipped.selected_side == "yes"
     assert skipped.summary["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert "candidate_live_edge_attributions" not in skipped.summary
     assert submitted.summary["market_context"]["market_context_source"] == "brti_primary"
     assert skipped.recent_attempts[0]["live_edge_attribution"]["edge"] == 0.03
     assert expensive.strategy == EXPENSIVE_YES_LIVE_STRATEGY

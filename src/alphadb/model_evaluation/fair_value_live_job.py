@@ -774,6 +774,21 @@ class FairValueLiveTradingJob:
             )
             for attempt in live_attempts
         ]
+        attributed_collected = live_decision_rows_with_candidate_attribution(
+            collected,
+            config=self.config.as_dict(),
+            runtime_config=runtime_config,
+            runtime_controls=runtime_controls,
+            generated_at=generated_at,
+            timing=attempt_timing,
+            decision_policy=self.config.decision_policy,
+            replay_config=FairValueReplayConfig(
+                min_edge=self.config.min_edge,
+                min_contract_price=self.config.min_contract_price,
+                max_order_dollars=self.config.max_order_dollars,
+                max_loss_dollars=self.config.max_daily_loss_dollars,
+            ),
+        )
         attempts_payload = dict(
             live_attempts_payload
             or {
@@ -794,15 +809,15 @@ class FairValueLiveTradingJob:
             "live_order_attempts": run_dir / "live_order_attempts.json",
             "live_reconciliation_report": run_dir / "live_reconciliation_report.json",
         }
-        if collected is not None:
+        if attributed_collected is not None:
             artifacts["decision_rows"] = run_dir / "decision_rows.json"
         with timer.phase("artifact_write"):
-            if collected is not None:
-                write_json(artifacts["decision_rows"], collected)
+            if attributed_collected is not None:
+                write_json(artifacts["decision_rows"], attributed_collected)
             write_json(artifacts["live_order_attempts"], attempts_payload)
             write_json(artifacts["live_reconciliation_report"], live_reconciliation)
 
-        collected_counts = as_mapping((collected or {}).get("counts"))
+        collected_counts = as_mapping((attributed_collected or {}).get("counts"))
         selected_trade = (selected_decision or {}).get("decision") == "trade"
         latest_attempt = dict(attributed_attempts[-1]) if attributed_attempts else {}
         latest_freshness = as_mapping(latest_attempt.get("freshness"))
@@ -1269,6 +1284,75 @@ def live_attempt_with_edge_attribution(
     return payload
 
 
+def live_decision_rows_with_candidate_attribution(
+    collected: Mapping[str, Any] | None,
+    *,
+    config: Mapping[str, Any],
+    runtime_config: Mapping[str, Any],
+    runtime_controls: Mapping[str, Any],
+    generated_at: datetime,
+    timing: Mapping[str, Any],
+    decision_policy: LiveDecisionPolicy,
+    replay_config: FairValueReplayConfig,
+) -> dict[str, Any] | None:
+    if collected is None:
+        return None
+    payload = dict(collected)
+    rows = [
+        dict(row)
+        for row in as_sequence(payload.get("rows"))
+        if isinstance(row, Mapping)
+    ]
+    if decision_policy != "fair_value":
+        payload["rows"] = rows
+        return payload
+
+    attributed_rows: list[dict[str, Any]] = []
+    candidate_count = 0
+    for row in rows:
+        if row.get("row_type") != "decision":
+            attributed_rows.append(row)
+            continue
+        candidate_count += 1
+        decision = candidate_attribution_decision(row, config=replay_config)
+        freshness = live_decision_freshness(row, generated_at=generated_at)
+        attributed_rows.append(
+            {
+                **row,
+                "live_edge_attribution": build_live_edge_attribution(
+                    decision=decision,
+                    source_row=row,
+                    config=config,
+                    runtime_config=runtime_config,
+                    runtime_controls=runtime_controls,
+                    freshness=freshness,
+                    timing=timing,
+                ),
+            }
+        )
+    payload["rows"] = attributed_rows
+    payload["candidate_live_edge_attribution_count"] = candidate_count
+    return payload
+
+
+def candidate_attribution_decision(
+    row: Mapping[str, Any],
+    *,
+    config: FairValueReplayConfig,
+) -> dict[str, Any]:
+    try:
+        return decide_trade(row, config=config, cumulative_pnl=0.0)
+    except Exception as exc:
+        ticker = str(row.get("ticker") or row.get("market_ticker") or "")
+        return {
+            "ticker": ticker,
+            "market_ticker": ticker,
+            "decision_timestamp": row.get("decision_timestamp"),
+            "decision": "skip",
+            "reason": f"candidate_attribution_error:{type(exc).__name__}",
+        }
+
+
 def live_market_context_evidence(
     row: Mapping[str, Any] | None,
     *,
@@ -1528,6 +1612,8 @@ def live_decision_freshness(
             "coinbase_feature_age_seconds": None,
             "brti_source_timestamp": None,
             "brti_context_age_seconds": None,
+            "brti_context_status": None,
+            "brti_freshness_limit_seconds": None,
             "brti_source_ahead_seconds": None,
             "brti_future_tolerance_seconds": None,
             "brti_future_tolerance_applied": None,
@@ -1567,6 +1653,8 @@ def live_decision_freshness(
         else None,
         "brti_source_timestamp": brti_seen_at.isoformat() if brti_seen_at else None,
         "brti_context_age_seconds": round(brti_age, 6) if brti_age is not None else None,
+        "brti_context_status": row.get("brti_context_status"),
+        "brti_freshness_limit_seconds": row.get("brti_freshness_limit_seconds"),
         "brti_source_ahead_seconds": row.get("brti_source_ahead_seconds"),
         "brti_future_tolerance_seconds": row.get("brti_future_tolerance_seconds"),
         "brti_future_tolerance_applied": row.get("brti_future_tolerance_applied"),
@@ -2539,6 +2627,10 @@ def numeric_response_value(payload: Mapping[str, Any], keys: Sequence[str]) -> f
 
 def as_mapping(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def as_sequence(value: object) -> Sequence[Any]:
+    return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
 
 
 def settlement_status(

@@ -523,6 +523,71 @@ def test_brti_primary_coinbase_diagnostic_failure_does_not_block_decision() -> N
         delete_brti_latest_context(database_url)
 
 
+def test_candidate_live_edge_attribution_decorates_multiple_decision_rows() -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    collected = {
+        "schema_version": FAIR_VALUE_DECISION_ROWS_SCHEMA,
+        "run_id": "fv_live_candidate_attr",
+        "generated_at": now.isoformat(),
+        "counts": {"rows": 2, "decisions": 2, "skips": 0, "errors": 0},
+        "rows": [
+            {
+                "row_type": "decision",
+                "ticker": "KXBTC15M-CAND-FRESH",
+                "market_ticker": "KXBTC15M-CAND-FRESH",
+                "decision_timestamp": now.isoformat(),
+                "quote_observed_at": now.isoformat(),
+                "market_context_source": "coinbase_primary",
+                "coinbase_max_source_event_timestamp": (
+                    now - timedelta(seconds=2)
+                ).isoformat(),
+                "yes_ask": 0.58,
+                "no_ask": 0.45,
+                "p_yes": 0.6,
+            },
+            {
+                "row_type": "decision",
+                "ticker": "KXBTC15M-CAND-STALE",
+                "market_ticker": "KXBTC15M-CAND-STALE",
+                "decision_timestamp": now.isoformat(),
+                "quote_observed_at": (now - timedelta(seconds=40)).isoformat(),
+                "market_context_source": "coinbase_primary",
+                "coinbase_max_source_event_timestamp": (
+                    now - timedelta(seconds=2)
+                ).isoformat(),
+                "yes_ask": 0.4,
+                "no_ask": 0.55,
+                "p_yes": 0.7,
+            },
+        ],
+    }
+
+    payload = fair_value_live_job.live_decision_rows_with_candidate_attribution(
+        collected,
+        config={
+            "market_context_source": "coinbase_primary",
+            "quote_stale_seconds": 15,
+            "coinbase_feature_stale_seconds": 90,
+        },
+        runtime_config={"snapshot": {"min_edge": 0.05}},
+        runtime_controls={"min_edge": 0.05, "market_context_source": "coinbase_primary"},
+        generated_at=now,
+        timing={"total_elapsed_seconds": 2.5, "phase_seconds": {"collection": 1.2}},
+        decision_policy="fair_value",
+        replay_config=FairValueReplayConfig(min_edge=0.05),
+    )
+
+    rows = payload["rows"]
+    assert payload["candidate_live_edge_attribution_count"] == 2
+    assert rows[0]["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert rows[0]["live_edge_attribution"]["status"] == "available"
+    assert rows[1]["live_edge_attribution"]["attribution_class"] == "quote_freshness_suspect"
+    assert (
+        rows[1]["live_edge_attribution"]["fresh_quote_counterfactual"]["status"]
+        == "unavailable"
+    )
+
+
 def test_live_fair_value_collector_records_skip_reasons() -> None:
     now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
     ticker = "KXBTC15M-FV-SKIP"
@@ -1027,6 +1092,7 @@ def test_live_trading_job_records_replay_skip_as_live_attempt(
     ).run(now=now)
 
     attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    decision_rows = json.loads(Path(manifest["artifacts"]["decision_rows"]["path"]).read_text())
     assert client.requests == []
     assert manifest["counts"]["live_attempts"] == 1
     assert manifest["counts"]["live_skipped"] == 1
@@ -1039,6 +1105,10 @@ def test_live_trading_job_records_replay_skip_as_live_attempt(
     assert attribution["edge_shortfall"] is not None
     assert attribution["freshness"]["quote_age_seconds"] == 0.0
     assert attempts["skip_reasons"] == [{"reason": "edge_below_min", "count": 1}]
+    candidate_attribution = decision_rows["rows"][0]["live_edge_attribution"]
+    assert candidate_attribution["market_ticker"] == ticker
+    assert candidate_attribution["reason"] == "edge_below_min"
+    assert candidate_attribution["fresh_quote_counterfactual"]["status"] == "unavailable"
 
 
 def test_live_trading_job_bootstraps_missing_current_live_risk_day_state(

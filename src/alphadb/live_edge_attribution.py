@@ -7,6 +7,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 SCHEMA_VERSION = "alphadb_live_edge_attribution.v1"
+MARKET_CONTEXT_COINBASE_PRIMARY = "coinbase_primary"
+MARKET_CONTEXT_BRTI_PRIMARY = "brti_primary"
+MARKET_CONTEXT_FIXTURE = "fixture"
 
 
 def build_live_edge_attribution(
@@ -77,6 +80,19 @@ def build_live_edge_attribution(
     coinbase_age = _float(freshness_map.get("coinbase_feature_age_seconds"))
     quote_stale_seconds = _float(config_map.get("quote_stale_seconds"))
     coinbase_stale_seconds = _float(config_map.get("coinbase_feature_stale_seconds"))
+    market_context_source = _market_context_source(
+        freshness=freshness_map,
+        source_row=source_map,
+        config=config_map,
+        runtime_controls=runtime_controls_map,
+        snapshot=snapshot,
+    )
+    active_context = active_context_freshness(
+        market_context_source=market_context_source,
+        freshness=freshness_map,
+        source_row=source_map,
+        config=config_map,
+    )
     missing_fields = _missing_fields(
         {
             "side": side,
@@ -121,19 +137,35 @@ def build_live_edge_attribution(
             quote_stale_seconds=quote_stale_seconds,
             coinbase_feature_age_seconds=coinbase_age,
             coinbase_feature_stale_seconds=coinbase_stale_seconds,
+            active_context_source=_text(active_context.get("evidence_source")),
+            active_context_status=_text(active_context.get("status")),
+            active_context_age_seconds=_float(active_context.get("age_seconds")),
+            active_context_stale_seconds=_float(active_context.get("stale_seconds")),
             missing_fields=missing_fields,
         ),
         "freshness": {
+            "market_context_source": market_context_source,
             "quote_seen_at": freshness_map.get("quote_seen_at"),
             "quote_age_seconds": _round(quote_age),
             "coinbase_max_source_event_timestamp": freshness_map.get(
                 "coinbase_max_source_event_timestamp"
             ),
             "coinbase_feature_age_seconds": _round(coinbase_age),
+            "brti_source_timestamp": freshness_map.get("brti_source_timestamp"),
+            "brti_context_age_seconds": _round(
+                _float(freshness_map.get("brti_context_age_seconds"))
+            ),
+            "brti_context_status": freshness_map.get("brti_context_status"),
             "quote_stale_seconds": _round(quote_stale_seconds),
             "coinbase_feature_stale_seconds": _round(coinbase_stale_seconds),
+            "active_context": active_context,
         },
         "timing": compact_timing(timing_map),
+        "fresh_quote_counterfactual": fresh_quote_counterfactual_status(
+            decision=decision_map,
+            source_row=source_map,
+            freshness=freshness_map,
+        ),
         "missing_fields": missing_fields,
     }
 
@@ -150,6 +182,10 @@ def classify_live_edge_attribution(
     quote_stale_seconds: float | None,
     coinbase_feature_age_seconds: float | None,
     coinbase_feature_stale_seconds: float | None,
+    active_context_source: str | None = None,
+    active_context_status: str | None = None,
+    active_context_age_seconds: float | None = None,
+    active_context_stale_seconds: float | None = None,
     missing_fields: Sequence[str] = (),
 ) -> str:
     if decision_reason == "price_below_min_contract" or (
@@ -161,8 +197,23 @@ def classify_live_edge_attribution(
     if quote_age_seconds is not None and quote_stale_seconds is not None:
         if quote_age_seconds > quote_stale_seconds:
             return "quote_freshness_suspect"
+    if active_context_source == "brti_latest_context":
+        if _active_context_is_stale(
+            status=active_context_status,
+            age_seconds=active_context_age_seconds,
+            stale_seconds=active_context_stale_seconds,
+        ):
+            return "brti_freshness_suspect"
+    if active_context_source == "coinbase_features":
+        if _active_context_is_stale(
+            status=active_context_status,
+            age_seconds=active_context_age_seconds,
+            stale_seconds=active_context_stale_seconds,
+        ):
+            return "coinbase_freshness_suspect"
     if (
-        coinbase_feature_age_seconds is not None
+        active_context_source in (None, "coinbase_features")
+        and coinbase_feature_age_seconds is not None
         and coinbase_feature_stale_seconds is not None
         and coinbase_feature_age_seconds > coinbase_feature_stale_seconds
     ):
@@ -178,6 +229,115 @@ def classify_live_edge_attribution(
     if edge is not None and min_edge is not None and edge >= min_edge:
         return "edge_cleared"
     return "unknown"
+
+
+def active_context_freshness(
+    *,
+    market_context_source: str,
+    freshness: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the freshness evidence for the active market context source only."""
+
+    if market_context_source == MARKET_CONTEXT_BRTI_PRIMARY:
+        age = _first_float(
+            freshness,
+            ("brti_context_age_seconds",),
+            default=_float(source_row.get("brti_context_age_seconds")),
+        )
+        stale_seconds = _first_float(
+            freshness,
+            ("brti_freshness_limit_seconds",),
+            default=_first_float(
+                source_row,
+                ("brti_freshness_limit_seconds",),
+                default=_float(config.get("brti_freshness_limit_seconds")),
+            ),
+        )
+        raw_status = _text(
+            freshness.get("brti_context_status")
+            or source_row.get("brti_context_status")
+            or source_row.get("market_context_status")
+        )
+        status = _context_status(
+            raw_status=raw_status,
+            age_seconds=age,
+            stale_seconds=stale_seconds,
+        )
+        return {
+            "market_context_source": market_context_source,
+            "evidence_source": "brti_latest_context",
+            "status": status,
+            "age_seconds": _round(age),
+            "stale_seconds": _round(stale_seconds),
+            "source_timestamp": freshness.get("brti_source_timestamp")
+            or source_row.get("brti_source_timestamp"),
+            "context_status": raw_status,
+        }
+    if market_context_source == MARKET_CONTEXT_FIXTURE:
+        return {
+            "market_context_source": market_context_source,
+            "evidence_source": "fixture",
+            "status": "not_applicable",
+            "age_seconds": None,
+            "stale_seconds": None,
+            "source_timestamp": None,
+            "context_status": "not_applicable",
+        }
+
+    age = _first_float(
+        freshness,
+        ("coinbase_feature_age_seconds",),
+        default=_float(source_row.get("coinbase_feature_age_seconds")),
+    )
+    stale_seconds = _float(config.get("coinbase_feature_stale_seconds"))
+    status = _context_status(
+        raw_status=_text(source_row.get("market_context_status")),
+        age_seconds=age,
+        stale_seconds=stale_seconds,
+    )
+    return {
+        "market_context_source": market_context_source,
+        "evidence_source": "coinbase_features",
+        "status": status,
+        "age_seconds": _round(age),
+        "stale_seconds": _round(stale_seconds),
+        "source_timestamp": freshness.get("coinbase_max_source_event_timestamp")
+        or source_row.get("coinbase_max_source_event_timestamp"),
+        "context_status": _text(source_row.get("market_context_status")),
+    }
+
+
+def fresh_quote_counterfactual_status(
+    *,
+    decision: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    freshness: Mapping[str, Any],
+) -> dict[str, Any]:
+    explicit = _mapping(
+        freshness.get("fresh_quote_counterfactual")
+        or source_row.get("fresh_quote_counterfactual")
+        or decision.get("fresh_quote_counterfactual")
+    )
+    if explicit:
+        status = _text(explicit.get("status")) or "available"
+        return {
+            "status": status,
+            "basis": _text(explicit.get("basis")),
+            "fresh_quote_seen_at": explicit.get("fresh_quote_seen_at"),
+            "edge_at_submit": _round(_float(explicit.get("edge_at_submit"))),
+            "counterfactual_pnl_if_available": _round(
+                _float(explicit.get("counterfactual_pnl_if_available"))
+            ),
+        }
+    return {
+        "status": "unavailable",
+        "basis": "independent_fresh_quote_evidence_missing",
+        "fresh_quote_seen_at": None,
+        "edge_at_submit": None,
+        "counterfactual_pnl_if_available": None,
+    }
 
 
 def summarize_live_edge_attribution_buckets(
@@ -205,6 +365,52 @@ def compact_timing(timing: Mapping[str, Any]) -> dict[str, Any]:
         "quote_to_submit_seconds": _round(_float(timing.get("quote_to_submit_seconds"))),
         "phase_seconds": dict(sorted(compact_phases.items())),
     }
+
+
+def _market_context_source(
+    *,
+    freshness: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    config: Mapping[str, Any],
+    runtime_controls: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+) -> str:
+    return (
+        _text(freshness.get("market_context_source"))
+        or _text(source_row.get("market_context_source"))
+        or _text(runtime_controls.get("market_context_source"))
+        or _text(snapshot.get("market_context_source"))
+        or _text(config.get("market_context_source"))
+        or MARKET_CONTEXT_COINBASE_PRIMARY
+    )
+
+
+def _context_status(
+    *,
+    raw_status: str | None,
+    age_seconds: float | None,
+    stale_seconds: float | None,
+) -> str:
+    if raw_status in {"missing", "unavailable", "unusable"}:
+        return raw_status
+    if age_seconds is None:
+        return "missing"
+    if stale_seconds is not None and age_seconds > stale_seconds:
+        return "stale"
+    return "fresh"
+
+
+def _active_context_is_stale(
+    *,
+    status: str | None,
+    age_seconds: float | None,
+    stale_seconds: float | None,
+) -> bool:
+    if status == "stale":
+        return True
+    if age_seconds is not None and stale_seconds is not None:
+        return age_seconds > stale_seconds
+    return False
 
 
 def _missing_fields(values: Mapping[str, Any]) -> list[str]:

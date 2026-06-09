@@ -154,6 +154,37 @@ def test_performance_summary_exposes_live_edge_attribution_and_buckets() -> None
     )
 
 
+def test_performance_summary_ignores_candidate_only_edge_attribution() -> None:
+    row = status_row(
+        "run_latest",
+        NOW,
+        decision_outcome="skipped",
+        latest_attempt_status="skipped",
+        skip_reason="edge_below_min",
+        latest_attempt_reason="edge_below_min",
+        live_edge_attribution={
+            "attribution_class": "threshold_drag",
+            "edge": 0.03,
+        },
+    )
+    row["summary"]["candidate_live_edge_attributions"] = [
+        {"attribution_class": "quote_freshness_suspect", "edge": 0.2}
+    ]
+
+    summary = build_performance_summary(
+        strategy="fair_value_live",
+        market_series="KXBTC15M",
+        generated_at=NOW,
+        status_rows=[row],
+    )
+
+    assert summary["live_edge_attribution"]["attribution_class"] == "threshold_drag"
+    assert summary["live_edge_attribution_buckets"] == [
+        {"attribution_class": "threshold_drag", "count": 1}
+    ]
+    assert "candidate_live_edge_attributions" not in summary["recent_runs"][0]
+
+
 def test_performance_summary_reports_pnl_fees_exposure_and_risk_budget() -> None:
     summary = build_performance_summary(
         strategy="fair_value_live",
