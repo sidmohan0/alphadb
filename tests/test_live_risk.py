@@ -7,7 +7,8 @@ import psycopg
 import pytest
 
 from alphadb.config import settings_from_env
-from alphadb.live_risk import LiveRiskAdmissionRepository
+from alphadb.live_risk import LiveRiskAdmissionRepository, LiveRiskAdmissionState
+from alphadb.model_evaluation.fair_value_live_job import live_risk_accounting_report
 from alphadb.state.repository import OperationalStateRepository
 
 
@@ -77,6 +78,65 @@ def test_live_risk_admission_reserves_releases_and_converts_pending_exposure() -
     assert state.pending_exposure_dollars == 0.0
     assert state.open_exposure_dollars == 0.25
     assert state.market_exposure_dollars("KXBTC15M-RISK") == 0.25
+
+
+def test_live_risk_daily_loss_cap_uses_realized_loss_not_existing_exposure() -> None:
+    repository = repository_or_skip()
+    strategy = f"test_strategy_{uuid4().hex[:8]}"
+    risk_day = date(2026, 6, 4)
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    repository.upsert_state(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        daily_loss_used_dollars=1.0,
+        open_exposure_dollars=8.0,
+        per_market_exposure_dollars={"KXBTC15M-OPEN": 8.0},
+        updated_at=now,
+    )
+
+    reserved = repository.admit_order(
+        strategy=strategy,
+        live_risk_day=risk_day,
+        market_ticker="KXBTC15M-NEW",
+        max_loss_dollars=1.0,
+        max_daily_loss_dollars=5.0,
+        max_market_exposure_dollars=10.0,
+        now=now,
+        reservation_id="res_daily_loss_is_realized",
+    )
+
+    assert reserved.approved is True
+    assert reserved.daily_risk_used_before_dollars == 1.0
+    assert reserved.state is not None
+    assert reserved.state.daily_loss_used_dollars == 1.0
+    assert reserved.state.open_exposure_dollars == 8.0
+    assert reserved.state.pending_exposure_dollars == 1.0
+
+
+def test_live_risk_accounting_reports_realized_daily_loss_separately_from_exposure() -> None:
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    state = LiveRiskAdmissionState(
+        strategy="fair_value_live",
+        live_risk_day=date(2026, 6, 4),
+        daily_loss_used_dollars=1.25,
+        open_exposure_dollars=8.0,
+        pending_exposure_dollars=0.75,
+        per_market_exposure_dollars={"KXBTC15M-OPEN": 8.0, "KXBTC15M-PENDING": 0.75},
+        pending_reservations={},
+        updated_at=now,
+        version=1,
+    )
+
+    report = live_risk_accounting_report(
+        state,
+        generated_at=now,
+        live_risk_timezone="America/Los_Angeles",
+    )
+
+    assert report["daily_loss_realized_dollars"] == 1.25
+    assert report["daily_loss_used_dollars"] == 1.25
+    assert report["open_exposure_dollars"] == 8.0
+    assert report["pending_exposure_dollars"] == 0.75
 
 
 def test_live_risk_admission_retains_unknown_response_until_reconciliation() -> None:

@@ -85,7 +85,7 @@ admission result, and phase timings. The seeded canary defaults are:
 
 - Max order dollars: `$5`.
 - Max exposure per market: `$5`.
-- Max daily loss/exposure: `$50`.
+- Max daily realized loss: `$50`.
 - Min edge: `0.0`.
 - Min contract price: `$0.25`.
 - Max markets: `20`.
@@ -96,6 +96,9 @@ admission result, and phase timings. The seeded canary defaults are:
 - Filled/partially filled attempts convert pending exposure into open exposure.
 - Unknown exchange responses keep pending exposure reserved until reconciliation
   refreshes state.
+- The Cockpit reset action clears realized daily loss for the active live risk
+  day only; it preserves open exposure, pending exposure, and pending
+  reservations.
 
 Change the non-secret values in the dashboard and click `Save`. The next AWS
 run reads the latest active Postgres config. Secrets and infrastructure wiring
