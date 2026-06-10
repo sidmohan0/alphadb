@@ -294,6 +294,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Read dashboard-owned Postgres config, use CLI/env values, or choose by environment.",
     )
+    fair_live.add_argument(
+        "--live-authority-backend",
+        choices=("auto", "postgres", "s3", "local"),
+        default="auto",
+        help="Select live-decision authority backend; postgres keeps S3 as artifact storage only.",
+    )
     fair_live.add_argument("--output", default=None)
 
     expensive_yes_live = subparsers.add_parser(
@@ -515,6 +521,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 s3_prefix=args.s3_prefix,
                 submit_live_orders=args.submit_live_orders,
                 runtime_config_source=args.runtime_config_source,
+                live_authority_backend=args.live_authority_backend,
                 live_risk_state_stale_seconds=args.live_risk_state_stale_seconds,
                 quote_stale_seconds=args.quote_stale_seconds,
                 coinbase_feature_stale_seconds=args.coinbase_feature_stale_seconds,

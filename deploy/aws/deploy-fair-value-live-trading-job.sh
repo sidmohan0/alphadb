@@ -118,6 +118,7 @@ aws_cli cloudformation deploy \
     ScheduleState="${SCHEDULE_STATE:-DISABLED}" \
     MinEdgeValues="${MIN_EDGE_VALUES:-0.0,0.05,0.10}" \
     MinContractPrice="${MIN_CONTRACT_PRICE:-0.25}" \
+    LiveAuthorityBackend="${LIVE_AUTHORITY_BACKEND:-postgres}" \
     KalshiApiKeyIdSecretArn="$KALSHI_API_KEY_ID_SECRET_ARN" \
     KalshiPrivateKeyPemSecretArn="$KALSHI_PRIVATE_KEY_PEM_SECRET_ARN" \
     AwsRegionValue="$REGION"
