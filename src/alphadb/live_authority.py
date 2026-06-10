@@ -17,6 +17,7 @@ from alphadb.state.repository import OperationalStateRepository
 
 LIVE_DECISION_AUTHORITY_LEASE_SCHEMA = "alphadb_live_decision_authority_lease.v1"
 LIVE_DECISION_AUTHORITY_RESULT_SCHEMA = "alphadb_live_decision_authority_result.v1"
+LIVE_DECISION_AUTHORITY_STATUS_SCHEMA = "alphadb_live_decision_authority_status.v1"
 AuthorityAcquireStatus = Literal["acquired", "held"]
 AuthorityReleaseStatus = Literal["released", "stale"]
 AuthorityValidationStatus = Literal["validated", "stale"]
@@ -311,6 +312,67 @@ class LiveDecisionAuthorityLeaseRepository:
             current_lease=current,
             reason="stale_live_decision_authority_token",
         )
+
+    def status(
+        self,
+        *,
+        strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        observed_at = ensure_utc(now or datetime.now(UTC))
+        current = self.get(strategy=strategy, apply_migrations=False)
+        return live_decision_authority_status(
+            strategy=strategy,
+            lease=current,
+            now=observed_at,
+        )
+
+
+def live_decision_authority_status(
+    *,
+    strategy: str,
+    lease: LiveDecisionAuthorityLease | None,
+    now: datetime,
+) -> dict[str, Any]:
+    if lease is None:
+        return {
+            "schema_version": LIVE_DECISION_AUTHORITY_STATUS_SCHEMA,
+            "backend": "postgres",
+            "strategy": strategy,
+            "state": "empty",
+            "reason": "live_decision_authority_empty",
+            "run_id": None,
+            "owner_id": None,
+            "fencing_token": None,
+            "acquired_at": None,
+            "expires_at": None,
+            "released_at": None,
+            "lease_status": None,
+        }
+    if lease.status == "active" and lease.released_at is None:
+        state = "expired" if lease.expires_at <= now else "held"
+        reason = "live_decision_authority_expired" if state == "expired" else None
+    elif lease.status == "released" or lease.released_at is not None:
+        state = "released"
+        reason = None
+    else:
+        state = lease.status or "unknown"
+        reason = f"live_decision_authority_{state}"
+    return {
+        "schema_version": LIVE_DECISION_AUTHORITY_STATUS_SCHEMA,
+        "backend": "postgres",
+        "strategy": lease.strategy,
+        "state": state,
+        "reason": reason,
+        "run_id": lease.run_id,
+        "owner_id": lease.owner_id,
+        "fencing_token": lease.fencing_token,
+        "acquired_at": lease.acquired_at.isoformat(),
+        "expires_at": lease.expires_at.isoformat(),
+        "released_at": lease.released_at.isoformat() if lease.released_at else None,
+        "lease_status": lease.status,
+    }
 
 
 def lease_from_row(row: Mapping[str, Any]) -> LiveDecisionAuthorityLease:
