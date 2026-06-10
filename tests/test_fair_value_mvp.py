@@ -1970,6 +1970,162 @@ def test_report_only_postgres_runtime_records_authority_lease_manifest(
     assert persisted.released_at is not None
 
 
+def test_postgres_authority_held_fails_closed_before_collection(
+    tmp_path: Path,
+    monkeypatch,
+    request,
+) -> None:
+    live_runtime_repository_or_skip()
+    settings = live_enabled_settings()
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    strategy = f"test_authority_held_{uuid4().hex[:10]}"
+    repository = LiveDecisionAuthorityLeaseRepository(settings.database_url)
+    held = repository.acquire(
+        strategy=strategy,
+        run_id="fv_live_existing_authority",
+        owner_id="existing_worker",
+        now=now,
+        ttl_seconds=300,
+    )
+    assert held.acquired is True
+    assert held.lease is not None
+    request.addfinalizer(
+        lambda: repository.release(
+            strategy=strategy,
+            owner_id=held.lease.owner_id,
+            fencing_token=held.lease.fencing_token,
+        )
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "make_kalshi_client",
+        lambda source, settings: pytest.fail("authority-held run must not collect market data"),
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "make_coinbase_client",
+        lambda source: pytest.fail("authority-held run must not collect market data"),
+    )
+    client = SequencedOrderClient([])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            strategy=strategy,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            submit_live_orders=False,
+            runtime_config_source="postgres",
+        ),
+        settings=settings,
+        order_client=client,
+    ).run(now=now + timedelta(seconds=10))
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    status = LiveRunStatusRepository(settings.database_url).latest_status(strategy=strategy)
+
+    assert client.requests == []
+    assert manifest["runtime_config"]["source"] == "not_read_authority_denied"
+    assert manifest["runtime_config"]["not_read_reason"] == "live_decision_authority_held"
+    assert manifest["runtime_controls"]["orders_placed"] == 0
+    assert manifest["runtime_controls"]["live_status_materialized"] is True
+    assert manifest["runtime_controls"]["live_run_lock"]["backend"] == "postgres"
+    assert manifest["runtime_controls"]["live_run_lock"]["acquired"] is False
+    assert manifest["runtime_controls"]["live_run_lock"]["reason"] == (
+        "live_decision_authority_held"
+    )
+    assert manifest["runtime_controls"]["live_decision_authority_lease"]["existing"][
+        "run_id"
+    ] == "fv_live_existing_authority"
+    assert manifest["counts"]["collected_rows"] == 0
+    assert manifest["timing"]["phase_seconds"]["collection"] == 0.0
+    assert manifest["timing"]["phase_seconds"]["risk_admission"] == 0.0
+    assert attempts["attempts"][0]["status"] == "skipped"
+    assert attempts["attempts"][0]["reason"] == "live_decision_authority_held"
+    assert attempts["attempts"][0]["decision"]["reason"] == "live_decision_authority_held"
+    assert attempts["skip_reasons"] == [
+        {"reason": "live_decision_authority_held", "count": 1}
+    ]
+    assert status.run_id == manifest["run_id"]
+    assert status.decision_outcome == "skipped"
+    assert status.latest_attempt_reason == "live_decision_authority_held"
+    assert status.skip_reason == "live_decision_authority_held"
+
+
+def test_postgres_authority_unavailable_fails_closed_before_collection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    live_runtime_repository_or_skip()
+    settings = live_enabled_settings()
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    strategy = f"test_authority_unavailable_{uuid4().hex[:10]}"
+
+    def raise_authority_unavailable(self, **kwargs):
+        raise psycopg.OperationalError("authority database unavailable")
+
+    monkeypatch.setattr(
+        LiveDecisionAuthorityLeaseRepository,
+        "acquire",
+        raise_authority_unavailable,
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "make_kalshi_client",
+        lambda source, settings: pytest.fail("authority-error run must not collect market data"),
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "make_coinbase_client",
+        lambda source: pytest.fail("authority-error run must not collect market data"),
+    )
+    client = SequencedOrderClient([])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            strategy=strategy,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            submit_live_orders=False,
+            runtime_config_source="postgres",
+        ),
+        settings=settings,
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    status = LiveRunStatusRepository(settings.database_url).latest_status(strategy=strategy)
+
+    assert client.requests == []
+    assert manifest["runtime_config"]["source"] == "not_read_authority_denied"
+    assert manifest["runtime_config"]["not_read_reason"] == (
+        "live_decision_authority_unavailable"
+    )
+    assert manifest["runtime_controls"]["orders_placed"] == 0
+    assert manifest["runtime_controls"]["live_status_materialized"] is True
+    assert manifest["runtime_controls"]["live_run_lock"]["backend"] == "postgres"
+    assert manifest["runtime_controls"]["live_run_lock"]["acquired"] is False
+    assert manifest["runtime_controls"]["live_run_lock"]["reason"] == (
+        "live_decision_authority_unavailable"
+    )
+    assert manifest["runtime_controls"]["live_decision_authority_lease"]["existing"][
+        "error_type"
+    ] == "OperationalError"
+    assert manifest["counts"]["collected_rows"] == 0
+    assert manifest["timing"]["phase_seconds"]["collection"] == 0.0
+    assert manifest["timing"]["phase_seconds"]["submit"] == 0.0
+    assert attempts["attempts"][0]["status"] == "skipped"
+    assert attempts["attempts"][0]["reason"] == "live_decision_authority_unavailable"
+    assert attempts["skip_reasons"] == [
+        {"reason": "live_decision_authority_unavailable", "count": 1}
+    ]
+    assert status.run_id == manifest["run_id"]
+    assert status.decision_outcome == "skipped"
+    assert status.latest_attempt_reason == "live_decision_authority_unavailable"
+    assert status.skip_reason == "live_decision_authority_unavailable"
+
+
 def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
     tmp_path: Path,
     monkeypatch,
