@@ -126,3 +126,52 @@ def test_live_decision_authority_expired_reclaim_denies_stale_release() -> None:
     assert current is not None
     assert current.owner_id == "worker_reclaimed"
     assert current.status == "active"
+
+
+def test_live_decision_authority_validate_active_denies_stale_token() -> None:
+    repository = repository_or_skip()
+    strategy = f"test_authority_{uuid4().hex[:10]}"
+    now = datetime(2026, 6, 9, 22, 30, tzinfo=UTC)
+
+    first = repository.acquire(
+        strategy=strategy,
+        run_id="run_first",
+        owner_id="worker_first",
+        now=now,
+        ttl_seconds=30,
+    )
+    valid_first = repository.validate_active(
+        strategy=strategy,
+        owner_id="worker_first",
+        fencing_token=first.lease.fencing_token,
+        now=now + timedelta(seconds=5),
+    )
+    reclaimed = repository.acquire(
+        strategy=strategy,
+        run_id="run_reclaimed",
+        owner_id="worker_reclaimed",
+        now=now + timedelta(seconds=31),
+        ttl_seconds=30,
+    )
+    stale_first = repository.validate_active(
+        strategy=strategy,
+        owner_id="worker_first",
+        fencing_token=first.lease.fencing_token,
+        now=now + timedelta(seconds=32),
+    )
+    valid_reclaimed = repository.validate_active(
+        strategy=strategy,
+        owner_id="worker_reclaimed",
+        fencing_token=reclaimed.lease.fencing_token,
+        now=now + timedelta(seconds=32),
+    )
+
+    assert first.lease is not None
+    assert reclaimed.lease is not None
+    assert valid_first.valid is True
+    assert valid_first.reason is None
+    assert stale_first.valid is False
+    assert stale_first.reason == "stale_live_decision_authority_token"
+    assert stale_first.current_lease is not None
+    assert stale_first.current_lease.fencing_token == reclaimed.lease.fencing_token
+    assert valid_reclaimed.valid is True

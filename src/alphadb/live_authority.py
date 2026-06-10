@@ -19,6 +19,7 @@ LIVE_DECISION_AUTHORITY_LEASE_SCHEMA = "alphadb_live_decision_authority_lease.v1
 LIVE_DECISION_AUTHORITY_RESULT_SCHEMA = "alphadb_live_decision_authority_result.v1"
 AuthorityAcquireStatus = Literal["acquired", "held"]
 AuthorityReleaseStatus = Literal["released", "stale"]
+AuthorityValidationStatus = Literal["validated", "stale"]
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,29 @@ class LiveDecisionAuthorityReleaseResult:
             "schema_version": LIVE_DECISION_AUTHORITY_RESULT_SCHEMA,
             "backend": "postgres",
             "released": self.released,
+            "status": self.status,
+            "reason": self.reason,
+            "lease": lease.as_dict() if lease else None,
+        }
+
+
+@dataclass(frozen=True)
+class LiveDecisionAuthorityValidationResult:
+    status: AuthorityValidationStatus
+    lease: LiveDecisionAuthorityLease | None = None
+    current_lease: LiveDecisionAuthorityLease | None = None
+    reason: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.status == "validated"
+
+    def as_dict(self) -> dict[str, Any]:
+        lease = self.lease or self.current_lease
+        return {
+            "schema_version": LIVE_DECISION_AUTHORITY_RESULT_SCHEMA,
+            "backend": "postgres",
+            "valid": self.valid,
             "status": self.status,
             "reason": self.reason,
             "lease": lease.as_dict() if lease else None,
@@ -255,6 +279,36 @@ class LiveDecisionAuthorityLeaseRepository:
             status="stale",
             lease=None,
             current_lease=lease_from_row(current) if current else None,
+            reason="stale_live_decision_authority_token",
+        )
+
+    def validate_active(
+        self,
+        *,
+        strategy: str = FAIR_VALUE_LIVE_STRATEGY,
+        owner_id: str,
+        fencing_token: int,
+        now: datetime | None = None,
+    ) -> LiveDecisionAuthorityValidationResult:
+        OperationalStateRepository(self.database_url).apply_migrations()
+        observed_at = ensure_utc(now or datetime.now(UTC))
+        current = self.get(strategy=strategy, apply_migrations=False)
+        if (
+            current is not None
+            and current.owner_id == owner_id
+            and current.fencing_token == fencing_token
+            and current.status == "active"
+            and current.released_at is None
+            and current.expires_at > observed_at
+        ):
+            return LiveDecisionAuthorityValidationResult(
+                status="validated",
+                lease=current,
+            )
+        return LiveDecisionAuthorityValidationResult(
+            status="stale",
+            lease=None,
+            current_lease=current,
             reason="stale_live_decision_authority_token",
         )
 
