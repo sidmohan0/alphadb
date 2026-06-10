@@ -10,6 +10,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from alphadb.model_evaluation import fair_value_live_report as report_module
+from alphadb.model_evaluation.fair_value_live_latency_chart import (
+    build_latency_summary,
+    render_latency_svg,
+)
 from alphadb.model_evaluation.fair_value_live_report import (
     Boto3FairValueLiveEvidenceClient,
     FairValueLiveReportConfig,
@@ -185,10 +189,39 @@ class S3OnlyEvidenceClient(FailingEvidenceClient):
                     },
                 },
                 "runtime_controls": {
+                    "live_authority_backend": "postgres",
+                    "live_authority_backend_requested": "postgres",
+                    "live_run_lock": {
+                        "backend": "postgres",
+                        "acquired": True,
+                        "run_id": "fv_live_20260606T171540Z",
+                        "owner_id": "owner-1",
+                        "fencing_token": 12,
+                        "lease_status": "released",
+                    },
+                    "live_decision_authority_lease": {
+                        "backend": "postgres",
+                        "acquired": True,
+                        "run_id": "fv_live_20260606T171540Z",
+                        "owner_id": "owner-1",
+                        "fencing_token": 12,
+                        "lease_status": "released",
+                    },
                     "runtime_guard": {
                         "credentials_present": True,
                         "can_submit_live_orders": True,
                     }
+                },
+                "timing": {
+                    "total_elapsed_seconds": 1.25,
+                    "phase_seconds": {
+                        "runtime_config": 0.08,
+                        "postgres_authority_lease": 0.03,
+                        "live_run_lock": 0.0,
+                        "collection": 0.12,
+                        "status_materialization": 0.07,
+                        "artifact_write": 0.01,
+                    },
                 },
                 "executable_quote": {
                     "source": "kalshi_orderbook",
@@ -280,6 +313,24 @@ def test_report_uses_reachable_s3_artifacts_for_partial_zero_order_report() -> N
     assert report["summary"]["run_count"] == 1
     assert report["summary"]["config"]["config_id"] == "live_cfg_deaa1bcf8660"
     assert report["summary"]["runtime_guard"]["credentials_present"] is True
+    assert report["summary"]["live_authority"]["backend_latest"] == "postgres"
+    assert report["summary"]["live_authority"]["fencing_token_observed"] is True
+    assert report["summary"]["live_authority"]["latest"]["fencing_token"] == 12
+    assert report["summary"]["latency"]["total_elapsed_seconds"]["mean"] == 1.25
+    assert report["summary"]["latency"]["authority_phase"] == {
+        "name": "postgres_authority_lease",
+        "mean_seconds": 0.03,
+        "p95_seconds": 0.03,
+        "mean_hot_path_contribution": 0.024,
+    }
+    assert report["summary"]["latency"]["component_means_seconds"] == {
+        "runtime_config": 0.08,
+        "postgres_authority_lease": 0.03,
+        "collection": 0.12,
+        "status_materialization": 0.07,
+        "artifact_write": 0.01,
+        "other": 0.94,
+    }
     assert report["summary"]["executable_quote"]["source"] == "kalshi_orderbook"
     assert report["summary"]["live_edge_attribution"]["edge_shortfall"] == 0.02
     assert report["summary"]["live_edge_attribution_buckets"] == [
@@ -296,6 +347,8 @@ def test_report_uses_reachable_s3_artifacts_for_partial_zero_order_report() -> N
     }
     assert report["summary"]["reconciliation"]["net_pnl_dollars"] == 0.0
     assert report["runs"][0]["selected_decision"]["reason"] == "edge_below_min"
+    assert report["runs"][0]["live_authority"]["backend"] == "postgres"
+    assert report["runs"][0]["timing"]["authority_phase"] == "postgres_authority_lease"
     assert report["runs"][0]["live_edge_attribution"]["attribution_class"] == "threshold_drag"
     assert report["runs"][0]["live_edge_attributions"][0]["edge"] == 0.03
 
@@ -323,6 +376,64 @@ def test_fair_value_live_report_has_public_console_command() -> None:
         pyproject["project"]["scripts"]["alphadb-fair-value-live-report"]
         == "alphadb.model_evaluation.fair_value_live_report:main"
     )
+    assert (
+        pyproject["project"]["scripts"]["alphadb-fair-value-live-latency-chart"]
+        == "alphadb.model_evaluation.fair_value_live_latency_chart:main"
+    )
+
+
+def test_latency_chart_summary_compares_postgres_authority_to_s3_baseline() -> None:
+    report = {
+        "status": "complete",
+        "interval": {
+            "start": "2026-06-10T00:20:00+00:00",
+            "end": "2026-06-10T00:40:00+00:00",
+        },
+        "summary": {
+            "schedule_state": "ENABLED",
+            "legacy_structural_schedule_state": "DISABLED",
+            "run_count": 3,
+            "config": {"source": "dashboard_postgres"},
+            "runtime_guard": {"can_submit_live_orders": True},
+            "orders": {"submitted": 0, "skipped": 3},
+            "live_authority": {
+                "backend_latest": "postgres",
+                "fencing_token_observed": True,
+            },
+            "latency": {
+                "total_elapsed_seconds": {"mean": 0.42, "p95": 0.5},
+                "authority_phase": {
+                    "name": "postgres_authority_lease",
+                    "mean_seconds": 0.02,
+                    "p95_seconds": 0.03,
+                    "mean_hot_path_contribution": 0.047619,
+                },
+                "component_means_seconds": {
+                    "runtime_config": 0.08,
+                    "postgres_authority_lease": 0.02,
+                    "collection": 0.12,
+                    "status_materialization": 0.07,
+                    "artifact_write": 0.01,
+                    "other": 0.12,
+                },
+            },
+        },
+    }
+
+    summary = build_latency_summary(
+        report,
+        source_report=Path("aws-report.json"),
+        pre_change_authority_mean_seconds=0.808771,
+        pre_change_authority_contribution=0.71,
+    )
+    svg = render_latency_svg(summary)
+
+    assert summary["live_authority"]["backend_latest"] == "postgres"
+    assert summary["authority_phase"]["name"] == "postgres_authority_lease"
+    assert summary["comparison"]["authority_mean_delta_seconds"] == -0.788771
+    assert summary["comparison"]["authority_mean_improvement_ratio"] == 0.975271
+    assert "Postgres authority" in svg
+    assert "vs S3 baseline: -0.789s" in svg
 
 
 def test_boto3_adapter_configures_local_aws_profile_region_and_metadata(monkeypatch) -> None:
