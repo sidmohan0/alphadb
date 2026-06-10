@@ -2126,6 +2126,278 @@ def test_postgres_authority_unavailable_fails_closed_before_collection(
     assert status.skip_reason == "live_decision_authority_unavailable"
 
 
+def test_postgres_authority_stale_token_prevents_live_mutations(
+    tmp_path: Path,
+    monkeypatch,
+    request,
+) -> None:
+    live_runtime_repository_or_skip()
+    settings = live_enabled_settings()
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-STALE-AUTHORITY"
+    strategy = f"test_authority_stale_{uuid4().hex[:10]}"
+    repository = LiveDecisionAuthorityLeaseRepository(settings.database_url)
+    first = repository.acquire(
+        strategy=strategy,
+        run_id="fv_live_stale_worker",
+        owner_id="stale_worker",
+        now=now - timedelta(seconds=31),
+        ttl_seconds=30,
+    )
+    current = repository.acquire(
+        strategy=strategy,
+        run_id="fv_live_current_worker",
+        owner_id="current_worker",
+        now=now,
+        ttl_seconds=300,
+    )
+    assert first.lease is not None
+    assert current.lease is not None
+    request.addfinalizer(
+        lambda: repository.release(
+            strategy=strategy,
+            owner_id=current.lease.owner_id,
+            fencing_token=current.lease.fencing_token,
+        )
+    )
+    stale_lock = fair_value_live_job.live_run_lock_from_authority_lease(
+        first.lease,
+        acquired=True,
+        authority_repository=repository,
+    )
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now, strategy=strategy)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "public_market_result",
+        lambda *, settings, ticker: {"status": "active", "result": None},
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "acquire_live_run_lock",
+        lambda **kwargs: stale_lock,
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "bounded_refresh_before_admission",
+        lambda **kwargs: pytest.fail("stale token must not refresh risk state"),
+    )
+    monkeypatch.setattr(
+        fair_value_live_job.LiveRiskAdmissionRepository,
+        "admit_order",
+        lambda self, **kwargs: pytest.fail("stale token must not reserve risk"),
+    )
+    monkeypatch.setattr(
+        fair_value_live_job.LiveOrderRepository,
+        "persist",
+        lambda self, attempt: pytest.fail("stale token must not persist live attempt"),
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "materialize_live_run_status",
+        lambda **kwargs: pytest.fail("stale token must not materialize live status"),
+    )
+    client = SequencedOrderClient([{"fill_count": 1, "cost": 0.4, "fees": 0.01}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            strategy=strategy,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=settings,
+        order_client=client,
+    ).run(now=now)
+
+    attempts = json.loads(Path(manifest["artifacts"]["live_order_attempts"]["path"]).read_text())
+    attempt = attempts["attempts"][0]
+    authority_validation = attempt["live_decision_authority_validation"]
+
+    assert client.requests == []
+    assert manifest["runtime_controls"]["orders_placed"] == 0
+    assert manifest["runtime_controls"]["live_status_materialized"] is False
+    assert manifest["runtime_controls"]["live_status_materialization_skip_reason"] == (
+        "stale_live_decision_authority_token"
+    )
+    assert manifest["runtime_controls"]["live_decision_authority_validation"]["valid"] is False
+    assert manifest["runtime_controls"]["live_decision_authority_validation"]["reason"] == (
+        "stale_live_decision_authority_token"
+    )
+    assert manifest["runtime_controls"]["admission_daily_loss_accounting"][
+        "risk_state_read_reason"
+    ] == "live_decision_authority_validation_failed"
+    assert manifest["counts"]["live_skipped"] == 1
+    assert manifest["timing"]["phase_seconds"]["risk_admission"] == 0.0
+    assert manifest["timing"]["phase_seconds"]["submit_attempt_persist"] == 0.0
+    assert manifest["timing"]["phase_seconds"]["submit"] == 0.0
+    assert attempt["status"] == "skipped"
+    assert attempt["reason"] == "stale_live_decision_authority_token"
+    assert authority_validation["valid"] is False
+    assert authority_validation["reason"] == "stale_live_decision_authority_token"
+    assert authority_validation["lease"]["run_id"] == "fv_live_current_worker"
+    assert attempts["skip_reasons"] == [
+        {"reason": "stale_live_decision_authority_token", "count": 1}
+    ]
+
+
+def test_live_authority_backend_resolution_covers_postgres_and_fallbacks(
+    tmp_path: Path,
+) -> None:
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=True,
+                s3_prefix="s3://example/fair-value-live",
+            )
+        )
+        == "s3"
+    )
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=True,
+                s3_prefix="s3://example/fair-value-live",
+                live_authority_backend="postgres",
+            )
+        )
+        == "postgres"
+    )
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=True,
+                runtime_config_source="postgres",
+                live_authority_backend="s3",
+            )
+        )
+        == "s3"
+    )
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=False,
+                runtime_config_source="postgres",
+            )
+        )
+        == "postgres"
+    )
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(output_root=tmp_path, submit_live_orders=False)
+        )
+        == "none"
+    )
+
+
+def test_postgres_authority_backend_keeps_s3_artifacts_out_of_authority(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    live_runtime_repository_or_skip()
+    settings = live_enabled_settings()
+    now = datetime(2026, 6, 4, 15, 0, tzinfo=UTC)
+    ticker = "KXBTC15M-FV-POSTGRES-AUTHORITY"
+    strategy = f"test_authority_backend_{uuid4().hex[:10]}"
+    install_live_job_fixture(monkeypatch, now=now, ticker=ticker)
+    seed_live_risk_state(now=now, strategy=strategy)
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "public_market_result",
+        lambda *, settings, ticker: {"status": "active", "result": None},
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "acquire_s3_live_run_lock",
+        lambda **kwargs: pytest.fail("Postgres authority must not acquire the S3 lock"),
+    )
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "release_s3_live_run_lock",
+        lambda *args, **kwargs: pytest.fail("Postgres authority must not release the S3 lock"),
+    )
+    uploads: list[dict[str, object]] = []
+
+    def fake_upload_artifacts_to_s3(artifacts, *, s3_prefix):
+        uploads.append({"s3_prefix": s3_prefix, "artifacts": sorted(artifacts)})
+        return [
+            {"artifact": name, "s3_uri": f"{s3_prefix.rstrip('/')}/{name}.json"}
+            for name in sorted(artifacts)
+        ]
+
+    monkeypatch.setattr(
+        fair_value_live_job,
+        "upload_artifacts_to_s3",
+        fake_upload_artifacts_to_s3,
+    )
+    client = SequencedOrderClient([{"fill_count": 0, "cost": 0.0, "fees": 0.0}])
+
+    manifest = FairValueLiveTradingJob(
+        config=FairValueLiveTradingJobConfig(
+            output_root=tmp_path,
+            strategy=strategy,
+            source="kalshi-public",
+            coinbase_source="coinbase-live",
+            max_markets=1,
+            max_order_dollars=5.0,
+            max_ticker_exposure_dollars=5.0,
+            max_daily_loss_dollars=50.0,
+            submit_live_orders=True,
+            runtime_config_source="cli",
+            live_authority_backend="postgres",
+            s3_prefix="s3://example/fair-value-live",
+            quote_stale_seconds=120,
+            coinbase_feature_stale_seconds=180,
+        ),
+        settings=settings,
+        order_client=client,
+    ).run(now=now)
+    lease = manifest["runtime_controls"]["live_decision_authority_lease"]
+    persisted = LiveDecisionAuthorityLeaseRepository(settings.database_url).get(strategy=strategy)
+
+    assert client.requests != []
+    assert manifest["config"]["live_authority_backend"] == "postgres"
+    assert manifest["runtime_controls"]["live_authority_backend"] == "postgres"
+    assert manifest["runtime_controls"]["live_authority_backend_requested"] == "postgres"
+    assert manifest["runtime_controls"]["live_run_lock"]["backend"] == "postgres"
+    assert lease["backend"] == "postgres"
+    assert "postgres_authority_lease" in manifest["timing"]["phase_seconds"]
+    assert manifest["timing"]["phase_seconds"]["live_run_lock"] == 0.0
+    assert uploads == [
+        {
+            "s3_prefix": "s3://example/fair-value-live",
+            "artifacts": [
+                "decision_rows",
+                "live_order_attempts",
+                "live_reconciliation_report",
+                "manifest",
+            ],
+        }
+    ]
+    assert {upload["artifact"] for upload in manifest["s3_uploads"]} == {
+        "decision_rows",
+        "live_order_attempts",
+        "live_reconciliation_report",
+        "manifest",
+    }
+    assert persisted is not None
+    assert persisted.fencing_token == lease["fencing_token"]
+    assert persisted.status == "released"
+    assert persisted.metadata["submit_live_orders"] is True
+    assert persisted.metadata["live_authority_backend"] == "postgres"
+
+
 def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
     tmp_path: Path,
     monkeypatch,
@@ -2426,6 +2698,7 @@ def live_risk_repository_or_skip() -> LiveRiskAdmissionRepository:
 def seed_live_risk_state(
     *,
     now: datetime,
+    strategy: str = "fair_value_live",
     daily_loss_used_dollars: float = 0.0,
     open_exposure_dollars: float = 0.0,
     pending_exposure_dollars: float = 0.0,
@@ -2441,6 +2714,7 @@ def seed_live_risk_state(
         live_risk_timezone="America/Los_Angeles",
     )
     repository.upsert_state(
+        strategy=strategy,
         live_risk_day=live_risk_day,
         daily_loss_used_dollars=daily_loss_used_dollars,
         open_exposure_dollars=open_exposure_dollars,

@@ -126,3 +126,109 @@ def test_live_decision_authority_expired_reclaim_denies_stale_release() -> None:
     assert current is not None
     assert current.owner_id == "worker_reclaimed"
     assert current.status == "active"
+
+
+def test_live_decision_authority_validate_active_denies_stale_token() -> None:
+    repository = repository_or_skip()
+    strategy = f"test_authority_{uuid4().hex[:10]}"
+    now = datetime(2026, 6, 9, 22, 30, tzinfo=UTC)
+
+    first = repository.acquire(
+        strategy=strategy,
+        run_id="run_first",
+        owner_id="worker_first",
+        now=now,
+        ttl_seconds=30,
+    )
+    valid_first = repository.validate_active(
+        strategy=strategy,
+        owner_id="worker_first",
+        fencing_token=first.lease.fencing_token,
+        now=now + timedelta(seconds=5),
+    )
+    reclaimed = repository.acquire(
+        strategy=strategy,
+        run_id="run_reclaimed",
+        owner_id="worker_reclaimed",
+        now=now + timedelta(seconds=31),
+        ttl_seconds=30,
+    )
+    stale_first = repository.validate_active(
+        strategy=strategy,
+        owner_id="worker_first",
+        fencing_token=first.lease.fencing_token,
+        now=now + timedelta(seconds=32),
+    )
+    valid_reclaimed = repository.validate_active(
+        strategy=strategy,
+        owner_id="worker_reclaimed",
+        fencing_token=reclaimed.lease.fencing_token,
+        now=now + timedelta(seconds=32),
+    )
+
+    assert first.lease is not None
+    assert reclaimed.lease is not None
+    assert valid_first.valid is True
+    assert valid_first.reason is None
+    assert stale_first.valid is False
+    assert stale_first.reason == "stale_live_decision_authority_token"
+    assert stale_first.current_lease is not None
+    assert stale_first.current_lease.fencing_token == reclaimed.lease.fencing_token
+    assert valid_reclaimed.valid is True
+
+
+def test_live_decision_authority_status_reports_sparse_current_states() -> None:
+    repository = repository_or_skip()
+    now = datetime(2026, 6, 9, 23, 0, tzinfo=UTC)
+    empty_strategy = f"test_authority_empty_{uuid4().hex[:10]}"
+    held_strategy = f"test_authority_held_{uuid4().hex[:10]}"
+    expired_strategy = f"test_authority_expired_{uuid4().hex[:10]}"
+    released_strategy = f"test_authority_released_{uuid4().hex[:10]}"
+
+    held = repository.acquire(
+        strategy=held_strategy,
+        run_id="run_held",
+        owner_id="worker_held",
+        now=now,
+        ttl_seconds=60,
+    )
+    expired = repository.acquire(
+        strategy=expired_strategy,
+        run_id="run_expired",
+        owner_id="worker_expired",
+        now=now - timedelta(seconds=90),
+        ttl_seconds=60,
+    )
+    released = repository.acquire(
+        strategy=released_strategy,
+        run_id="run_released",
+        owner_id="worker_released",
+        now=now,
+        ttl_seconds=60,
+    )
+    repository.release(
+        strategy=released_strategy,
+        owner_id=released.lease.owner_id,
+        fencing_token=released.lease.fencing_token,
+        now=now + timedelta(seconds=1),
+    )
+
+    empty_status = repository.status(strategy=empty_strategy, now=now)
+    held_status = repository.status(strategy=held_strategy, now=now)
+    expired_status = repository.status(strategy=expired_strategy, now=now)
+    released_status = repository.status(strategy=released_strategy, now=now)
+
+    assert held.lease is not None
+    assert expired.lease is not None
+    assert released.lease is not None
+    assert empty_status["state"] == "empty"
+    assert empty_status["reason"] == "live_decision_authority_empty"
+    assert held_status["state"] == "held"
+    assert held_status["reason"] is None
+    assert held_status["run_id"] == "run_held"
+    assert held_status["fencing_token"] == held.lease.fencing_token
+    assert expired_status["state"] == "expired"
+    assert expired_status["reason"] == "live_decision_authority_expired"
+    assert expired_status["expires_at"] == expired.lease.expires_at.isoformat()
+    assert released_status["state"] == "released"
+    assert released_status["released_at"] is not None
