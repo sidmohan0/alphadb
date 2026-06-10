@@ -78,8 +78,8 @@ FAIR_VALUE_LIVE_LOCK_TTL_SECONDS = 180
 DEFAULT_LIVE_RISK_TIMEZONE = "America/Los_Angeles"
 RuntimeConfigSource = Literal["auto", "postgres", "cli"]
 LiveDecisionPolicy = Literal["fair_value", "expensive_yes"]
-LiveAuthorityBackend = Literal["auto", "postgres", "s3", "local"]
-ResolvedLiveAuthorityBackend = Literal["none", "postgres", "s3", "local"]
+LiveAuthorityBackend = Literal["auto", "postgres", "local"]
+ResolvedLiveAuthorityBackend = Literal["none", "postgres", "local"]
 AWS_LIKE_ENVIRONMENTS = {"aws", "prod", "production"}
 
 
@@ -172,7 +172,10 @@ class FairValueLiveTradingJob:
         run_dir = self.config.output_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         timer = PhaseTimer()
-        authority_backend = resolve_live_authority_backend(self.config)
+        authority_backend = resolve_live_authority_backend(
+            self.config,
+            environment=settings.environment,
+        )
         authority_phase = (
             "postgres_authority_lease"
             if authority_backend == "postgres"
@@ -181,14 +184,16 @@ class FairValueLiveTradingJob:
         with timer.phase(authority_phase):
             live_run_lock = acquire_live_run_lock(
                 output_root=self.config.output_root,
-                s3_prefix=self.config.s3_prefix,
                 run_id=run_id,
                 generated_at=generated_at,
                 enabled=self.config.submit_live_orders,
                 strategy=self.config.strategy,
                 settings=settings,
                 authority_backend=authority_backend,
-                authority_metadata=live_authority_acquire_metadata(self.config),
+                authority_metadata=live_authority_acquire_metadata(
+                    self.config,
+                    authority_backend=authority_backend,
+                ),
             )
         try:
             if not live_run_lock.acquired:
@@ -2015,10 +2020,7 @@ class LiveRunLock:
     run_id: str | None = None
     reason: str | None = None
     path: Path | None = None
-    bucket: str | None = None
-    key: str | None = None
     existing: Mapping[str, Any] | None = None
-    client: Any = None
     owner_id: str | None = None
     fencing_token: int | None = None
     lease_status: str | None = None
@@ -2054,10 +2056,6 @@ class LiveRunLock:
             payload["released_at"] = self.released_at.isoformat()
         if self.path is not None:
             payload["path"] = str(self.path)
-        if self.bucket is not None:
-            payload["bucket"] = self.bucket
-        if self.key is not None:
-            payload["key"] = self.key
         if self.existing is not None:
             payload["existing"] = dict(self.existing)
         return payload
@@ -2067,13 +2065,6 @@ class LiveRunLock:
             return
         if self.backend == "local" and self.path is not None:
             release_local_live_run_lock(self.path, token=self.token)
-        if self.backend == "s3" and self.client is not None and self.bucket and self.key:
-            release_s3_live_run_lock(
-                self.client,
-                bucket=self.bucket,
-                key=self.key,
-                token=self.token,
-            )
         if (
             self.backend == "postgres"
             and self.authority_repository is not None
@@ -2146,7 +2137,6 @@ def validate_live_run_lock_authority(
 def acquire_live_run_lock(
     *,
     output_root: Path,
-    s3_prefix: str | None,
     run_id: str,
     generated_at: datetime,
     enabled: bool,
@@ -2181,23 +2171,6 @@ def acquire_live_run_lock(
         token=token,
         ttl_seconds=ttl_seconds,
     )
-    if authority_backend == "s3":
-        if not s3_prefix:
-            return LiveRunLock(
-                backend="s3",
-                acquired=False,
-                token="",
-                strategy=strategy,
-                run_id=run_id,
-                reason="live_authority_s3_prefix_missing",
-            )
-        return acquire_s3_live_run_lock(
-            s3_prefix=s3_prefix,
-            strategy=strategy,
-            token=token,
-            payload=payload,
-            now=generated_at,
-        )
     if authority_backend == "local":
         return acquire_local_live_run_lock(
             output_root=output_root,
@@ -2215,24 +2188,41 @@ def should_use_postgres_authority_lease(config: FairValueLiveTradingJobConfig) -
 
 def resolve_live_authority_backend(
     config: FairValueLiveTradingJobConfig,
+    *,
+    environment: str | None = None,
 ) -> ResolvedLiveAuthorityBackend:
+    if config.live_authority_backend == "s3":
+        raise ValueError(
+            "S3 live-run lock authority has been retired; use postgres for "
+            "runtime authority and keep s3_prefix for artifact uploads"
+        )
     if config.live_authority_backend == "postgres":
         return "postgres"
-    if config.live_authority_backend in {"s3", "local"}:
-        return config.live_authority_backend if config.submit_live_orders else "none"
+    if config.live_authority_backend == "local":
+        return "local" if config.submit_live_orders else "none"
     if not config.submit_live_orders and config.runtime_config_source == "postgres":
         return "postgres"
     if not config.submit_live_orders:
         return "none"
-    if config.s3_prefix:
-        return "s3"
+    if config.runtime_config_source == "postgres":
+        return "postgres"
+    if (
+        config.runtime_config_source == "auto"
+        and (environment or "").lower() in AWS_LIKE_ENVIRONMENTS
+    ):
+        return "postgres"
     return "local"
 
 
-def live_authority_acquire_metadata(config: FairValueLiveTradingJobConfig) -> dict[str, Any]:
+def live_authority_acquire_metadata(
+    config: FairValueLiveTradingJobConfig,
+    *,
+    authority_backend: ResolvedLiveAuthorityBackend | None = None,
+) -> dict[str, Any]:
     return {
         "source": "fair_value_live",
-        "live_authority_backend": resolve_live_authority_backend(config),
+        "live_authority_backend": authority_backend
+        or resolve_live_authority_backend(config),
         "live_authority_backend_requested": config.live_authority_backend,
         "submit_live_orders": config.submit_live_orders,
     }
@@ -2396,92 +2386,6 @@ def release_local_live_run_lock(path: Path, *, token: str) -> None:
         pass
 
 
-def acquire_s3_live_run_lock(
-    *,
-    s3_prefix: str,
-    strategy: str = FAIR_VALUE_LIVE_STRATEGY,
-    token: str,
-    payload: Mapping[str, Any],
-    now: datetime,
-) -> LiveRunLock:
-    bucket, prefix = parse_s3_prefix(s3_prefix)
-    key = live_run_lock_s3_key(prefix, strategy=strategy)
-    try:
-        import boto3  # type: ignore[import-not-found]
-    except Exception as exc:  # pragma: no cover - depends on AWS image environment
-        raise RuntimeError("S3 live-run locking requires boto3") from exc
-    client = boto3.client("s3")
-    for _attempt in range(2):
-        try:
-            client.put_object(
-                Bucket=bucket,
-                Key=key,
-                Body=json.dumps(dict(payload), sort_keys=True).encode("utf-8"),
-                ContentType="application/json",
-                IfNoneMatch="*",
-            )
-            return LiveRunLock(
-                backend="s3",
-                acquired=True,
-                token=token,
-                strategy=strategy,
-                bucket=bucket,
-                key=key,
-                client=client,
-            )
-        except Exception as exc:
-            if not s3_precondition_failed(exc):
-                raise
-            existing = read_s3_json_or_empty(client, bucket=bucket, key=key)
-            if live_run_lock_expired(existing, now=now):
-                try:
-                    client.delete_object(Bucket=bucket, Key=key)
-                except Exception:
-                    pass
-                continue
-            return LiveRunLock(
-                backend="s3",
-                acquired=False,
-                token=token,
-                strategy=strategy,
-                reason="live_run_lock_held",
-                bucket=bucket,
-                key=key,
-                existing=existing,
-            )
-    return LiveRunLock(
-        backend="s3",
-        acquired=False,
-        token=token,
-        strategy=strategy,
-        reason="live_run_lock_held",
-        bucket=bucket,
-        key=key,
-        existing=read_s3_json_or_empty(client, bucket=bucket, key=key),
-    )
-
-
-def release_s3_live_run_lock(client: Any, *, bucket: str, key: str, token: str) -> None:
-    existing = read_s3_json_or_empty(client, bucket=bucket, key=key)
-    if existing and existing.get("token") != token:
-        return
-    try:
-        client.delete_object(Bucket=bucket, Key=key)
-    except Exception:
-        pass
-
-
-def live_run_lock_s3_key(prefix: str, *, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> str:
-    filename = (
-        "fair-value-live-run.lock"
-        if strategy == FAIR_VALUE_LIVE_STRATEGY
-        else f"{strategy}-run.lock"
-    )
-    return "/".join(
-        part.strip("/") for part in (prefix, "_locks", filename) if part
-    )
-
-
 def live_run_lock_expired(payload: Mapping[str, Any], *, now: datetime) -> bool:
     expires_at = parse_datetime(payload.get("expires_at"))
     return expires_at is not None and expires_at <= ensure_utc(now)
@@ -2493,20 +2397,6 @@ def read_json_file_or_empty(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return dict(payload) if isinstance(payload, Mapping) else {}
-
-
-def read_s3_json_or_empty(client: Any, *, bucket: str, key: str) -> dict[str, Any]:
-    try:
-        body = client.get_object(Bucket=bucket, Key=key)["Body"].read().decode("utf-8")
-        payload = json.loads(body)
-    except Exception:
-        return {}
-    return dict(payload) if isinstance(payload, Mapping) else {}
-
-
-def s3_precondition_failed(exc: Exception) -> bool:
-    code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
-    return code in {"PreconditionFailed", "412"}
 
 
 def live_order_request(order: Mapping[str, Any], *, run_id: str) -> dict[str, Any]:

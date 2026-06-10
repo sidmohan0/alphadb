@@ -49,13 +49,6 @@ Parameters:
   MinContractPrice:
     Type: String
     Default: "0.25"
-  LiveAuthorityBackend:
-    Type: String
-    Default: postgres
-    AllowedValues:
-      - postgres
-      - s3
-    Description: Runtime authority backend; use s3 only as the temporary rollback path.
   KalshiApiKeyIdSecretArn:
     Type: String
     Description: Secrets Manager ARN whose value is KALSHI_API_KEY_ID.
@@ -139,7 +132,6 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                  - s3:DeleteObject
                 Resource: !Sub arn:aws:s3:::${ReportBucketName}/${ReportPrefix}/*
 
   LiveTaskDefinition:
@@ -186,7 +178,7 @@ Resources:
             - --runtime-config-source
             - postgres
             - --live-authority-backend
-            - !Ref LiveAuthorityBackend
+            - postgres
             - --submit-live-orders
           Environment:
             - Name: ALPHADB_ENV

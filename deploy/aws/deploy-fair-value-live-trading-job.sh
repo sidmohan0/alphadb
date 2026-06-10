@@ -32,6 +32,13 @@ require_command docker
 require_command git
 require_command python3
 
+LIVE_AUTHORITY_BACKEND_VALUE="${LIVE_AUTHORITY_BACKEND:-postgres}"
+if [[ "$LIVE_AUTHORITY_BACKEND_VALUE" != "postgres" ]]; then
+  echo "LIVE_AUTHORITY_BACKEND must be postgres; S3 live-run lock authority has been retired." >&2
+  echo "Keep REPORT_BUCKET_NAME/REPORT_PREFIX or --s3-prefix for artifact uploads only." >&2
+  exit 1
+fi
+
 if [[ "${SCHEDULE_STATE:-DISABLED}" == "ENABLED" ]]; then
   if [[ -n "${FAIR_VALUE_LIVE_SMOKE_EVIDENCE:-}" ]]; then
     python3 scripts/validate-fair-value-live-smoke.py "$FAIR_VALUE_LIVE_SMOKE_EVIDENCE"
@@ -118,7 +125,6 @@ aws_cli cloudformation deploy \
     ScheduleState="${SCHEDULE_STATE:-DISABLED}" \
     MinEdgeValues="${MIN_EDGE_VALUES:-0.0,0.05,0.10}" \
     MinContractPrice="${MIN_CONTRACT_PRICE:-0.25}" \
-    LiveAuthorityBackend="${LIVE_AUTHORITY_BACKEND:-postgres}" \
     KalshiApiKeyIdSecretArn="$KALSHI_API_KEY_ID_SECRET_ARN" \
     KalshiPrivateKeyPemSecretArn="$KALSHI_PRIVATE_KEY_PEM_SECRET_ARN" \
     AwsRegionValue="$REGION"

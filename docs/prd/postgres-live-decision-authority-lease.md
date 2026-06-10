@@ -59,7 +59,7 @@ same authority mechanism.
 21. As a platform engineer, I want AWS rollout to support a temporary implementation switch, so that the Postgres path can be proven before S3 is removed.
 22. As a platform engineer, I want the existing local file lock behavior to remain available for fixture/local runs unless deliberately changed, so that local smoke paths stay simple.
 23. As a platform engineer, I want the AWS worker to use Postgres authority when `runtime_config_source=postgres`, so that production-like live authority does not depend on S3.
-24. As a platform engineer, I want S3 lock code to remain only as a transitional fallback, so that rollback is available during cutover.
+24. As a platform engineer, I want the S3 lock fallback retired after Postgres evidence passes, so that stale S3 authority config is not silently used after cutover.
 25. As a platform engineer, I want migration tests for the lease table, so that deployment cannot silently miss the authority schema.
 26. As a platform engineer, I want race tests for acquire, held, expired, release, and stale-token cases, so that the safety contract is proven.
 27. As a runtime maintainer, I want the live worker to stop market collection when authority is held, so that no downstream live path runs without authority.
@@ -87,7 +87,7 @@ same authority mechanism.
 - Keep the existing live worker behavior that stops before market collection when authority is not acquired.
 - Preserve current fail-closed behavior: authority unavailable, database unavailable, stale token, or version conflict means no live order attempt.
 - Keep S3 artifact writes and S3 manifest evidence. S3 remains evidence, not authority.
-- Add a runtime authority implementation choice during rollout. AWS should move to the Postgres authority lease after tests and smoke evidence pass; S3 lock can remain as a temporary fallback.
+- After tests and AWS smoke evidence pass, AWS uses the Postgres authority lease as the runtime authority path. The S3 live-run lock is no longer a normal fallback; S3 remains artifact storage and audit evidence.
 - Preserve local fixture ergonomics. Local runs with no live order submission may continue to use the existing no-op authority behavior.
 - Keep live risk admission state separate. The authority lease says "this worker may run"; live risk admission state says "this proposed order is admissible."
 - Keep bounded live-risk admission refresh separate from lease acquisition. The lease must not scan prior orders, settle P&L, or resolve pending exposure.
