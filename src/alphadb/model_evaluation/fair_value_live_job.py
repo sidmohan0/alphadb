@@ -26,6 +26,7 @@ from alphadb.live_orders import (
 )
 from alphadb.live_authority import (
     LIVE_DECISION_AUTHORITY_LEASE_SCHEMA,
+    LIVE_DECISION_AUTHORITY_RESULT_SCHEMA,
     LiveDecisionAuthorityLease,
     LiveDecisionAuthorityLeaseRepository,
 )
@@ -309,9 +310,20 @@ class FairValueLiveTradingJob:
                 "risk_state_bootstrapped": False,
                 "risk_state_read_reason": "risk_state_not_required",
             }
+            authority_validation = validate_live_run_lock_authority(
+                live_run_lock,
+                now=generated_at,
+            )
+            if not authority_validation.get("valid", True):
+                risk_state_read = {
+                    **dict(risk_state_read),
+                    "risk_state_read_reason": "live_decision_authority_validation_failed",
+                    "live_decision_authority_validation": authority_validation,
+                }
             should_prepare_risk_state = (
                 self.config.submit_live_orders
                 and guard.can_submit_live_orders
+                and bool(authority_validation.get("valid", True))
                 and any(decision.get("decision") == "trade" for decision, _row in selected_pairs)
             )
             if should_prepare_risk_state:
@@ -537,6 +549,25 @@ class FairValueLiveTradingJob:
         if not runtime_guard.get("can_submit_live_orders"):
             reason = str(runtime_guard.get("denial_reason") or "live_orders_disabled")
             return ({**base, "status": "skipped", "reason": reason}, None, None)
+        authority_validation = validate_live_run_lock_authority(
+            live_run_lock,
+            now=generated_at,
+        )
+        if live_run_lock.backend == "postgres":
+            base["live_decision_authority_validation"] = authority_validation
+        if not authority_validation.get("valid", True):
+            return (
+                {
+                    **base,
+                    "status": "skipped",
+                    "reason": str(
+                        authority_validation.get("reason")
+                        or "stale_live_decision_authority_token"
+                    ),
+                },
+                None,
+                None,
+            )
         try:
             materialize_private_key_from_env()
         except Exception as exc:
@@ -931,6 +962,22 @@ class FairValueLiveTradingJob:
             ),
             "artifacts": artifact_records(artifacts),
         }
+        if materialize_status and live_run_lock.backend == "postgres" and live_run_lock.acquired:
+            status_authority_validation = validate_live_run_lock_authority(
+                live_run_lock,
+                now=generated_at,
+            )
+            manifest["runtime_controls"][
+                "live_decision_authority_validation"
+            ] = status_authority_validation
+            if not status_authority_validation.get("valid", True):
+                manifest["runtime_controls"][
+                    "live_status_materialization_skip_reason"
+                ] = str(
+                    status_authority_validation.get("reason")
+                    or "stale_live_decision_authority_token"
+                )
+                materialize_status = False
         if materialize_status:
             with timer.phase("status_materialization"):
                 materialize_live_run_status(
@@ -2035,6 +2082,56 @@ def should_materialize_live_run_status(live_run_lock: LiveRunLock) -> bool:
     if live_run_lock.backend == "postgres":
         return True
     return live_run_lock.acquired or live_run_lock.reason != "live_run_lock_held"
+
+
+def validate_live_run_lock_authority(
+    live_run_lock: LiveRunLock,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    if live_run_lock.backend != "postgres":
+        return {
+            "schema_version": LIVE_DECISION_AUTHORITY_RESULT_SCHEMA,
+            "backend": live_run_lock.backend,
+            "valid": True,
+            "status": "not_required",
+            "reason": None,
+            "lease": None,
+        }
+    if (
+        not live_run_lock.acquired
+        or live_run_lock.authority_repository is None
+        or live_run_lock.owner_id is None
+        or live_run_lock.fencing_token is None
+    ):
+        return {
+            "schema_version": LIVE_DECISION_AUTHORITY_RESULT_SCHEMA,
+            "backend": "postgres",
+            "valid": False,
+            "status": "unavailable",
+            "reason": live_run_lock.reason or "live_decision_authority_unavailable",
+            "lease": live_run_lock.as_dict(),
+        }
+    try:
+        return live_run_lock.authority_repository.validate_active(
+            strategy=live_run_lock.strategy,
+            owner_id=live_run_lock.owner_id,
+            fencing_token=live_run_lock.fencing_token,
+            now=now,
+        ).as_dict()
+    except Exception as exc:
+        return {
+            "schema_version": LIVE_DECISION_AUTHORITY_RESULT_SCHEMA,
+            "backend": "postgres",
+            "valid": False,
+            "status": "unavailable",
+            "reason": "live_decision_authority_unavailable",
+            "lease": live_run_lock.as_dict(),
+            "error": {
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
 
 
 def acquire_live_run_lock(
