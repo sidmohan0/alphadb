@@ -204,11 +204,15 @@ class FairValueLiveTradingJob:
                     "status_materialization",
                     "artifact_write",
                 )
+                authority_denial_reason = live_run_lock.reason or "live_run_lock_held"
                 return self._materialize_one_cycle_run(
                     run_dir=run_dir,
                     run_id=run_id,
                     generated_at=generated_at,
-                    runtime_config=runtime_config_snapshot(original_config),
+                    runtime_config=runtime_config_snapshot(
+                        original_config,
+                        reason=authority_denial_reason,
+                    ),
                     collected=None,
                     selected_decision=None,
                     selected_row=None,
@@ -221,12 +225,12 @@ class FairValueLiveTradingJob:
                     admission_daily_loss_accounting=empty_live_risk_accounting(
                         generated_at=generated_at,
                         live_risk_timezone=original_config.live_risk_timezone,
-                        reason="live_run_lock_held",
+                        reason=authority_denial_reason,
                     ),
                     daily_loss_accounting=empty_live_risk_accounting(
                         generated_at=generated_at,
                         live_risk_timezone=original_config.live_risk_timezone,
-                        reason="live_run_lock_held",
+                        reason=authority_denial_reason,
                     ),
                     runtime_guard=runtime_guard_with_credential_materialization(
                         settings=settings,
@@ -235,7 +239,7 @@ class FairValueLiveTradingJob:
                     live_run_lock=live_run_lock,
                     timer=timer,
                     require_postgres=False,
-                    materialize_status=False,
+                    materialize_status=should_materialize_live_run_status(live_run_lock),
                 )
 
             with timer.phase("runtime_config"):
@@ -1178,9 +1182,19 @@ class PhaseTimer:
         }
 
 
-def runtime_config_snapshot(config: FairValueLiveTradingJobConfig) -> dict[str, Any]:
+def runtime_config_snapshot(
+    config: FairValueLiveTradingJobConfig,
+    *,
+    reason: str = "live_run_lock_held",
+) -> dict[str, Any]:
+    source = (
+        "not_read_authority_denied"
+        if reason.startswith("live_decision_authority_")
+        else "not_read_lock_held"
+    )
     return {
-        "source": "not_read_lock_held",
+        "source": source,
+        "not_read_reason": reason,
         "strategy": config.strategy,
         "config_id": None,
         "version": None,
@@ -1250,6 +1264,7 @@ def lock_held_attempt(
     live_run_lock: "LiveRunLock",
     strategy: str = FAIR_VALUE_LIVE_STRATEGY,
 ) -> dict[str, Any]:
+    reason = live_run_lock.reason or "live_run_lock_held"
     attempt = {
         "attempt_id": f"{live_run_id_prefix(strategy)}_order_{uuid4().hex[:12]}",
         "run_id": run_id,
@@ -1257,8 +1272,8 @@ def lock_held_attempt(
         "submitted_at": generated_at.isoformat(),
         "market_ticker": "",
         "side": None,
-        "decision": {"decision": "skip", "reason": "live_run_lock_held"},
-        "original_decision": {"decision": "skip", "reason": "live_run_lock_held"},
+        "decision": {"decision": "skip", "reason": reason},
+        "original_decision": {"decision": "skip", "reason": reason},
         "request_payload": {},
         "max_loss_dollars": 0.0,
         "daily_loss_used_before_dollars": 0.0,
@@ -1268,7 +1283,7 @@ def lock_held_attempt(
         "live_run_lock": live_run_lock.as_dict(),
         "attempt_index": 0,
         "status": "skipped",
-        "reason": live_run_lock.reason or "live_run_lock_held",
+        "reason": reason,
     }
     if live_run_lock.backend == "postgres":
         attempt["live_decision_authority_lease"] = live_run_lock.as_dict()
@@ -2017,6 +2032,8 @@ class LiveRunLock:
 
 
 def should_materialize_live_run_status(live_run_lock: LiveRunLock) -> bool:
+    if live_run_lock.backend == "postgres":
+        return True
     return live_run_lock.acquired or live_run_lock.reason != "live_run_lock_held"
 
 
@@ -2090,17 +2107,32 @@ def acquire_postgres_live_decision_authority(
 ) -> LiveRunLock:
     repository = LiveDecisionAuthorityLeaseRepository(settings.database_url)
     owner_id = f"{run_id}:{uuid4().hex[:12]}"
-    result = repository.acquire(
-        strategy=strategy,
-        run_id=run_id,
-        owner_id=owner_id,
-        now=generated_at,
-        ttl_seconds=ttl_seconds,
-        metadata={
-            "source": "fair_value_live_report_only",
-            "submit_live_orders": False,
-        },
-    )
+    try:
+        result = repository.acquire(
+            strategy=strategy,
+            run_id=run_id,
+            owner_id=owner_id,
+            now=generated_at,
+            ttl_seconds=ttl_seconds,
+            metadata={
+                "source": "fair_value_live_report_only",
+                "submit_live_orders": False,
+            },
+        )
+    except Exception as exc:
+        return LiveRunLock(
+            backend="postgres",
+            acquired=False,
+            token="",
+            strategy=strategy,
+            run_id=run_id,
+            reason="live_decision_authority_unavailable",
+            existing={
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            },
+            owner_id=owner_id,
+        )
     lease = result.lease or result.current_lease
     if result.acquired and lease is not None:
         return live_run_lock_from_authority_lease(
