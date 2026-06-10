@@ -434,6 +434,9 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "DATABASE_URL" in template
     assert "--runtime-config-source" in template
     assert "postgres" in template
+    assert "LiveAuthorityBackend" in template
+    assert "--live-authority-backend" in template
+    assert 'LiveAuthorityBackend="${LIVE_AUTHORITY_BACKEND:-postgres}"' in deploy_script
     assert "--quote-stale-seconds" in template
     assert "--coinbase-feature-stale-seconds" in template
     assert "--brti-future-tolerance-seconds" in template

@@ -78,6 +78,8 @@ FAIR_VALUE_LIVE_LOCK_TTL_SECONDS = 180
 DEFAULT_LIVE_RISK_TIMEZONE = "America/Los_Angeles"
 RuntimeConfigSource = Literal["auto", "postgres", "cli"]
 LiveDecisionPolicy = Literal["fair_value", "expensive_yes"]
+LiveAuthorityBackend = Literal["auto", "postgres", "s3", "local"]
+ResolvedLiveAuthorityBackend = Literal["none", "postgres", "s3", "local"]
 AWS_LIKE_ENVIRONMENTS = {"aws", "prod", "production"}
 
 
@@ -102,6 +104,7 @@ class FairValueLiveTradingJobConfig:
     s3_prefix: str | None = None
     submit_live_orders: bool = False
     runtime_config_source: RuntimeConfigSource = "auto"
+    live_authority_backend: LiveAuthorityBackend = "auto"
     live_risk_timezone: str = DEFAULT_LIVE_RISK_TIMEZONE
     live_risk_state_stale_seconds: int = DEFAULT_LIVE_RISK_STALE_SECONDS
     live_risk_refresh_max_lookup_count: int = 3
@@ -132,6 +135,7 @@ class FairValueLiveTradingJobConfig:
             "s3_prefix": self.s3_prefix,
             "submit_live_orders": self.submit_live_orders,
             "runtime_config_source": self.runtime_config_source,
+            "live_authority_backend": self.live_authority_backend,
             "live_risk_timezone": self.live_risk_timezone,
             "live_risk_state_stale_seconds": self.live_risk_state_stale_seconds,
             "live_risk_refresh_max_lookup_count": self.live_risk_refresh_max_lookup_count,
@@ -168,9 +172,10 @@ class FairValueLiveTradingJob:
         run_dir = self.config.output_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         timer = PhaseTimer()
+        authority_backend = resolve_live_authority_backend(self.config)
         authority_phase = (
             "postgres_authority_lease"
-            if should_use_postgres_authority_lease(self.config)
+            if authority_backend == "postgres"
             else "live_run_lock"
         )
         with timer.phase(authority_phase):
@@ -182,7 +187,8 @@ class FairValueLiveTradingJob:
                 enabled=self.config.submit_live_orders,
                 strategy=self.config.strategy,
                 settings=settings,
-                use_postgres_authority=should_use_postgres_authority_lease(self.config),
+                authority_backend=authority_backend,
+                authority_metadata=live_authority_acquire_metadata(self.config),
             )
         try:
             if not live_run_lock.acquired:
@@ -803,6 +809,8 @@ class FairValueLiveTradingJob:
             "min_contract_price": self.config.min_contract_price,
             "market_context_source": self.config.market_context_source,
             "brti_future_tolerance_seconds": self.config.brti_future_tolerance_seconds,
+            "live_authority_backend": live_run_lock.backend,
+            "live_authority_backend_requested": self.config.live_authority_backend,
             "admission_daily_loss_accounting": dict(admission_daily_loss_accounting),
             "daily_loss_accounting": dict(daily_loss_accounting),
             "runtime_guard": dict(runtime_guard),
@@ -1256,6 +1264,7 @@ def runtime_config_snapshot(
             "max_markets": config.max_markets,
             "market_context_source": config.market_context_source,
             "brti_future_tolerance_seconds": config.brti_future_tolerance_seconds,
+            "live_authority_backend": config.live_authority_backend,
         },
     }
 
@@ -2144,15 +2153,17 @@ def acquire_live_run_lock(
     strategy: str = FAIR_VALUE_LIVE_STRATEGY,
     ttl_seconds: int = FAIR_VALUE_LIVE_LOCK_TTL_SECONDS,
     settings: Settings | None = None,
-    use_postgres_authority: bool = False,
+    authority_backend: ResolvedLiveAuthorityBackend = "none",
+    authority_metadata: Mapping[str, Any] | None = None,
 ) -> LiveRunLock:
-    if use_postgres_authority:
+    if authority_backend == "postgres":
         return acquire_postgres_live_decision_authority(
             settings=settings or settings_from_env(),
             run_id=run_id,
             generated_at=generated_at,
             strategy=strategy,
             ttl_seconds=ttl_seconds,
+            metadata=authority_metadata,
         )
     if not enabled:
         return LiveRunLock(
@@ -2170,7 +2181,16 @@ def acquire_live_run_lock(
         token=token,
         ttl_seconds=ttl_seconds,
     )
-    if s3_prefix:
+    if authority_backend == "s3":
+        if not s3_prefix:
+            return LiveRunLock(
+                backend="s3",
+                acquired=False,
+                token="",
+                strategy=strategy,
+                run_id=run_id,
+                reason="live_authority_s3_prefix_missing",
+            )
         return acquire_s3_live_run_lock(
             s3_prefix=s3_prefix,
             strategy=strategy,
@@ -2178,20 +2198,44 @@ def acquire_live_run_lock(
             payload=payload,
             now=generated_at,
         )
-    return acquire_local_live_run_lock(
-        output_root=output_root,
-        strategy=strategy,
-        token=token,
-        payload=payload,
-        now=generated_at,
-    )
+    if authority_backend == "local":
+        return acquire_local_live_run_lock(
+            output_root=output_root,
+            strategy=strategy,
+            token=token,
+            payload=payload,
+            now=generated_at,
+        )
+    raise ValueError(f"unsupported live authority backend: {authority_backend}")
 
 
 def should_use_postgres_authority_lease(config: FairValueLiveTradingJobConfig) -> bool:
-    return (
-        not config.submit_live_orders
-        and config.runtime_config_source == "postgres"
-    )
+    return resolve_live_authority_backend(config) == "postgres"
+
+
+def resolve_live_authority_backend(
+    config: FairValueLiveTradingJobConfig,
+) -> ResolvedLiveAuthorityBackend:
+    if config.live_authority_backend == "postgres":
+        return "postgres"
+    if config.live_authority_backend in {"s3", "local"}:
+        return config.live_authority_backend if config.submit_live_orders else "none"
+    if not config.submit_live_orders and config.runtime_config_source == "postgres":
+        return "postgres"
+    if not config.submit_live_orders:
+        return "none"
+    if config.s3_prefix:
+        return "s3"
+    return "local"
+
+
+def live_authority_acquire_metadata(config: FairValueLiveTradingJobConfig) -> dict[str, Any]:
+    return {
+        "source": "fair_value_live",
+        "live_authority_backend": resolve_live_authority_backend(config),
+        "live_authority_backend_requested": config.live_authority_backend,
+        "submit_live_orders": config.submit_live_orders,
+    }
 
 
 def acquire_postgres_live_decision_authority(
@@ -2201,6 +2245,7 @@ def acquire_postgres_live_decision_authority(
     generated_at: datetime,
     strategy: str = FAIR_VALUE_LIVE_STRATEGY,
     ttl_seconds: int = FAIR_VALUE_LIVE_LOCK_TTL_SECONDS,
+    metadata: Mapping[str, Any] | None = None,
 ) -> LiveRunLock:
     repository = LiveDecisionAuthorityLeaseRepository(settings.database_url)
     owner_id = f"{run_id}:{uuid4().hex[:12]}"
@@ -2211,8 +2256,9 @@ def acquire_postgres_live_decision_authority(
             owner_id=owner_id,
             now=generated_at,
             ttl_seconds=ttl_seconds,
-            metadata={
-                "source": "fair_value_live_report_only",
+            metadata=metadata
+            or {
+                "source": "fair_value_live",
                 "submit_live_orders": False,
             },
         )
