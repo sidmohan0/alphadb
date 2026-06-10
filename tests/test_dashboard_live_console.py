@@ -266,6 +266,28 @@ def test_strategy_operator_ledger_payload_returns_ordered_sparse_rows() -> None:
         skip_reason="edge_below_min",
         latest_attempt_status="skipped",
         latest_attempt_reason="edge_below_min",
+        summary={
+            "live_edge_attribution": {
+                "side": "yes",
+                "edge": -0.01,
+                "min_edge": 0.0,
+                "side_evaluations": [
+                    {
+                        "side": "yes",
+                        "selected": True,
+                        "edge": -0.01,
+                        "reason": "edge_below_min",
+                    },
+                    {
+                        "side": "no",
+                        "selected": False,
+                        "edge": -0.03,
+                        "reason": "edge_below_min",
+                        "comparison_reason": "not_selected_worse_edge",
+                    },
+                ],
+            }
+        },
     )
     dashboard = service(repository, status=status)
 
@@ -285,6 +307,7 @@ def test_strategy_operator_ledger_payload_returns_ordered_sparse_rows() -> None:
     assert rows[0]["latest_run_id"] == "fv_live_20260604T150000Z"
     assert rows[0]["latest_decision"]["outcome"] == "skipped"
     assert rows[0]["latest_decision"]["reason"] == "edge_below_min"
+    assert rows[0]["latest_live_edge_attribution"]["side_evaluations"][1]["side"] == "no"
     assert rows[0]["risk_summary"]["state"] == "available"
     assert rows[0]["context_summary"]["active_source"] == "coinbase_primary"
     assert rows[0]["active_config"]["strategy"] == FAIR_VALUE_LIVE_STRATEGY
@@ -480,6 +503,32 @@ def test_cockpit_recent_attempts_table_renders_edge_diagnostics() -> None:
     assert "Hide ${definition.label}" in source
     assert "hidden: hiddenPanelIds" in source
     assert "window.localStorage" in source
+
+
+def test_cockpit_attempt_details_renders_bidirectional_edge_diagnostics() -> None:
+    source = Path("apps/dashboard/components/live/live-operations.tsx").read_text()
+
+    assert "interface LiveSideEvaluation" in source
+    assert "side_evaluations" in source
+    assert "SideEvaluationComparison" in source
+    assert "YES / NO edge comparison" in source
+    assert "optionalPercent(evaluation.fair_value ?? evaluation.probability)" in source
+    assert "optionalPercent(evaluation.price)" in source
+    assert "optionalPercent(evaluation.raw_gap)" in source
+    assert "sideEvaluationGapText(evaluation)" in source
+    assert "evaluation.comparison_reason || evaluation.reason" in source
+    assert "legacy_selected_side_attribution" in source
+
+
+def test_cockpit_strategy_ledger_renders_bidirectional_edge_diagnostics() -> None:
+    source = Path("apps/dashboard/components/live/strategy-operator-ledger.tsx").read_text()
+
+    assert "latest_live_edge_attribution" in source
+    assert "EdgeAttributionRail" in source
+    assert "YES / NO edge comparison" in source
+    assert "side_evaluations" in source
+    assert "evaluation.comparison_reason || evaluation.reason" in source
+    assert "legacy_selected_side_attribution" in source
 
 
 def test_cockpit_runtime_config_exposes_daily_limit_reset_action() -> None:
