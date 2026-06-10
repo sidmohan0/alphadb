@@ -50,11 +50,38 @@ interface ResetDailyLimitsResponse {
 type Tone = "good" | "warn" | "bad" | "muted"
 
 interface LiveEdgeAttribution {
+  side?: string | null
+  fair_value?: number | null
+  price?: number | null
+  fee_per_contract?: number | null
+  raw_gap?: number | null
   edge?: number | null
   min_edge?: number | null
   edge_shortfall?: number | null
   edge_margin?: number | null
   edge_cleared?: boolean | null
+  side_evaluations?: LiveSideEvaluation[] | null
+  side_evaluation_summary?: Record<string, unknown> | null
+}
+
+interface LiveSideEvaluation {
+  side?: string | null
+  selected?: boolean | null
+  valid?: boolean | null
+  status?: string | null
+  reason?: string | null
+  comparison_reason?: string | null
+  probability?: number | null
+  fair_value?: number | null
+  price?: number | null
+  fee_per_contract?: number | null
+  raw_gap?: number | null
+  edge?: number | null
+  min_edge?: number | null
+  edge_shortfall?: number | null
+  edge_margin?: number | null
+  edge_cleared?: boolean | null
+  min_contract_price?: number | null
 }
 
 const CONFIG_FIELDS = [
@@ -204,10 +231,11 @@ function normalizePanelSize(id: PanelId, width: unknown, height: unknown): Panel
 }
 
 function normalizePanelLayout(value: unknown): PanelLayoutItem[] {
-  const rawItems = Array.isArray(value)
+  const record = asRecord(value)
+  const rawItems: unknown[] = Array.isArray(value)
     ? value
-    : Array.isArray(asRecord(value).items)
-      ? asRecord(value).items
+    : Array.isArray(record.items)
+      ? record.items
       : []
   const ordered: PanelLayoutItem[] = []
   const seen = new Set<PanelId>()
@@ -309,6 +337,64 @@ function edgeGapText(attribution: LiveEdgeAttribution) {
     return `+${optionalPercent(derivedMargin)}`
   }
   return "--"
+}
+
+function sideEvaluationGapText(evaluation: LiveSideEvaluation) {
+  return edgeGapText(evaluation as LiveEdgeAttribution)
+}
+
+function sideEvaluations(attribution: LiveEdgeAttribution): LiveSideEvaluation[] {
+  const evaluations = Array.isArray(attribution.side_evaluations)
+    ? attribution.side_evaluations
+      .filter((evaluation) => evaluation && typeof evaluation === "object")
+      .map((evaluation) => evaluation as LiveSideEvaluation)
+    : []
+  if (evaluations.length) return evaluations
+  if (!hasLegacyAttribution(attribution)) return []
+  return [{
+    side: attribution.side,
+    selected: Boolean(attribution.side),
+    valid: attribution.price !== null && attribution.price !== undefined,
+    status: attribution.edge_cleared ? "cleared" : "legacy_selected_side",
+    reason: "legacy_selected_side_attribution",
+    comparison_reason: "legacy_selected_side_attribution",
+    probability: attribution.fair_value,
+    fair_value: attribution.fair_value,
+    price: attribution.price,
+    fee_per_contract: attribution.fee_per_contract,
+    raw_gap: attribution.raw_gap,
+    edge: attribution.edge,
+    min_edge: attribution.min_edge,
+    edge_shortfall: attribution.edge_shortfall,
+    edge_margin: attribution.edge_margin,
+    edge_cleared: attribution.edge_cleared,
+  }]
+}
+
+function hasLegacyAttribution(attribution: LiveEdgeAttribution) {
+  return Boolean(
+    attribution.side ||
+    (attribution.edge !== null && attribution.edge !== undefined) ||
+    (attribution.price !== null && attribution.price !== undefined),
+  )
+}
+
+function sideToneClass(evaluation: LiveSideEvaluation) {
+  if (evaluation.selected) return "border-cockpit-accent-border bg-cockpit-accent-soft"
+  if (evaluation.edge_cleared) return "border-success/50 bg-success/10"
+  if (evaluation.valid === false || evaluation.status === "unavailable") {
+    return "border-field-border/70 bg-surface-inset text-muted-foreground"
+  }
+  return "border-field-border/70 bg-surface-inset"
+}
+
+function sideBadgeClass(evaluation: LiveSideEvaluation) {
+  if (evaluation.selected) return "border-cockpit-accent-border text-foreground"
+  if (evaluation.edge_cleared) return "border-success/50 text-success"
+  if (evaluation.valid === false || evaluation.status === "unavailable") {
+    return "border-field-border/70 text-muted-foreground"
+  }
+  return "border-field-border/70 text-foreground"
 }
 
 function seconds(value: unknown) {
@@ -1229,6 +1315,8 @@ function ActivityFeed({
 function AttemptDetails({ attempt }: { attempt: Record<string, unknown> }) {
   const riskAdmission = asRecord(attempt.risk_admission)
   const configVersion = text(attempt.config_version, "")
+  const attribution = edgeAttribution(attempt)
+  const evaluations = sideEvaluations(attribution)
   return (
     <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
       <ActivityDetail label="Side" value={text(attempt.side)} />
@@ -1239,6 +1327,69 @@ function AttemptDetails({ attempt }: { attempt: Record<string, unknown> }) {
       <ActivityDetail label="Max loss" value={optionalMoney(attempt.max_loss_dollars)} />
       <ActivityDetail label="Risk admission" value={text(riskAdmission.status || riskAdmission.reason)} />
       <ActivityDetail label="Config" value={configVersion ? `v${configVersion}` : text(attempt.config_id)} />
+      <SideEvaluationComparison evaluations={evaluations} />
+    </div>
+  )
+}
+
+function SideEvaluationComparison({ evaluations }: { evaluations: LiveSideEvaluation[] }) {
+  return (
+    <NestedSurface className="min-w-0 px-2 py-2 sm:col-span-2 lg:col-span-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-muted-foreground">YES / NO edge comparison</div>
+        <span className="font-mono text-[11px] text-muted-foreground">
+          {evaluations.length ? `${evaluations.length} side${evaluations.length === 1 ? "" : "s"}` : "--"}
+        </span>
+      </div>
+      {evaluations.length ? (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {evaluations.map((evaluation, index) => (
+            <div
+              className={`min-w-0 rounded-md border px-2 py-2 ${sideToneClass(evaluation)}`}
+              key={`${text(evaluation.side, "side")}-${index}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-xs font-medium uppercase text-foreground">
+                  {text(evaluation.side)}
+                </span>
+                <span
+                  className={`rounded-sm border px-1.5 py-0.5 text-[11px] ${sideBadgeClass(evaluation)}`}
+                >
+                  {evaluation.selected ? "selected" : text(evaluation.status, "available")}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+                <SideEvaluationMetric
+                  label="Fair value"
+                  value={optionalPercent(evaluation.fair_value ?? evaluation.probability)}
+                />
+                <SideEvaluationMetric label="Ask" value={optionalPercent(evaluation.price)} />
+                <SideEvaluationMetric label="Fee" value={optionalPercent(evaluation.fee_per_contract)} />
+                <SideEvaluationMetric label="Raw gap" value={optionalPercent(evaluation.raw_gap)} />
+                <SideEvaluationMetric label="Edge" value={optionalPercent(evaluation.edge)} />
+                <SideEvaluationMetric label="Gap" value={sideEvaluationGapText(evaluation)} />
+              </div>
+              <div
+                className="mt-2 truncate font-mono text-[11px] text-muted-foreground"
+                title={text(evaluation.reason)}
+              >
+                {text(evaluation.comparison_reason || evaluation.reason)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 text-xs text-muted-foreground">No side evaluation evidence recorded.</div>
+      )}
+    </NestedSurface>
+  )
+}
+
+function SideEvaluationMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="truncate font-mono text-xs text-foreground">{value}</div>
     </div>
   )
 }

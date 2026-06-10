@@ -10,6 +10,7 @@ SCHEMA_VERSION = "alphadb_live_edge_attribution.v1"
 MARKET_CONTEXT_COINBASE_PRIMARY = "coinbase_primary"
 MARKET_CONTEXT_BRTI_PRIMARY = "brti_primary"
 MARKET_CONTEXT_FIXTURE = "fixture"
+DEFAULT_TAKER_FEE_MULTIPLIER = 0.07
 
 
 def build_live_edge_attribution(
@@ -48,6 +49,19 @@ def build_live_edge_attribution(
     if edge is None and raw_gap is not None and fee is not None:
         edge = round(raw_gap - fee, 6)
 
+    fee_multiplier = _first_float(
+        runtime_controls_map,
+        ("taker_fee_multiplier",),
+        default=_first_float(
+            snapshot,
+            ("taker_fee_multiplier",),
+            default=_first_float(
+                config_map,
+                ("taker_fee_multiplier",),
+                default=DEFAULT_TAKER_FEE_MULTIPLIER,
+            ),
+        ),
+    )
     min_edge = _first_float(
         runtime_controls_map,
         ("min_edge",),
@@ -93,6 +107,18 @@ def build_live_edge_attribution(
         source_row=source_map,
         config=config_map,
     )
+    side_evaluations = build_live_side_evaluations(
+        decision=decision_map,
+        source_row=source_map,
+        selected_side=side,
+        min_edge=min_edge,
+        min_contract_price=min_contract_price,
+        taker_fee_multiplier=(
+            fee_multiplier
+            if fee_multiplier is not None
+            else DEFAULT_TAKER_FEE_MULTIPLIER
+        ),
+    )
     missing_fields = _missing_fields(
         {
             "side": side,
@@ -126,6 +152,11 @@ def build_live_edge_attribution(
         "edge_margin": _round(edge_margin),
         "min_contract_price": _round(min_contract_price),
         "edge_cleared": edge is not None and min_edge is not None and edge >= min_edge,
+        "side_evaluations": side_evaluations,
+        "side_evaluation_summary": side_evaluation_summary(
+            side_evaluations=side_evaluations,
+            selected_side=side,
+        ),
         "attribution_class": classify_live_edge_attribution(
             decision_reason=_text(decision_map.get("reason")),
             raw_gap=raw_gap,
@@ -168,6 +199,220 @@ def build_live_edge_attribution(
         ),
         "missing_fields": missing_fields,
     }
+
+
+def build_live_side_evaluations(
+    *,
+    decision: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    selected_side: str | None,
+    min_edge: float | None,
+    min_contract_price: float | None,
+    taker_fee_multiplier: float,
+) -> list[dict[str, Any]]:
+    probability_yes = _probability_yes(decision=decision, source_row=source_row)
+    evaluations = [
+        build_live_side_evaluation(
+            side="yes",
+            probability_yes=probability_yes,
+            decision=decision,
+            source_row=source_row,
+            selected_side=selected_side,
+            min_edge=min_edge,
+            min_contract_price=min_contract_price,
+            taker_fee_multiplier=taker_fee_multiplier,
+        ),
+        build_live_side_evaluation(
+            side="no",
+            probability_yes=probability_yes,
+            decision=decision,
+            source_row=source_row,
+            selected_side=selected_side,
+            min_edge=min_edge,
+            min_contract_price=min_contract_price,
+            taker_fee_multiplier=taker_fee_multiplier,
+        ),
+    ]
+    return side_evaluations_with_selection_context(
+        side_evaluations=evaluations,
+        selected_side=selected_side,
+    )
+
+
+def build_live_side_evaluation(
+    *,
+    side: str,
+    probability_yes: float | None,
+    decision: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    selected_side: str | None,
+    min_edge: float | None,
+    min_contract_price: float | None,
+    taker_fee_multiplier: float,
+) -> dict[str, Any]:
+    selected = selected_side == side
+    probability = _side_probability(side, probability_yes)
+    price = _side_price(side=side, decision=decision, source_row=source_row, selected=selected)
+    explicit_fee = _side_fee(side=side, decision=decision, source_row=source_row, selected=selected)
+    fee = explicit_fee if explicit_fee is not None else _taker_fee(price, taker_fee_multiplier)
+    raw_gap = (
+        round(probability - price, 6)
+        if probability is not None and price is not None
+        else None
+    )
+    edge = (
+        round(raw_gap - fee, 6)
+        if raw_gap is not None and fee is not None
+        else None
+    )
+    edge_shortfall = (
+        round(max(0.0, min_edge - edge), 6)
+        if min_edge is not None and edge is not None
+        else None
+    )
+    edge_margin = (
+        round(edge - min_edge, 6)
+        if min_edge is not None and edge is not None
+        else None
+    )
+    valid, invalid_reason = _side_validity(probability=probability, price=price)
+    status, reason = side_evaluation_status(
+        valid=valid,
+        invalid_reason=invalid_reason,
+        price=price,
+        min_contract_price=min_contract_price,
+        edge=edge,
+        min_edge=min_edge,
+    )
+    return {
+        "side": side,
+        "selected": selected,
+        "valid": valid,
+        "status": status,
+        "reason": reason,
+        "comparison_reason": None,
+        "probability": _round(probability),
+        "fair_value": _round(probability),
+        "price": _round(price),
+        "fee_per_contract": _round(fee),
+        "raw_gap": _round(raw_gap),
+        "edge": _round(edge),
+        "min_edge": _round(min_edge),
+        "edge_shortfall": _round(edge_shortfall),
+        "edge_margin": _round(edge_margin),
+        "edge_cleared": edge is not None and min_edge is not None and edge >= min_edge,
+        "min_contract_price": _round(min_contract_price),
+    }
+
+
+def side_evaluations_with_selection_context(
+    *,
+    side_evaluations: Sequence[dict[str, Any]],
+    selected_side: str | None,
+) -> list[dict[str, Any]]:
+    selected = next(
+        (
+            evaluation
+            for evaluation in side_evaluations
+            if _text(evaluation.get("side")) == selected_side
+        ),
+        None,
+    )
+    selected_edge = _float(selected.get("edge")) if selected else None
+    annotated: list[dict[str, Any]] = []
+    for evaluation in side_evaluations:
+        reason = side_comparison_reason(
+            evaluation=evaluation,
+            selected_side=selected_side,
+            selected_edge=selected_edge,
+        )
+        annotated.append({**evaluation, "comparison_reason": reason})
+    return annotated
+
+
+def side_comparison_reason(
+    *,
+    evaluation: Mapping[str, Any],
+    selected_side: str | None,
+    selected_edge: float | None,
+) -> str | None:
+    side = _text(evaluation.get("side"))
+    if selected_side is not None and side == selected_side:
+        return "selected"
+    status = _text(evaluation.get("status"))
+    reason = _text(evaluation.get("reason"))
+    if status == "unavailable":
+        return f"not_selected_{reason or 'unavailable'}"
+    if reason == "price_below_min_contract":
+        return "not_selected_price_below_min_contract"
+    edge = _float(evaluation.get("edge"))
+    if edge is not None and selected_edge is not None:
+        if edge < selected_edge:
+            return "not_selected_worse_edge"
+        if edge == selected_edge:
+            return "not_selected_tie_break"
+        return "not_selected_despite_higher_edge"
+    if reason:
+        return f"not_selected_{reason}"
+    return "not_selected"
+
+
+def side_evaluation_summary(
+    *,
+    side_evaluations: Sequence[Mapping[str, Any]],
+    selected_side: str | None,
+) -> dict[str, Any]:
+    valid = [
+        evaluation
+        for evaluation in side_evaluations
+        if evaluation.get("valid") is True and _float(evaluation.get("edge")) is not None
+    ]
+    best = max(
+        valid,
+        key=lambda evaluation: (
+            _float(evaluation.get("edge")) or float("-inf"),
+            _text(evaluation.get("side")) or "",
+        ),
+        default=None,
+    )
+    selected = next(
+        (
+            evaluation
+            for evaluation in side_evaluations
+            if _text(evaluation.get("side")) == selected_side
+        ),
+        None,
+    )
+    return {
+        "selected_side": selected_side,
+        "best_side": _text(best.get("side")) if best else None,
+        "selected_reason": _text(selected.get("reason")) if selected else None,
+        "selected_status": _text(selected.get("status")) if selected else None,
+    }
+
+
+def side_evaluation_status(
+    *,
+    valid: bool,
+    invalid_reason: str | None,
+    price: float | None,
+    min_contract_price: float | None,
+    edge: float | None,
+    min_edge: float | None,
+) -> tuple[str, str | None]:
+    if not valid:
+        return "unavailable", invalid_reason
+    if (
+        price is not None
+        and min_contract_price is not None
+        and price < min_contract_price
+    ):
+        return "blocked", "price_below_min_contract"
+    if edge is not None and min_edge is not None and edge < min_edge:
+        return "below_min_edge", "edge_below_min"
+    if edge is not None and min_edge is not None and edge >= min_edge:
+        return "cleared", "edge_met"
+    return "available", None
 
 
 def classify_live_edge_attribution(
@@ -428,6 +673,94 @@ def _first_float(
         if value is not None:
             return value
     return default
+
+
+def _probability_yes(
+    *,
+    decision: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+) -> float | None:
+    probability_yes = _first_float(
+        source_row,
+        ("p_yes", "probability_yes"),
+        default=_float(decision.get("probability_yes")),
+    )
+    if probability_yes is not None:
+        return probability_yes
+    selected_probability = _first_float(decision, ("fair_value", "probability"))
+    selected_side = _text(decision.get("side"))
+    if selected_probability is None or selected_side not in {"yes", "no"}:
+        return None
+    if selected_side == "yes":
+        return selected_probability
+    return 1.0 - selected_probability
+
+
+def _side_probability(side: str, probability_yes: float | None) -> float | None:
+    if probability_yes is None:
+        return None
+    return probability_yes if side == "yes" else 1.0 - probability_yes
+
+
+def _side_price(
+    *,
+    side: str,
+    decision: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    selected: bool,
+) -> float | None:
+    side_keys = (
+        ("yes_ask", "yes_ask_dollars", "executable_yes_price")
+        if side == "yes"
+        else ("no_ask", "no_ask_dollars", "executable_no_price")
+    )
+    price = _first_float(source_row, side_keys)
+    if price is not None:
+        return price
+    if selected:
+        return _first_float(decision, ("price", *side_keys))
+    return None
+
+
+def _side_fee(
+    *,
+    side: str,
+    decision: Mapping[str, Any],
+    source_row: Mapping[str, Any],
+    selected: bool,
+) -> float | None:
+    side_keys = ("yes_fee", "yes_fee_per_contract") if side == "yes" else (
+        "no_fee",
+        "no_fee_per_contract",
+    )
+    fee = _first_float(source_row, side_keys)
+    if fee is not None:
+        return fee
+    if selected:
+        return _first_float(decision, ("fee_per_contract", "fee", *side_keys))
+    return None
+
+
+def _side_validity(
+    *,
+    probability: float | None,
+    price: float | None,
+) -> tuple[bool, str | None]:
+    if probability is None:
+        return False, "missing_probability"
+    if price is None:
+        return False, "missing_executable_price"
+    if probability < 0.0 or probability > 1.0:
+        return False, "invalid_probability"
+    if price <= 0.0 or price >= 1.0:
+        return False, "invalid_executable_price"
+    return True, None
+
+
+def _taker_fee(price: float | None, taker_fee_multiplier: float) -> float | None:
+    if price is None or price <= 0.0 or price >= 1.0:
+        return None
+    return round(taker_fee_multiplier * price * (1.0 - price), 6)
 
 
 def _float(value: Any) -> float | None:

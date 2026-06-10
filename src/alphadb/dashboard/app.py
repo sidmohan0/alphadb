@@ -571,6 +571,9 @@ def _strategy_operator_ledger_row(
         if latest_status.generated_at
         else None,
         "latest_decision": _strategy_operator_latest_decision(latest_status),
+        "latest_live_edge_attribution": _strategy_operator_latest_edge_attribution(
+            latest_status
+        ),
         "recent_runs": recent_runs,
         "risk_summary": _strategy_operator_risk_summary(
             latest_status,
@@ -661,6 +664,13 @@ def _strategy_operator_latest_decision(status: LiveRunStatus) -> dict[str, Any]:
         "run_id": status.run_id,
         "generated_at": status.generated_at.isoformat() if status.generated_at else None,
     }
+
+
+def _strategy_operator_latest_edge_attribution(
+    status: LiveRunStatus,
+) -> dict[str, Any] | None:
+    attribution = _mapping_or_empty(status.summary.get("live_edge_attribution"))
+    return dict(attribution) if attribution else None
 
 
 def _strategy_operator_risk_summary(

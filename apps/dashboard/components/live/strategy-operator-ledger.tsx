@@ -41,6 +41,7 @@ interface StrategyLedgerRow {
   latest_run_id: string | null
   latest_run_generated_at: string | null
   latest_decision: LatestDecision
+  latest_live_edge_attribution: LiveEdgeAttribution | null
   recent_runs: StrategyRecentRun[]
   risk_summary: RiskSummary
   context_summary: ContextSummary
@@ -68,6 +69,39 @@ interface LatestDecision {
   market_ticker: string | null
   run_id: string | null
   generated_at: string | null
+}
+
+interface LiveEdgeAttribution {
+  side?: string | null
+  fair_value?: number | null
+  price?: number | null
+  fee_per_contract?: number | null
+  raw_gap?: number | null
+  edge?: number | null
+  min_edge?: number | null
+  edge_shortfall?: number | null
+  edge_margin?: number | null
+  edge_cleared?: boolean | null
+  side_evaluations?: LiveSideEvaluation[] | null
+}
+
+interface LiveSideEvaluation {
+  side?: string | null
+  selected?: boolean | null
+  valid?: boolean | null
+  status?: string | null
+  reason?: string | null
+  comparison_reason?: string | null
+  probability?: number | null
+  fair_value?: number | null
+  price?: number | null
+  fee_per_contract?: number | null
+  raw_gap?: number | null
+  edge?: number | null
+  min_edge?: number | null
+  edge_shortfall?: number | null
+  edge_margin?: number | null
+  edge_cleared?: boolean | null
 }
 
 interface StrategyRecentRun {
@@ -358,6 +392,8 @@ function StrategyDetailRail({ row }: { row: StrategyLedgerRow | null }) {
             <KeyValue label="Reason" value={value(row.latest_attempt_reason)} />
           </div>
         </NestedSurface>
+
+        <EdgeAttributionRail attribution={row.latest_live_edge_attribution} />
 
         <NestedSurface className="p-3">
           <div className="text-xs font-medium text-muted-foreground">Risk</div>
@@ -659,6 +695,130 @@ function RecentRunList({ runs }: { runs: StrategyRecentRun[] }) {
       ))}
     </div>
   )
+}
+
+function EdgeAttributionRail({ attribution }: { attribution: LiveEdgeAttribution | null }) {
+  const evaluations = sideEvaluations(attribution)
+  return (
+    <NestedSurface className="p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs font-medium text-muted-foreground">YES / NO edge comparison</div>
+        <div className="font-mono text-xs text-muted-foreground">
+          {evaluations.length ? `${evaluations.length} side${evaluations.length === 1 ? "" : "s"}` : "--"}
+        </div>
+      </div>
+      {evaluations.length ? (
+        <div className="mt-2 grid gap-2">
+          {evaluations.map((evaluation, index) => (
+            <div
+              className={cn(
+                "rounded-md border px-2 py-2",
+                evaluation.selected
+                  ? "border-cockpit-accent-border bg-cockpit-accent-soft"
+                  : "border-border/80 bg-surface-panel",
+              )}
+              key={`${value(evaluation.side, "side")}-${index}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono text-xs font-medium uppercase text-foreground">
+                  {value(evaluation.side)}
+                </span>
+                <span className="rounded-sm border border-field-border/70 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                  {evaluation.selected ? "selected" : value(evaluation.status, "available")}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-x-2 gap-y-1">
+                <SideMetric label="Fair" value={optionalPercent(evaluation.fair_value ?? evaluation.probability)} />
+                <SideMetric label="Ask" value={optionalPercent(evaluation.price)} />
+                <SideMetric label="Edge" value={optionalPercent(evaluation.edge)} />
+                <SideMetric label="Raw" value={optionalPercent(evaluation.raw_gap)} />
+                <SideMetric label="Fee" value={optionalPercent(evaluation.fee_per_contract)} />
+                <SideMetric label="Gap" value={edgeGapText(evaluation)} />
+              </div>
+              <div className="mt-2 truncate font-mono text-[11px] text-muted-foreground">
+                {value(evaluation.comparison_reason || evaluation.reason)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 text-sm text-muted-foreground">No live edge attribution recorded.</div>
+      )}
+    </NestedSurface>
+  )
+}
+
+function SideMetric({ label, value: metricValue }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="truncate font-mono text-xs text-foreground">{metricValue}</div>
+    </div>
+  )
+}
+
+function sideEvaluations(attribution: LiveEdgeAttribution | null): LiveSideEvaluation[] {
+  if (!attribution) return []
+  if (Array.isArray(attribution.side_evaluations) && attribution.side_evaluations.length) {
+    return attribution.side_evaluations.filter(isLiveSideEvaluation)
+  }
+  if (!hasLegacyAttribution(attribution)) return []
+  return [{
+    side: attribution.side,
+    selected: Boolean(attribution.side),
+    valid: attribution.price !== null && attribution.price !== undefined,
+    status: attribution.edge_cleared ? "cleared" : "legacy_selected_side",
+    reason: "legacy_selected_side_attribution",
+    comparison_reason: "legacy_selected_side_attribution",
+    probability: attribution.fair_value,
+    fair_value: attribution.fair_value,
+    price: attribution.price,
+    fee_per_contract: attribution.fee_per_contract,
+    raw_gap: attribution.raw_gap,
+    edge: attribution.edge,
+    min_edge: attribution.min_edge,
+    edge_shortfall: attribution.edge_shortfall,
+    edge_margin: attribution.edge_margin,
+    edge_cleared: attribution.edge_cleared,
+  }]
+}
+
+function isLiveSideEvaluation(value: unknown): value is LiveSideEvaluation {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
+function hasLegacyAttribution(attribution: LiveEdgeAttribution) {
+  return Boolean(
+    attribution.side ||
+    (attribution.edge !== null && attribution.edge !== undefined) ||
+    (attribution.price !== null && attribution.price !== undefined),
+  )
+}
+
+function optionalPercent(input: unknown) {
+  if (input === null || input === undefined || input === "") return "--"
+  const number = Number(input)
+  if (!Number.isFinite(number)) return "--"
+  return `${(number * 100).toFixed(2)}%`
+}
+
+function edgeGapText(evaluation: LiveSideEvaluation) {
+  const shortfall = Number(evaluation.edge_shortfall)
+  if (Number.isFinite(shortfall) && shortfall > 0) {
+    return `short ${optionalPercent(shortfall)}`
+  }
+  const margin = Number(evaluation.edge_margin)
+  if (Number.isFinite(margin)) {
+    return `${margin >= 0 ? "+" : ""}${optionalPercent(margin)}`
+  }
+  const edge = Number(evaluation.edge)
+  const minEdge = Number(evaluation.min_edge)
+  if (Number.isFinite(edge) && Number.isFinite(minEdge)) {
+    const derivedMargin = edge - minEdge
+    if (derivedMargin < 0) return `short ${optionalPercent(-derivedMargin)}`
+    return `+${optionalPercent(derivedMargin)}`
+  }
+  return "--"
 }
 
 function fleetHealth(

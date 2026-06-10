@@ -31,6 +31,8 @@ def test_live_edge_attribution_decomposes_edge_below_min() -> None:
     assert attribution["edge"] == 0.03
     assert attribution["edge_shortfall"] == 0.02
     assert attribution["attribution_class"] == "threshold_drag"
+    assert side_evaluation(attribution, "yes")["selected"] is True
+    assert side_evaluation(attribution, "yes")["reason"] == "edge_below_min"
     assert attribution["freshness"]["quote_age_seconds"] == 2.0
     assert attribution["freshness"]["active_context"]["status"] == "fresh"
     assert attribution["fresh_quote_counterfactual"]["status"] == "unavailable"
@@ -166,3 +168,167 @@ def test_live_edge_attribution_bucket_summary_counts_classes() -> None:
         {"attribution_class": "fee_drag", "count": 1},
         {"attribution_class": "unknown", "count": 1},
     ]
+
+
+def test_live_edge_attribution_exposes_yes_and_no_evaluations_for_negative_yes_gap() -> None:
+    attribution = build_live_edge_attribution(
+        decision={
+            "decision": "skip",
+            "reason": "edge_below_min",
+            "ticker": "KXBTC15M-NEGATIVE-YES",
+            "side": "yes",
+            "fair_value": 0.6147,
+            "price": 0.999,
+            "fee_per_contract": 0.00007,
+            "edge": -0.38437,
+        },
+        source_row={
+            "ticker": "KXBTC15M-NEGATIVE-YES",
+            "p_yes": 0.6147,
+            "yes_ask": 0.999,
+            "no_ask": 0.99,
+        },
+        runtime_controls={"min_edge": 0.0, "min_contract_price": 0.25},
+    )
+
+    yes = side_evaluation(attribution, "yes")
+    no = side_evaluation(attribution, "no")
+
+    assert attribution["side_evaluation_summary"] == {
+        "selected_side": "yes",
+        "best_side": "yes",
+        "selected_reason": "edge_below_min",
+        "selected_status": "below_min_edge",
+    }
+    assert yes["selected"] is True
+    assert yes["raw_gap"] == -0.3843
+    assert yes["edge"] == -0.38437
+    assert yes["edge_cleared"] is False
+    assert no["selected"] is False
+    assert no["probability"] == 0.3853
+    assert no["raw_gap"] == -0.6047
+    assert no["reason"] == "edge_below_min"
+    assert no["comparison_reason"] == "not_selected_worse_edge"
+
+
+def test_live_edge_attribution_exposes_no_selected_side_evaluation() -> None:
+    attribution = build_live_edge_attribution(
+        decision={
+            "decision": "trade",
+            "reason": "edge_met",
+            "ticker": "KXBTC15M-NO",
+            "side": "no",
+            "fair_value": 0.7,
+            "price": 0.5,
+            "fee_per_contract": 0.0175,
+            "edge": 0.1825,
+        },
+        source_row={
+            "ticker": "KXBTC15M-NO",
+            "p_yes": 0.3,
+            "yes_ask": 0.8,
+            "no_ask": 0.5,
+        },
+        runtime_controls={"min_edge": 0.05, "min_contract_price": 0.25},
+    )
+
+    yes = side_evaluation(attribution, "yes")
+    no = side_evaluation(attribution, "no")
+
+    assert attribution["side"] == "no"
+    assert attribution["side_evaluation_summary"]["best_side"] == "no"
+    assert yes["selected"] is False
+    assert yes["status"] == "below_min_edge"
+    assert yes["edge"] == -0.5112
+    assert no["selected"] is True
+    assert no["status"] == "cleared"
+    assert no["edge_cleared"] is True
+    assert no["edge"] == 0.1825
+
+
+def test_live_edge_attribution_marks_missing_or_invalid_opposite_side() -> None:
+    missing_no = build_live_edge_attribution(
+        decision={
+            "decision": "skip",
+            "reason": "edge_below_min",
+            "ticker": "KXBTC15M-MISSING-NO",
+            "side": "yes",
+            "fair_value": 0.6,
+            "price": 0.55,
+            "fee": 0.017325,
+            "edge": 0.032675,
+        },
+        source_row={
+            "ticker": "KXBTC15M-MISSING-NO",
+            "p_yes": 0.6,
+            "yes_ask": 0.55,
+        },
+        runtime_controls={"min_edge": 0.05, "min_contract_price": 0.25},
+    )
+    invalid_no = build_live_edge_attribution(
+        decision={
+            "decision": "skip",
+            "reason": "edge_below_min",
+            "ticker": "KXBTC15M-INVALID-NO",
+            "side": "yes",
+            "fair_value": 0.6,
+            "price": 0.55,
+            "fee": 0.017325,
+            "edge": 0.032675,
+        },
+        source_row={
+            "ticker": "KXBTC15M-INVALID-NO",
+            "p_yes": 0.6,
+            "yes_ask": 0.55,
+            "no_ask": 1.0,
+        },
+        runtime_controls={"min_edge": 0.05, "min_contract_price": 0.25},
+    )
+
+    assert side_evaluation(missing_no, "no")["status"] == "unavailable"
+    assert side_evaluation(missing_no, "no")["reason"] == "missing_executable_price"
+    assert (
+        side_evaluation(missing_no, "no")["comparison_reason"]
+        == "not_selected_missing_executable_price"
+    )
+    assert side_evaluation(invalid_no, "no")["status"] == "unavailable"
+    assert side_evaluation(invalid_no, "no")["reason"] == "invalid_executable_price"
+    assert (
+        side_evaluation(invalid_no, "no")["comparison_reason"]
+        == "not_selected_invalid_executable_price"
+    )
+
+
+def test_live_edge_attribution_marks_both_sides_below_minimum() -> None:
+    attribution = build_live_edge_attribution(
+        decision={
+            "decision": "skip",
+            "reason": "edge_below_min",
+            "ticker": "KXBTC15M-BOTH-BELOW",
+            "side": "yes",
+            "fair_value": 0.51,
+            "price": 0.5,
+            "fee": 0.0175,
+            "edge": -0.0075,
+        },
+        source_row={
+            "ticker": "KXBTC15M-BOTH-BELOW",
+            "p_yes": 0.51,
+            "yes_ask": 0.5,
+            "no_ask": 0.5,
+        },
+        runtime_controls={"min_edge": 0.05, "min_contract_price": 0.25},
+    )
+
+    assert side_evaluation(attribution, "yes")["status"] == "below_min_edge"
+    assert side_evaluation(attribution, "no")["status"] == "below_min_edge"
+    assert side_evaluation(attribution, "yes")["edge_cleared"] is False
+    assert side_evaluation(attribution, "no")["edge_cleared"] is False
+
+
+def side_evaluation(attribution: dict[str, object], side: str) -> dict[str, object]:
+    return next(
+        item
+        for item in attribution["side_evaluations"]  # type: ignore[index]
+        if item["side"] == side
+    )
