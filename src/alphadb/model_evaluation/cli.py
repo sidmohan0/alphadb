@@ -296,9 +296,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fair_live.add_argument(
         "--live-authority-backend",
-        choices=("auto", "postgres", "s3", "local"),
+        choices=("auto", "postgres", "local"),
         default="auto",
-        help="Select live-decision authority backend; postgres keeps S3 as artifact storage only.",
+        help="Select live-decision authority backend; S3 is artifact storage only.",
     )
     fair_live.add_argument("--output", default=None)
 

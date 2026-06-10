@@ -434,9 +434,11 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "DATABASE_URL" in template
     assert "--runtime-config-source" in template
     assert "postgres" in template
-    assert "LiveAuthorityBackend" in template
+    assert "LiveAuthorityBackend" not in template
     assert "--live-authority-backend" in template
-    assert 'LiveAuthorityBackend="${LIVE_AUTHORITY_BACKEND:-postgres}"' in deploy_script
+    assert 'LIVE_AUTHORITY_BACKEND_VALUE="${LIVE_AUTHORITY_BACKEND:-postgres}"' in deploy_script
+    assert "S3 live-run lock authority has been retired" in deploy_script
+    assert "      - s3\n" not in template
     assert "--quote-stale-seconds" in template
     assert "--coinbase-feature-stale-seconds" in template
     assert "--brti-future-tolerance-seconds" in template
@@ -457,7 +459,7 @@ def test_fair_value_live_aws_template_enables_live_money_with_minimal_caps() -> 
     assert "KALSHI_PRIVATE_KEY_PEM" in template
     assert "s3:GetObject" in template
     assert "s3:PutObject" in template
-    assert "s3:DeleteObject" in template
+    assert "s3:DeleteObject" not in template
 
 
 def test_fair_value_live_smoke_validator_requires_runtime_gate_evidence(tmp_path: Path) -> None:

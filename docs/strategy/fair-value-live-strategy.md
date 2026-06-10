@@ -99,6 +99,9 @@ admission result, and phase timings. The seeded canary defaults are:
 - The Cockpit reset action clears realized daily loss for the active live risk
   day only; it preserves open exposure, pending exposure, and pending
   reservations.
+- Runtime authority is the Postgres Live-decision authority lease. S3 is still
+  used for immutable manifests and run artifacts, not for production singleton
+  authority.
 
 Change the non-secret values in the dashboard and click `Save`. The next AWS
 run reads the latest active Postgres config. Secrets and infrastructure wiring
@@ -108,8 +111,8 @@ remain in AWS/Secrets Manager.
 
 ```mermaid
 flowchart TD
-    A["Every minute AWS trigger"] --> B{"Acquire live-decision lock"}
-    B -- "Held" --> C["Skip: live_run_lock_held; write compact evidence"]
+    A["Every minute AWS trigger"] --> B{"Acquire Postgres live-decision authority lease"}
+    B -- "Held/unavailable" --> C["Skip: live_decision_authority_*; write compact evidence"]
     B -- "Acquired" --> D["Read active dashboard config from Postgres"]
     D --> E["Fetch current KXBTC15M market quotes and configured market context"]
     E --> F{"Fresh quote and primary context?"}

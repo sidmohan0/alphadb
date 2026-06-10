@@ -20,6 +20,10 @@ deployment, live config changes, schedule changes, or order submission.
   AWS live worker. The task may carry CLI fallback defaults for local/fixture
   paths, but `--runtime-config-source postgres` makes the dashboard/Postgres
   revision authoritative in AWS.
+- The AlphaDB fair-value live worker gets runtime singleton authority from the
+  Postgres Live-decision authority lease. `REPORT_BUCKET_NAME`,
+  `REPORT_PREFIX`, and `--s3-prefix` are artifact/audit destinations only; do
+  not deploy AWS live workers with `LIVE_AUTHORITY_BACKEND=s3`.
 
 ## AWS Assumptions
 
@@ -106,7 +110,8 @@ Capture these items before calling the cutover complete:
   evidence that `runtime_config.source` is `dashboard_postgres`.
 - Worker manifest: S3 URI, `runtime_config.config_id`,
   `runtime_config.version`, `runtime_config.source`, and exact
-  `runtime_config.snapshot`.
+  `runtime_config.snapshot`, plus `runtime_controls.live_authority_backend =
+  postgres` and Postgres `live_decision_authority_lease` evidence.
 - One-cycle smoke evidence JSON validated by
   `scripts/validate-fair-value-live-smoke.py`, proving:
   `p95_runtime_seconds < 45`, `overlapping_task_count = 0`,

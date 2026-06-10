@@ -24,5 +24,6 @@ inspectable control plane while preserving fail-closed singleton behavior.
   workers cannot mutate state after a newer worker takes authority.
 - S3 manifests should record lease evidence for auditability, but S3 must not be
   the source of runtime authority.
-- Existing S3 lock behavior may remain as a transitional fallback until
-  before/after AWS evidence proves the Postgres lease path.
+- The transitional S3 live-run lock fallback is retired after AWS post-change
+  evidence proved the Postgres lease path; stale S3 authority configuration
+  should be rejected rather than silently used.

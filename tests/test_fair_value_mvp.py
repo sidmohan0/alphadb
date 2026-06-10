@@ -2248,7 +2248,7 @@ def test_postgres_authority_stale_token_prevents_live_mutations(
     ]
 
 
-def test_live_authority_backend_resolution_covers_postgres_and_fallbacks(
+def test_live_authority_backend_resolution_demotes_s3_prefix_to_artifacts(
     tmp_path: Path,
 ) -> None:
     assert (
@@ -2256,10 +2256,22 @@ def test_live_authority_backend_resolution_covers_postgres_and_fallbacks(
             FairValueLiveTradingJobConfig(
                 output_root=tmp_path,
                 submit_live_orders=True,
+                runtime_config_source="postgres",
                 s3_prefix="s3://example/fair-value-live",
             )
         )
-        == "s3"
+        == "postgres"
+    )
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=True,
+                runtime_config_source="cli",
+                s3_prefix="s3://example/fair-value-live",
+            )
+        )
+        == "local"
     )
     assert (
         fair_value_live_job.resolve_live_authority_backend(
@@ -2277,11 +2289,30 @@ def test_live_authority_backend_resolution_covers_postgres_and_fallbacks(
             FairValueLiveTradingJobConfig(
                 output_root=tmp_path,
                 submit_live_orders=True,
+            ),
+            environment="aws",
+        )
+        == "postgres"
+    )
+    with pytest.raises(ValueError, match="S3 live-run lock authority has been retired"):
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=True,
                 runtime_config_source="postgres",
                 live_authority_backend="s3",
+                s3_prefix="s3://example/fair-value-live",
             )
         )
-        == "s3"
+    assert (
+        fair_value_live_job.resolve_live_authority_backend(
+            FairValueLiveTradingJobConfig(
+                output_root=tmp_path,
+                submit_live_orders=True,
+                live_authority_backend="local",
+            )
+        )
+        == "local"
     )
     assert (
         fair_value_live_job.resolve_live_authority_backend(
@@ -2316,16 +2347,6 @@ def test_postgres_authority_backend_keeps_s3_artifacts_out_of_authority(
         fair_value_live_job,
         "public_market_result",
         lambda *, settings, ticker: {"status": "active", "result": None},
-    )
-    monkeypatch.setattr(
-        fair_value_live_job,
-        "acquire_s3_live_run_lock",
-        lambda **kwargs: pytest.fail("Postgres authority must not acquire the S3 lock"),
-    )
-    monkeypatch.setattr(
-        fair_value_live_job,
-        "release_s3_live_run_lock",
-        lambda *args, **kwargs: pytest.fail("Postgres authority must not release the S3 lock"),
     )
     uploads: list[dict[str, object]] = []
 
@@ -2396,6 +2417,7 @@ def test_postgres_authority_backend_keeps_s3_artifacts_out_of_authority(
     assert persisted.status == "released"
     assert persisted.metadata["submit_live_orders"] is True
     assert persisted.metadata["live_authority_backend"] == "postgres"
+    assert persisted.metadata["live_authority_backend_requested"] == "postgres"
 
 
 def test_live_trading_job_uses_dashboard_config_for_exposure_and_daily_caps(
