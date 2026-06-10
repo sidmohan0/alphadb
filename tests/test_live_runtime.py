@@ -238,6 +238,97 @@ def test_live_status_summary_covers_submitted_no_fill_skipped_and_no_recent() ->
     assert no_recent.decision_outcome == "no_recent_run"
 
 
+def test_live_status_summary_surfaces_live_decision_authority_states() -> None:
+    base_manifest = {
+        "run_id": "fv_live_authority_status",
+        "generated_at": "2026-06-04T15:00:00+00:00",
+        "runtime_config": {"snapshot": {}},
+        "counts": {"live_attempts": 1},
+    }
+    base_attempt = {
+        "attempt_id": "attempt_authority",
+        "submitted_at": "2026-06-04T15:00:00+00:00",
+        "market_ticker": "KXBTC15M-AUTHORITY",
+        "status": "skipped",
+        "reason": "submit_live_orders_false",
+    }
+    acquired = build_fair_value_live_status(
+        manifest={
+            **base_manifest,
+            "runtime_controls": {
+                "live_decision_authority_lease": {
+                    "backend": "postgres",
+                    "acquired": True,
+                    "run_id": "fv_live_authority_status",
+                    "owner_id": "worker_1",
+                    "fencing_token": 7,
+                    "status": "released",
+                    "expires_at": "2026-06-04T15:03:00+00:00",
+                }
+            },
+        },
+        attempts_payload={"attempts": [base_attempt]},
+        reconciliation={"rows": []},
+    )
+    held = build_fair_value_live_status(
+        manifest={
+            **base_manifest,
+            "run_id": "fv_live_authority_held",
+            "runtime_controls": {
+                "live_decision_authority_lease": {
+                    "backend": "postgres",
+                    "acquired": False,
+                    "reason": "live_decision_authority_held",
+                    "run_id": "fv_live_existing",
+                    "owner_id": "worker_existing",
+                    "fencing_token": 6,
+                    "expires_at": "2026-06-04T15:02:00+00:00",
+                }
+            },
+        },
+        attempts_payload={
+            "attempts": [{**base_attempt, "reason": "live_decision_authority_held"}]
+        },
+        reconciliation={"rows": []},
+    )
+    unavailable = build_fair_value_live_status(
+        manifest={
+            **base_manifest,
+            "run_id": "fv_live_authority_unavailable",
+            "runtime_controls": {
+                "live_decision_authority_lease": {
+                    "backend": "postgres",
+                    "acquired": False,
+                    "reason": "live_decision_authority_unavailable",
+                }
+            },
+        },
+        attempts_payload={
+            "attempts": [
+                {**base_attempt, "reason": "live_decision_authority_unavailable"}
+            ]
+        },
+        reconciliation={"rows": []},
+    )
+    empty = build_fair_value_live_status(
+        manifest={**base_manifest, "run_id": "fv_live_authority_empty"},
+        attempts_payload={"attempts": [base_attempt]},
+        reconciliation={"rows": []},
+    )
+
+    assert acquired.summary["live_decision_authority"]["state"] == "acquired"
+    assert acquired.summary["live_decision_authority"]["fencing_token"] == 7
+    assert held.skip_reason == "live_decision_authority_held"
+    assert held.summary["live_decision_authority"]["state"] == "denied"
+    assert held.summary["live_decision_authority"]["reason"] == "live_decision_authority_held"
+    assert unavailable.skip_reason == "live_decision_authority_unavailable"
+    assert unavailable.summary["live_decision_authority"]["state"] == "unavailable"
+    assert empty.summary["live_decision_authority"]["state"] == "empty"
+    assert empty.summary["live_decision_authority"]["reason"] == (
+        "live_decision_authority_empty"
+    )
+
+
 def test_live_status_recent_attempt_rows_keep_last_50() -> None:
     attempts = [
         {

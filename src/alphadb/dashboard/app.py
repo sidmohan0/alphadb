@@ -34,6 +34,7 @@ from alphadb.deployment_intents import (
     deployment_intent_kwargs_from_payload,
 )
 from alphadb.health import HealthReport, collect_health
+from alphadb.live_authority import LiveDecisionAuthorityLeaseRepository
 from alphadb.live_runtime import (
     EXPENSIVE_YES_LIVE_STRATEGY,
     FAIR_VALUE_LIVE_STRATEGY,
@@ -52,6 +53,7 @@ from alphadb.portfolio import cached_portfolio_balance_payload
 
 ConfigRepositoryFactory = Callable[[str], LiveRuntimeConfigRepository]
 StatusRepositoryFactory = Callable[[str], LiveRunStatusRepository]
+AuthorityRepositoryFactory = Callable[[str], LiveDecisionAuthorityLeaseRepository]
 LiveRiskRepositoryFactory = Callable[[str], LiveRiskAdmissionRepository]
 StrategyRepositoryFactory = Callable[[str], DashboardStrategyRepository]
 DataExplorerRepositoryFactory = Callable[[str], DashboardDataExplorerRepository]
@@ -70,6 +72,9 @@ class DashboardService:
     settings: Settings
     config_repository_factory: ConfigRepositoryFactory = LiveRuntimeConfigRepository
     status_repository_factory: StatusRepositoryFactory = LiveRunStatusRepository
+    authority_repository_factory: AuthorityRepositoryFactory = (
+        LiveDecisionAuthorityLeaseRepository
+    )
     live_risk_repository_factory: LiveRiskRepositoryFactory = LiveRiskAdmissionRepository
     strategy_repository_factory: StrategyRepositoryFactory = DashboardStrategyRepository
     data_explorer_repository_factory: DataExplorerRepositoryFactory = (
@@ -99,9 +104,16 @@ class DashboardService:
         history = config_repository.recent_revisions(strategy=strategy, limit=6)
         status_repository = self.status_repository_factory(self.settings.database_url)
         latest_status = status_repository.latest_status(strategy=strategy)
+        authority_status, authority_error = _live_authority_status(
+            self.authority_repository_factory(self.settings.database_url),
+            strategy=strategy,
+        )
         live_status = latest_status.as_dict()
         status_summary = _mapping_or_empty(live_status.get("summary"))
         live_status.pop("summary", None)
+        live_status["live_decision_authority"] = authority_status
+        if authority_error:
+            live_status["live_decision_authority_error"] = authority_error
         report = self.health_collector(self.settings)
         return {
             "strategy": strategy,
@@ -132,11 +144,13 @@ class DashboardService:
         generated_at = datetime.now(UTC)
         config_repository = self.config_repository_factory(self.settings.database_url)
         status_repository = self.status_repository_factory(self.settings.database_url)
+        authority_repository = self.authority_repository_factory(self.settings.database_url)
         rows = [
             _strategy_operator_ledger_row(
                 strategy=strategy,
                 config_repository=config_repository,
                 status_repository=status_repository,
+                authority_repository=authority_repository,
             )
             for strategy in LIVE_DASHBOARD_STRATEGIES
         ]
@@ -503,6 +517,7 @@ def _strategy_operator_ledger_row(
     strategy: str,
     config_repository: LiveRuntimeConfigRepository,
     status_repository: LiveRunStatusRepository,
+    authority_repository: LiveDecisionAuthorityLeaseRepository,
 ) -> dict[str, Any]:
     metadata = runtime_strategy_metadata(strategy)
     active_config: dict[str, Any] | None = None
@@ -525,6 +540,10 @@ def _strategy_operator_ledger_row(
     except Exception as exc:
         recent_runs = []
         recent_runs_error = f"{type(exc).__name__}: {exc}"
+    authority_status, authority_error = _live_authority_status(
+        authority_repository,
+        strategy=strategy,
+    )
 
     health, health_detail = _strategy_operator_health(
         latest_status,
@@ -563,6 +582,10 @@ def _strategy_operator_ledger_row(
             config_error=config_error,
             status_error=status_error,
         ),
+        "authority_summary": _strategy_operator_authority_summary(
+            authority_status,
+            authority_error=authority_error,
+        ),
         "decision_outcome": latest_status.decision_outcome,
         "latest_attempt_status": latest_status.latest_attempt_status,
         "latest_attempt_reason": latest_status.latest_attempt_reason,
@@ -572,6 +595,7 @@ def _strategy_operator_ledger_row(
         "active_config": active_config,
         "config_error": config_error,
         "status_error": status_error,
+        "authority_error": authority_error,
         "recent_runs_error": recent_runs_error,
     }
 
@@ -712,6 +736,68 @@ def _recent_run_summaries(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, A
     normalized = [dict(row) for row in rows if isinstance(row, Mapping)]
     normalized.sort(key=lambda row: str(row.get("generated_at") or ""), reverse=True)
     return normalized[:3]
+
+
+def _live_authority_status(
+    authority_repository: LiveDecisionAuthorityLeaseRepository,
+    *,
+    strategy: str,
+) -> tuple[dict[str, Any], str | None]:
+    try:
+        return dict(authority_repository.status(strategy=strategy)), None
+    except Exception as exc:
+        return (
+            {
+                "schema_version": "alphadb_live_decision_authority_status.v1",
+                "backend": "postgres",
+                "strategy": strategy,
+                "state": "unavailable",
+                "reason": "live_decision_authority_unavailable",
+                "run_id": None,
+                "owner_id": None,
+                "fencing_token": None,
+                "acquired_at": None,
+                "expires_at": None,
+                "released_at": None,
+                "lease_status": None,
+            },
+            f"{type(exc).__name__}: {exc}",
+        )
+
+
+def _strategy_operator_authority_summary(
+    authority_status: Mapping[str, Any],
+    *,
+    authority_error: str | None,
+) -> dict[str, Any]:
+    state = _optional_text(authority_status.get("state")) or "empty"
+    reason = _optional_text(authority_status.get("reason"))
+    run_id = _optional_text(authority_status.get("run_id"))
+    expires_at = _optional_text(authority_status.get("expires_at"))
+    if authority_error:
+        state = "unavailable"
+        detail = f"Authority state unavailable: {authority_error}"
+    elif state == "empty":
+        detail = "No Postgres authority lease recorded."
+    elif state == "held":
+        holder = f" by {run_id}" if run_id else ""
+        expiry = f" until {expires_at}" if expires_at else ""
+        detail = f"Authority held{holder}{expiry}."
+    elif state == "expired":
+        detail = f"Authority lease expired at {expires_at or 'unknown time'}."
+    elif state == "released":
+        detail = f"Authority lease released by {run_id or 'unknown run'}."
+    else:
+        detail = reason or f"Authority state: {state}"
+    return {
+        "state": state,
+        "detail": detail,
+        "backend": authority_status.get("backend"),
+        "reason": reason,
+        "run_id": run_id,
+        "fencing_token": authority_status.get("fencing_token"),
+        "expires_at": expires_at,
+    }
 
 
 def _strategy_operator_fleet_health(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

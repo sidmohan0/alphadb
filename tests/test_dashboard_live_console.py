@@ -98,6 +98,31 @@ class FakeStatusRepository:
 
 
 @dataclass
+class FakeAuthorityRepository:
+    database_url: str
+    payload: dict[str, Any] | None = None
+    error: Exception | None = None
+
+    def status(self, *, strategy: str) -> dict[str, Any]:
+        if self.error is not None:
+            raise self.error
+        return self.payload or {
+            "schema_version": "alphadb_live_decision_authority_status.v1",
+            "backend": "postgres",
+            "strategy": strategy,
+            "state": "empty",
+            "reason": "live_decision_authority_empty",
+            "run_id": None,
+            "owner_id": None,
+            "fencing_token": None,
+            "acquired_at": None,
+            "expires_at": None,
+            "released_at": None,
+            "lease_status": None,
+        }
+
+
+@dataclass
 class FakeLiveRiskRepository:
     database_url: str
     state: LiveRiskAdmissionState | None = None
@@ -160,9 +185,13 @@ def service(
     *,
     status: LiveRunStatus | None = None,
     recent: list[dict[str, Any]] | None = None,
+    authority_repository: FakeAuthorityRepository | None = None,
     live_risk_repository: FakeLiveRiskRepository | None = None,
 ) -> DashboardService:
     risk_repository = live_risk_repository or FakeLiveRiskRepository(
+        "postgresql://example.test/alphadb"
+    )
+    authority = authority_repository or FakeAuthorityRepository(
         "postgresql://example.test/alphadb"
     )
     return DashboardService(
@@ -173,6 +202,7 @@ def service(
             status=status or no_recent_live_run_status(),
             recent=recent,
         ),
+        authority_repository_factory=lambda database_url: authority,
         live_risk_repository_factory=lambda database_url: risk_repository,
         health_collector=ok_health,
         portfolio_balance_provider=lambda settings: {
@@ -310,6 +340,61 @@ def test_strategy_operator_ledger_caps_and_sorts_recent_runs() -> None:
     assert row["risk_summary"]["detail"] == "Daily $1.25/$50.00; market $2.00/$5.00"
     assert row["context_summary"]["latest_run_source"] == "brti_primary"
     assert row["context_summary"]["latest_run_status"] == "fresh"
+
+
+def test_live_payload_and_ledger_surface_live_authority_state() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    authority = FakeAuthorityRepository(
+        "postgresql://example.test/alphadb",
+        payload={
+            "schema_version": "alphadb_live_decision_authority_status.v1",
+            "backend": "postgres",
+            "strategy": FAIR_VALUE_LIVE_STRATEGY,
+            "state": "held",
+            "reason": None,
+            "run_id": "fv_live_holder",
+            "owner_id": "worker_holder",
+            "fencing_token": 11,
+            "acquired_at": "2026-06-04T15:00:00+00:00",
+            "expires_at": "2026-06-04T15:03:00+00:00",
+            "released_at": None,
+            "lease_status": "active",
+        },
+    )
+    dashboard = service(repository, authority_repository=authority)
+
+    payload = dashboard.live_payload()
+    row = dashboard.strategy_operator_ledger_payload()["rows"][0]
+
+    assert payload["live_status"]["live_decision_authority"]["state"] == "held"
+    assert payload["live_status"]["live_decision_authority"]["run_id"] == "fv_live_holder"
+    assert payload["live_status"]["live_decision_authority"]["fencing_token"] == 11
+    assert "summary" not in payload["live_status"]
+    assert row["authority_summary"]["state"] == "held"
+    assert row["authority_summary"]["run_id"] == "fv_live_holder"
+    assert row["authority_summary"]["fencing_token"] == 11
+
+
+def test_live_payload_surfaces_authority_repository_failures_as_unavailable() -> None:
+    repository = FakeConfigRepository("postgresql://example.test/alphadb")
+    authority = FakeAuthorityRepository(
+        "postgresql://example.test/alphadb",
+        error=RuntimeError("authority database unavailable"),
+    )
+    dashboard = service(repository, authority_repository=authority)
+
+    payload = dashboard.live_payload()
+    row = dashboard.strategy_operator_ledger_payload()["rows"][0]
+
+    assert payload["live_status"]["live_decision_authority"]["state"] == "unavailable"
+    assert payload["live_status"]["live_decision_authority"]["reason"] == (
+        "live_decision_authority_unavailable"
+    )
+    assert payload["live_status"]["live_decision_authority_error"].startswith(
+        "RuntimeError: authority database unavailable"
+    )
+    assert row["authority_summary"]["state"] == "unavailable"
+    assert row["authority_error"].startswith("RuntimeError: authority database unavailable")
 
 
 def test_strategy_operator_ledger_marks_repository_failures_unavailable() -> None:

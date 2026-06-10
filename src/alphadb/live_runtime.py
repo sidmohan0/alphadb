@@ -643,6 +643,10 @@ def build_fair_value_live_status(
     market_used = _market_exposure_for(latest_market, reconciliation)
     fill_status = _fill_status(latest_attempt, latest_reconciliation)
     decision_outcome = _decision_outcome(latest_status, manifest)
+    live_decision_authority = latest_live_decision_authority_status(
+        runtime_controls=runtime_controls,
+        latest_reason=latest_reason,
+    )
     return LiveRunStatus(
         run_id=_text(manifest.get("run_id")),
         strategy=status_strategy,
@@ -683,6 +687,7 @@ def build_fair_value_live_status(
             "market_context": dict(_mapping(manifest.get("market_context"))),
             "live_risk_admission_state": dict(live_risk_admission_state),
             "live_risk_refresh": dict(live_risk_refresh),
+            "live_decision_authority": live_decision_authority,
             "risk_state_classification": classify_risk_state(
                 live_risk_admission_state=live_risk_admission_state,
                 live_risk_refresh=live_risk_refresh,
@@ -696,6 +701,9 @@ def build_fair_value_live_status(
                     "orders_placed",
                     "filled_contracts",
                     "market_context_source",
+                    "live_authority_backend",
+                    "live_authority_backend_requested",
+                    "live_status_materialization_skip_reason",
                 )
             },
         },
@@ -730,6 +738,83 @@ def no_recent_live_run_status(*, strategy: str = FAIR_VALUE_LIVE_STRATEGY) -> Li
         summary={},
         recent_attempts=[],
     )
+
+
+def latest_live_decision_authority_status(
+    *,
+    runtime_controls: Mapping[str, Any],
+    latest_reason: str | None,
+) -> dict[str, Any]:
+    lease = _mapping(runtime_controls.get("live_decision_authority_lease"))
+    live_run_lock = _mapping(runtime_controls.get("live_run_lock"))
+    evidence = lease or (
+        live_run_lock if _text(live_run_lock.get("backend")) == "postgres" else {}
+    )
+    backend = (
+        _text(evidence.get("backend"))
+        or _text(runtime_controls.get("live_authority_backend"))
+    )
+    if not backend:
+        return _authority_status_payload(
+            backend=None,
+            state="empty",
+            reason="live_decision_authority_empty",
+        )
+    if backend != "postgres":
+        return _authority_status_payload(
+            backend=backend,
+            state="not_applicable",
+            reason=None,
+        )
+    validation = _mapping(runtime_controls.get("live_decision_authority_validation"))
+    validation_reason = _text(validation.get("reason"))
+    if validation and not bool(validation.get("valid", True)):
+        return _authority_status_payload(
+            backend="postgres",
+            state="stale",
+            reason=validation_reason or "stale_live_decision_authority_token",
+            evidence=evidence,
+        )
+    reason = _text(evidence.get("reason")) or latest_reason
+    acquired = bool(evidence.get("acquired"))
+    if acquired:
+        state = "acquired"
+    elif reason == "live_decision_authority_unavailable":
+        state = "unavailable"
+    elif reason:
+        state = "denied"
+    else:
+        state = "empty"
+        reason = "live_decision_authority_empty"
+    return _authority_status_payload(
+        backend="postgres",
+        state=state,
+        reason=reason,
+        evidence=evidence,
+    )
+
+
+def _authority_status_payload(
+    *,
+    backend: str | None,
+    state: str,
+    reason: str | None,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    evidence = _mapping(evidence)
+    return {
+        "schema_version": "alphadb_live_decision_authority_status.v1",
+        "backend": backend,
+        "state": state,
+        "reason": reason,
+        "run_id": _text(evidence.get("run_id")),
+        "owner_id": _text(evidence.get("owner_id")),
+        "fencing_token": _optional_int(evidence.get("fencing_token")),
+        "acquired_at": _text(evidence.get("acquired_at")),
+        "expires_at": _text(evidence.get("expires_at")),
+        "released_at": _text(evidence.get("released_at")),
+        "lease_status": _text(evidence.get("status")),
+    }
 
 
 def _config_revision_from_row(row: Mapping[str, Any]) -> LiveRuntimeConfigRevision:
