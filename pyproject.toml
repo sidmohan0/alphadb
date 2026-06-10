@@ -48,6 +48,7 @@ alphadb-repo-hygiene = "alphadb.repo_hygiene:main"
 alphadb-settlement = "alphadb.settlement.cli:main"
 alphadb-model-eval = "alphadb.model_evaluation.cli:main"
 alphadb-fair-value-live-report = "alphadb.model_evaluation.fair_value_live_report:main"
+alphadb-fair-value-live-latency-chart = "alphadb.model_evaluation.fair_value_live_latency_chart:main"
 alphadb-external-signals = "alphadb.external_signals.cli:main"
 alphadb-dashboard = "alphadb.dashboard.app:main"
 

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import statistics
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -371,6 +372,7 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
     ]
     live_risk_state = as_mapping(latest_value(runs, "live_risk_admission_state"))
     live_risk_refresh = as_mapping(latest_value(runs, "live_risk_refresh"))
+    latency = summarize_latency(runs)
     return {
         "schedule_state": fair_rule.get("State"),
         "legacy_structural_schedule_state": structural_rule.get("State"),
@@ -382,6 +384,8 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
         "legacy_structural_live_activity": bool(structural_logs),
         "config": latest_value(runs, "runtime_config"),
         "runtime_guard": latest_value(runs, "runtime_guard"),
+        "live_authority": summarize_live_authority(runs),
+        "latency": latency,
         "executable_quote": latest_value(runs, "executable_quote"),
         "live_edge_attribution": latest_value(runs, "live_edge_attribution"),
         "live_edge_attribution_buckets": summarize_live_edge_attribution_buckets(
@@ -411,6 +415,7 @@ def build_summary(*, values: Mapping[str, Any], runs: Sequence[Mapping[str, Any]
 
 def summarize_run(*, run_id: str, artifacts: Mapping[str, Any]) -> dict[str, Any]:
     manifest = as_mapping(artifacts.get("manifest"))
+    runtime_controls = as_mapping(manifest.get("runtime_controls"))
     attempts_payload = as_mapping(artifacts.get("live_order_attempts"))
     reconciliation = as_mapping(artifacts.get("live_reconciliation_report"))
     attempts = as_sequence(attempts_payload.get("attempts"))
@@ -428,7 +433,10 @@ def summarize_run(*, run_id: str, artifacts: Mapping[str, Any]) -> dict[str, Any
         "run_id": run_id,
         "generated_at": manifest.get("generated_at"),
         "runtime_config": manifest.get("runtime_config"),
-        "runtime_guard": as_mapping(manifest.get("runtime_controls")).get("runtime_guard"),
+        "runtime_controls": dict(runtime_controls),
+        "runtime_guard": runtime_controls.get("runtime_guard"),
+        "live_authority": summarize_run_live_authority(manifest),
+        "timing": summarize_manifest_timing(manifest),
         "executable_quote": manifest.get("executable_quote"),
         "one_cycle": manifest.get("one_cycle"),
         "hot_path_scope": manifest.get("hot_path_scope"),
@@ -445,6 +453,177 @@ def summarize_run(*, run_id: str, artifacts: Mapping[str, Any]) -> dict[str, Any
         "orders": orders,
         "reconciliation": summarize_reconciliation(reconciliation),
     }
+
+
+def summarize_manifest_timing(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    timing = as_mapping(manifest.get("timing"))
+    phase_seconds: dict[str, float] = {}
+    for phase, value in as_mapping(timing.get("phase_seconds")).items():
+        parsed = parse_float(value)
+        if parsed is not None:
+            phase_seconds[str(phase)] = parsed
+    output: dict[str, Any] = {"phase_seconds": phase_seconds}
+    total_elapsed = parse_float(timing.get("total_elapsed_seconds"))
+    if total_elapsed is not None:
+        output["total_elapsed_seconds"] = total_elapsed
+    quote_to_submit = parse_float(timing.get("quote_to_submit_seconds"))
+    if quote_to_submit is not None:
+        output["quote_to_submit_seconds"] = quote_to_submit
+    authority_phase = authority_phase_name(phase_seconds)
+    if authority_phase:
+        output["authority_phase"] = authority_phase
+        output["authority_phase_seconds"] = phase_seconds[authority_phase]
+    return output
+
+
+def summarize_run_live_authority(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    runtime_controls = as_mapping(manifest.get("runtime_controls"))
+    live_run_lock = as_mapping(runtime_controls.get("live_run_lock"))
+    lease = as_mapping(runtime_controls.get("live_decision_authority_lease"))
+    backend = (
+        live_run_lock.get("backend")
+        or runtime_controls.get("live_authority_backend")
+        or lease.get("backend")
+    )
+    output: dict[str, Any] = {}
+    if backend:
+        output["backend"] = str(backend)
+    requested = runtime_controls.get("live_authority_backend_requested")
+    if requested:
+        output["backend_requested"] = str(requested)
+    if "acquired" in live_run_lock:
+        output["acquired"] = bool(live_run_lock.get("acquired"))
+    reason = live_run_lock.get("reason") or lease.get("reason")
+    if reason:
+        output["reason"] = str(reason)
+    for key in ("run_id", "owner_id", "fencing_token", "lease_status", "acquired_at", "expires_at", "released_at"):
+        value = lease.get(key, live_run_lock.get(key))
+        if value is not None:
+            output[key] = value
+    return output
+
+
+def summarize_live_authority(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    authorities = [as_mapping(run.get("live_authority")) for run in runs]
+    authorities = [authority for authority in authorities if authority]
+    latest = authorities[-1] if authorities else {}
+    backends = Counter(str(authority.get("backend")) for authority in authorities if authority.get("backend"))
+    acquired_count = sum(1 for authority in authorities if authority.get("acquired") is True)
+    denied_count = sum(1 for authority in authorities if authority.get("acquired") is False)
+    output: dict[str, Any] = {
+        "backend_latest": latest.get("backend"),
+        "backend_counts": dict(backends),
+        "acquired_count": acquired_count,
+        "denied_count": denied_count,
+        "fencing_token_observed": any(
+            authority.get("fencing_token") is not None for authority in authorities
+        ),
+    }
+    if latest:
+        output["latest"] = dict(latest)
+    return output
+
+
+def summarize_latency(runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    timings = [as_mapping(run.get("timing")) for run in runs]
+    total_values = [
+        value
+        for timing in timings
+        if (value := parse_float(timing.get("total_elapsed_seconds"))) is not None
+    ]
+    phase_names = sorted(
+        {
+            phase
+            for timing in timings
+            for phase in as_mapping(timing.get("phase_seconds")).keys()
+        }
+    )
+    phase_seconds = {
+        phase: stats(
+            [
+                value
+                for timing in timings
+                if (
+                    value := parse_float(
+                        as_mapping(timing.get("phase_seconds")).get(phase)
+                    )
+                )
+                is not None
+            ]
+        )
+        for phase in phase_names
+    }
+    authority_phase = authority_phase_name(
+        {
+            phase: as_mapping(stat).get("mean")
+            for phase, stat in phase_seconds.items()
+            if as_mapping(stat).get("mean") is not None
+        }
+    )
+    component_means = component_mean_contribution(
+        total_mean=stats(total_values).get("mean"),
+        phase_seconds=phase_seconds,
+        authority_phase=authority_phase,
+    )
+    output: dict[str, Any] = {
+        "total_elapsed_seconds": stats(total_values),
+        "phase_seconds": phase_seconds,
+        "component_means_seconds": component_means,
+    }
+    if authority_phase:
+        authority_stats = as_mapping(phase_seconds.get(authority_phase))
+        total_mean = parse_float(as_mapping(output["total_elapsed_seconds"]).get("mean"))
+        authority_mean = parse_float(authority_stats.get("mean"))
+        output["authority_phase"] = {
+            "name": authority_phase,
+            "mean_seconds": authority_mean,
+            "p95_seconds": authority_stats.get("p95"),
+            "mean_hot_path_contribution": (
+                round(authority_mean / total_mean, 6)
+                if authority_mean is not None and total_mean
+                else None
+            ),
+        }
+    return output
+
+
+def authority_phase_name(phase_seconds: Mapping[str, Any]) -> str | None:
+    for phase in ("postgres_authority_lease", "live_run_lock"):
+        if phase in phase_seconds:
+            return phase
+    return None
+
+
+def component_mean_contribution(
+    *,
+    total_mean: Any,
+    phase_seconds: Mapping[str, Any],
+    authority_phase: str | None,
+) -> dict[str, float]:
+    names = [
+        "runtime_config",
+        authority_phase or "live_run_lock",
+        "collection",
+        "risk_state_read",
+        "risk_refresh",
+        "risk_admission",
+        "submit_attempt_persist",
+        "submit",
+        "status_materialization",
+        "artifact_write",
+    ]
+    output: dict[str, float] = {}
+    used_total = 0.0
+    for name in names:
+        mean = parse_float(as_mapping(phase_seconds.get(name)).get("mean"))
+        if mean is None or name in output:
+            continue
+        output[name] = round(mean, 6)
+        used_total += mean
+    parsed_total = parse_float(total_mean)
+    if parsed_total is not None:
+        output["other"] = round(max(parsed_total - used_total, 0.0), 6)
+    return output
 
 
 def summarize_attempts(
@@ -652,6 +831,57 @@ def as_mapping(value: Any) -> Mapping[str, Any]:
 
 def as_sequence(value: Any) -> Sequence[Any]:
     return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
+
+
+def parse_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed:
+        return None
+    return parsed
+
+
+def stats(values: Sequence[float]) -> dict[str, float | int | None]:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return {
+            "count": 0,
+            "min": None,
+            "mean": None,
+            "p50": None,
+            "p90": None,
+            "p95": None,
+            "p99": None,
+            "max": None,
+            "stdev": None,
+        }
+    return {
+        "count": len(ordered),
+        "min": round(ordered[0], 6),
+        "mean": round(statistics.fmean(ordered), 6),
+        "p50": percentile(ordered, 50),
+        "p90": percentile(ordered, 90),
+        "p95": percentile(ordered, 95),
+        "p99": percentile(ordered, 99),
+        "max": round(ordered[-1], 6),
+        "stdev": round(statistics.stdev(ordered), 6) if len(ordered) > 1 else 0.0,
+    }
+
+
+def percentile(values: Sequence[float], pct: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return round(ordered[0], 6)
+    rank = (len(ordered) - 1) * pct / 100.0
+    lower_index = int(rank)
+    upper_index = min(lower_index + 1, len(ordered) - 1)
+    fraction = rank - lower_index
+    value = ordered[lower_index] + (ordered[upper_index] - ordered[lower_index]) * fraction
+    return round(value, 6)
 
 
 def build_parser() -> argparse.ArgumentParser:
