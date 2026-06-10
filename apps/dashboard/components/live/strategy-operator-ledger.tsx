@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   AlertTriangle,
@@ -8,12 +9,14 @@ import {
   Eye,
   PauseCircle,
   RefreshCw,
+  SlidersHorizontal,
   ShieldCheck,
   WifiOff,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { useSelectedStrategy } from "@/components/strategy/strategy-context"
 import { NestedSurface, PanelBody, PanelHeader, PanelSurface } from "@/components/ui/surface"
 import { apiGet } from "@/lib/alphadb-api"
 import { cn } from "@/lib/utils"
@@ -343,6 +346,8 @@ export function StrategyOperatorLedger() {
 }
 
 function StrategyDetailRail({ row }: { row: StrategyLedgerRow | null }) {
+  const { setSelectedStrategy, strategies } = useSelectedStrategy()
+
   if (!row) {
     return (
       <PanelSurface className="h-auto min-h-[520px]">
@@ -357,6 +362,8 @@ function StrategyDetailRail({ row }: { row: StrategyLedgerRow | null }) {
     )
   }
 
+  const liveStrategy = strategies.find((strategy) => strategy.id === row.strategy_id)
+
   return (
     <PanelSurface className="h-auto min-h-[520px]">
       <PanelHeader>
@@ -369,6 +376,17 @@ function StrategyDetailRail({ row }: { row: StrategyLedgerRow | null }) {
         </div>
       </PanelHeader>
       <PanelBody className="space-y-3">
+        {liveStrategy && (
+          <Link
+            className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}
+            href="/live/config"
+            onClick={() => setSelectedStrategy(liveStrategy.id)}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Runtime config
+          </Link>
+        )}
+
         <div className="grid grid-cols-2 gap-2">
           <MiniValue label="Live state" value={stateLabel(row.live_state)} />
           <MiniValue label="Data" value={dataStateLabel(row.data_state)} />
